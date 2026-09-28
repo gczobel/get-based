@@ -124,18 +124,8 @@ function _getSelfBaseUrl() {
     u.pathname = '';
     u.search = '';
     u.hash = '';
-    // Self-hosted getbased-relay deployments always put an explicit port in
-    // the wss:// URL (the documented RELAY_PORT convention, default 4000)
-    // and run /self/* on a separate port (SELF_PORT, default 4003) — this
-    // used to only guess 4003 for localhost/127.0.0.1, so any self-hosted
-    // relay reached by LAN IP or hostname sent every /self/* call to the
-    // WS-only relay port instead, where it just hangs (no plain-HTTP
-    // handler there) until the request times out. A relay with no explicit
-    // port (the public default, or any deployment path-routing /self/*
-    // behind the same reverse proxy on 443) is left untouched.
-    if (u.port) {
-      u.port = '4003';
-    }
+    // Explicit port = self-hosted relay (RELAY_PORT/SELF_PORT convention).
+    if (u.port) u.port = '4003';
     return u.toString().replace(/\/$/, '');
   } catch { return null; }
 }
