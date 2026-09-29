@@ -176,17 +176,17 @@ describe('synced manual body readings arrive on another device', () => {
     expect(await getDaily(PROFILE_ID, 'manual', '2026-09-28')).toBeFalsy();
   });
 
-  it('keeps a value already on this device and fills in the missing fields', async () => {
-    await upsertDaily(PROFILE_ID, { source: 'manual', date: '2026-09-28', weight: 80 });
+  it('follows an edit that arrives for a reading this device already has', async () => {
+    await upsertDaily(PROFILE_ID, { source: 'manual', date: '2026-09-28', weight: 80, rhr: 58 });
     const merged = {
       manualMetricTombstones: {},
       wearableConnections: {},
-      manualBodyReadings: { 'weight.2026-09-28': 82, 'rhr.2026-09-28': 60 },
+      manualBodyReadings: { 'weight.2026-09-28': 81 },
     };
 
     await reconcilePulledManualWearables(PROFILE_ID, merged);
 
-    expect(await getDaily(PROFILE_ID, 'manual', '2026-09-28')).toMatchObject({ weight: 80, rhr: 60 });
+    expect(await getDaily(PROFILE_ID, 'manual', '2026-09-28')).toMatchObject({ weight: 81, rhr: 58 });
   });
 
   it('marks Manual as connected on this device, since connections never sync', async () => {

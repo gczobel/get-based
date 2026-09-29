@@ -68,9 +68,9 @@ const MIGRATION_FLAG = 'biometrics-migrated-v1';
 const MANUAL_TOMBSTONE_FIELD = 'manualMetricTombstones';
 export const MANUAL_MIRROR_FIELD = 'manualBodyReadings';
 export const MIRROR_FIELDS = [...MANUAL_METRICS, 'tags', 'note'];
-const MANUAL_HISTORY_START = '1970-01-01';
-const MANUAL_HISTORY_END = '9999-12-31';
-const ISO_DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
+export const MANUAL_HISTORY_START = '1970-01-01';
+export const MANUAL_HISTORY_END = '9999-12-31';
+export const ISO_DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 export function manualMetricTombstoneKey(metric, date) {
   if (!MANUAL_METRICS.includes(metric) || typeof date !== 'string'
@@ -131,20 +131,26 @@ function _clearManualMetricTombstone(metric, date, imported) {
   return true;
 }
 
+export const manualMirrorKey = (field, date) => `${field}.${date}`;
+
+export function manualMirror(imported) {
+  return imported[MANUAL_MIRROR_FIELD] || (imported[MANUAL_MIRROR_FIELD] = {});
+}
+
 function _mirrorManualPatch(imported, date, patch) {
-  const mirror = imported[MANUAL_MIRROR_FIELD] || (imported[MANUAL_MIRROR_FIELD] = {});
+  const mirror = manualMirror(imported);
   for (const field of MIRROR_FIELDS) {
-    if (patch[field] != null) mirror[`${field}.${date}`] = patch[field];
+    if (patch[field] != null) mirror[manualMirrorKey(field, date)] = patch[field];
   }
 }
 
 function _unmirrorManualMetric(imported, metric, date) {
   const mirror = imported[MANUAL_MIRROR_FIELD];
   if (!mirror) return;
-  delete mirror[`${metric}.${date}`];
-  if (MANUAL_METRICS.some((m) => mirror[`${m}.${date}`] != null)) return;
-  delete mirror[`tags.${date}`];
-  delete mirror[`note.${date}`];
+  delete mirror[manualMirrorKey(metric, date)];
+  if (MANUAL_METRICS.some((m) => mirror[manualMirrorKey(m, date)] != null)) return;
+  delete mirror[manualMirrorKey('tags', date)];
+  delete mirror[manualMirrorKey('note', date)];
 }
 
 function _legacyBiometricField(metric) {

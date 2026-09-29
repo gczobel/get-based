@@ -58,4 +58,23 @@ describe('opening a profile that received manual body readings while inactive', 
 
     expect(state.importedData.manualBodyReadings).toEqual({ 'weight.2026-09-01': 80 });
   });
+
+  it('marks Manual as connected when readings exist but the marker is missing', async () => {
+    const importedData = { manualMetricTombstones: {}, wearableConnections: {} };
+    const state = { currentProfile: PROFILE_ID, importedData };
+    vi.doMock('../js/state.js', () => ({ state }));
+    vi.doMock('../js/wearables-connect.js', () => ({
+      listConnectedSources: () => ({}),
+      recoverPendingWearableDisconnect: vi.fn(async () => false),
+      syncStaleWearablesNow: vi.fn(async () => undefined),
+    }));
+
+    const { refreshProfileWearables } = await import('../js/profile-runtime.js');
+    const { upsertDaily } = await import('../js/wearables-store.js');
+    await upsertDaily(PROFILE_ID, { source: 'manual', date: '2026-09-01', weight: 80 });
+
+    await refreshProfileWearables(PROFILE_ID, null);
+
+    expect(state.importedData.wearableConnections.manual).toMatchObject({ source: 'manual' });
+  });
 });

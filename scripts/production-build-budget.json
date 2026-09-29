@@ -80,8 +80,8 @@
     "chatReliabilityOutputDecodedBytes": 5382509,
     "chatReliabilityMeasuredBaseCommit": "1ab14cc2e9ae326596a038a3b131362763cf07a6",
     "chatReliabilityReviewOutputDecodedBytes": 5383517,
-    "manualBodyReadingsSyncStartupDecodedBytes": 1264503,
-    "manualBodyReadingsSyncOutputDecodedBytes": 5385533
+    "manualBodyReadingsSyncStartupDecodedBytes": 1264793,
+    "manualBodyReadingsSyncOutputDecodedBytes": 5385770
   },
   "referenceCommit": "331112b1",
   "measuredAt": "2026-09-22"

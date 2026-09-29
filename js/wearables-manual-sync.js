@@ -6,21 +6,23 @@
 import { queueManualRowWrite } from './wearables-manual-lock.js';
 import { getDaily, getDailyRange, getMeta, setMeta, upsertDaily } from './wearables-store.js';
 import {
+  ISO_DAY_RE,
+  MANUAL_HISTORY_END,
+  MANUAL_HISTORY_START,
   MANUAL_METRICS,
   MANUAL_MIRROR_FIELD,
   MIRROR_FIELDS,
   captureManualMutation,
   isManualMetricTombstoned,
+  manualMirror,
+  manualMirrorKey,
   persistManualMutation,
   updateManualConnection,
 } from './wearables-manual.js';
 
 const MIRROR_BACKFILL_FLAG = 'manual-body-readings-backfilled-v1';
-const ISO_DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
-const HISTORY_START = '1970-01-01';
-const HISTORY_END = '9999-12-31';
 
-/** Write synced readings into this device's Reading store; returns dates written.
+/** Write synced readings into this device's Reading store; returns the number of dates written.
  * @param {import('../types/app-state.js').ProfileData} merged */
 export async function applyPulledManualBodyReadings(profileId, merged) {
   const mirror = merged?.[MANUAL_MIRROR_FIELD];
@@ -39,10 +41,10 @@ export async function applyPulledManualBodyReadings(profileId, merged) {
     for (const [date, incoming] of byDate) {
       if (!MANUAL_METRICS.some((m) => incoming[m] != null)) continue;
       const existing = await getDaily(profileId, 'manual', date);
-      // Local wins, like typed lab values.
-      const missing = Object.fromEntries(Object.entries(incoming).filter(([field]) => existing?.[field] == null));
-      if (Object.keys(missing).length === 0) continue;
-      await upsertDaily(profileId, { ...(existing || {}), ...missing, source: 'manual', date });
+      // The pull already merged these entries, so they are the resolved value.
+      const changed = Object.entries(incoming).some(([field, value]) => JSON.stringify(existing?.[field]) !== JSON.stringify(value));
+      if (!changed) continue;
+      await upsertDaily(profileId, { ...(existing || {}), ...incoming, source: 'manual', date });
       written++;
     }
     if (written > 0) updateManualConnection(merged);
@@ -54,14 +56,14 @@ export async function applyPulledManualBodyReadings(profileId, merged) {
 export async function backfillManualBodyReadingsMirror(profileId) {
   if (await getMeta(profileId, MIRROR_BACKFILL_FLAG)) return { skipped: 'already-backfilled' };
   const { imported, baseData } = captureManualMutation(profileId);
-  const rows = await getDailyRange(profileId, 'manual', HISTORY_START, HISTORY_END);
-  // An empty read may be a locked store: keep the one run.
+  const rows = await getDailyRange(profileId, 'manual', MANUAL_HISTORY_START, MANUAL_HISTORY_END);
+  // Skip the flag on an empty read: a locked store looks empty, and the run must survive it.
   if (rows.length === 0) return { added: 0 };
-  const mirror = imported[MANUAL_MIRROR_FIELD] || (imported[MANUAL_MIRROR_FIELD] = {});
+  const mirror = manualMirror(imported);
   let added = 0;
   for (const row of rows) {
     for (const field of MIRROR_FIELDS) {
-      const key = `${field}.${row.date}`;
+      const key = manualMirrorKey(field, row.date);
       if (MANUAL_METRICS.includes(field) && isManualMetricTombstoned(field, row.date, imported)) continue;
       if (row[field] != null && mirror[key] == null) {
         mirror[key] = row[field];

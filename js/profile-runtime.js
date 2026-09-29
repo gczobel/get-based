@@ -4,6 +4,7 @@
 import { isChatModuleLoaded, loadChatModule } from './chat-loader.js';
 import { state } from './state.js';
 import {
+  ensureManualConnection,
   hasManualData,
   reconcileManualMetricTombstones,
   isManualMetricTombstoned,
@@ -99,9 +100,9 @@ export async function refreshProfileWearables(profileId, biometrics) {
   // Pull only applies readings to the active profile; catch up on open.
   try {
     if (hasSyncedManualReadings(data) || await hasManualData(profileId)) {
-      const manualSync = await import('./wearables-manual-sync.js');
-      await manualSync.applyPulledManualBodyReadings(profileId, data);
-      await manualSync.backfillManualBodyReadingsMirror(profileId);
+      await manualSync('applyPulledManualBodyReadings', profileId, data);
+      await manualSync('backfillManualBodyReadingsMirror', profileId);
+      if (!data.wearableConnections?.manual) await ensureManualConnection();
     }
   } catch {}
   // The user can swap profile A→B during an IDB read. Abort before and after
@@ -110,6 +111,11 @@ export async function refreshProfileWearables(profileId, biometrics) {
   try { await profileRefreshDeps.syncWearableSummary(profileId, connect.listConnectedSources()); } catch {}
   if (!isCurrent()) return;
   connect.syncStaleWearablesNow?.().catch(() => {});
+}
+
+// Lazy: only devices that hold or receive manual readings load this module.
+async function manualSync(method, ...args) {
+  return (await import('./wearables-manual-sync.js'))[method](...args);
 }
 
 function hasSyncedManualReadings(data) {
@@ -127,7 +133,7 @@ export async function reconcilePulledManualWearables(profileId, merged) {
   if (!result || result.skipped) return false;
   let changed = !!(result.prunedRows || result.prunedLegacy);
   if (hasSyncedManualReadings(merged)
-      && await (await import('./wearables-manual-sync.js')).applyPulledManualBodyReadings(profileId, merged)) changed = true;
+      && await manualSync('applyPulledManualBodyReadings', profileId, merged)) changed = true;
   // L1 histories are device-local. A local rebuild cannot replace this shared
   // summary: invalidate only manual latest readings explicitly deleted by pull.
   for (const [metric, value] of Object.entries(merged.wearableSummary?.metrics || {})) {
