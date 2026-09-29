@@ -179,7 +179,10 @@ the higher-layer behavior through a narrow runtime seam.
   Do not introduce plaintext fallbacks for OAuth tokens, AI keys, wallet
   proofs, genetics, or health records.
 - Raw wearable and cycle stores remain device-local unless an explicit,
-  privacy-reviewed summary surface is added to sync.
+  privacy-reviewed summary surface is added to sync. The one exception is
+  manual body readings (weight, blood pressure, pulse, with tags and notes):
+  they sync per field through `manualBodyReadings`, written only by explicit
+  log and delete actions, and applied back into the local store after a pull.
 - Supplement and medication status is derived from dated periods. Product-label
   facts, a user's regimen, inactive materials, and source quality evidence stay
   separate; AI consumers use the bounded projections in `supplement-context.js`.

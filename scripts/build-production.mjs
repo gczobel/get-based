@@ -42,6 +42,7 @@ const LAZY_SYNC_CHUNK_MODULES = new Set([
   path.join(ROOT, 'js', 'sync-chat-merge.js'),
   path.join(ROOT, 'js', 'sync-evolu8-candidate.js'),
   path.join(ROOT, 'js', 'wearables-credential-vault.js'),
+  path.join(ROOT, 'js', 'wearables-manual-sync.js'),
 ]);
 
 export function handleBuildLog(level, log, defaultHandler) {

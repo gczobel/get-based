@@ -107,6 +107,7 @@ const LOCAL_WINS_MAP_FIELDS = [
   'markerValueNotes',
   'manualValues',
   'manualMetricTombstones',
+  'manualBodyReadings',
 ];
 
 const TOMBSTONE_META_KEY = '_deletedAt';

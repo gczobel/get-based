@@ -430,6 +430,7 @@
     "js/wearables-manual-form-ui.js",
     "js/wearables-manual.js",
     "js/wearables-manual-lock.js",
+    "js/wearables-manual-sync.js",
     "js/wearables-oura-auth.js",
     "js/wearables-oura.js",
     "js/wearables-polar-auth.js",

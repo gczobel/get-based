@@ -4,6 +4,7 @@
 import { isChatModuleLoaded, loadChatModule } from './chat-loader.js';
 import { state } from './state.js';
 import {
+  hasManualData,
   reconcileManualMetricTombstones,
   isManualMetricTombstoned,
 } from './wearables-manual.js';
@@ -95,12 +96,24 @@ export async function refreshProfileWearables(profileId, biometrics) {
   try { await connect.recoverPendingWearableDisconnect(profileId, data); } catch {}
   if (!isCurrent()) return;
   try { await profileRefreshDeps.migrateBiometricsToManual(profileId, biometrics); } catch {}
+  // Pull only applies readings to the active profile; catch up on open.
+  try {
+    if (hasSyncedManualReadings(data) || await hasManualData(profileId)) {
+      const manualSync = await import('./wearables-manual-sync.js');
+      await manualSync.applyPulledManualBodyReadings(profileId, data);
+      await manualSync.backfillManualBodyReadingsMirror(profileId);
+    }
+  } catch {}
   // The user can swap profile A→B during an IDB read. Abort before and after
   // summary persistence so A's metrics can never be saved into B's profile.
   if (!isCurrent()) return;
   try { await profileRefreshDeps.syncWearableSummary(profileId, connect.listConnectedSources()); } catch {}
   if (!isCurrent()) return;
   connect.syncStaleWearablesNow?.().catch(() => {});
+}
+
+function hasSyncedManualReadings(data) {
+  return Object.keys(data?.manualBodyReadings || {}).length > 0;
 }
 
 // Apply newly pulled manual-reading deletion markers before sync-pull renders
@@ -113,6 +126,8 @@ export async function reconcilePulledManualWearables(profileId, merged) {
   const result = await reconcileManualMetricTombstones(profileId, merged);
   if (!result || result.skipped) return false;
   let changed = !!(result.prunedRows || result.prunedLegacy);
+  if (hasSyncedManualReadings(merged)
+      && await (await import('./wearables-manual-sync.js')).applyPulledManualBodyReadings(profileId, merged)) changed = true;
   // L1 histories are device-local. A local rebuild cannot replace this shared
   // summary: invalidate only manual latest readings explicitly deleted by pull.
   for (const [metric, value] of Object.entries(merged.wearableSummary?.metrics || {})) {

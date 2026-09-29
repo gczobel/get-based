@@ -52,6 +52,8 @@ export const DELTA_MAPS = [
   // stop another device (or a legacy biometrics migration) resurrecting a
   // reading after the user deletes it.
   'manualMetricTombstones',
+  // Manual weight/BP/pulse/tags/note, one row per `<field>.<date>`.
+  'manualBodyReadings',
   'refOverrides',
   'categoryLabels',
   'categoryIcons',
