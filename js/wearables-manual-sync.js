@@ -13,6 +13,8 @@ import {
   MANUAL_MIRROR_FIELD,
   MIRROR_FIELDS,
   captureManualMutation,
+  ensureManualConnection,
+  hasManualData,
   isManualMetricTombstoned,
   manualMirror,
   manualMirrorKey,
@@ -74,4 +76,15 @@ export async function backfillManualBodyReadingsMirror(profileId) {
   if (added > 0) await persistManualMutation(profileId, imported, baseData);
   await setMeta(profileId, MIRROR_BACKFILL_FLAG, { at: Date.now(), added });
   return { added };
+}
+
+/** Open-time catch-up shared by profile switch and page load: apply what
+ * arrived while this profile was inactive, then copy local history out once.
+ * @param {import('../types/app-state.js').ProfileData} data */
+export async function catchUpManualBodyReadings(profileId, data) {
+  const synced = Object.keys(data?.[MANUAL_MIRROR_FIELD] || {}).length > 0;
+  if (!synced && !await hasManualData(profileId)) return;
+  await applyPulledManualBodyReadings(profileId, data);
+  await backfillManualBodyReadingsMirror(profileId);
+  if (!data.wearableConnections?.manual) await ensureManualConnection();
 }
