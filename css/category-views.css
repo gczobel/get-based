@@ -818,3 +818,117 @@
   .compare-swap-btn { min-height: 44px; }
   .chart-layers-row { min-height: 44px; }
 }
+
+/* Recorded-dose comparisons */
+.corr-help { color: var(--text-muted); font-size: 13px; line-height: 1.6; margin: 12px 0; }
+.corr-therapy-card { border-top: 1px solid var(--border); padding: 20px 0; min-width: 0; }
+.corr-therapy-card h4 { margin: 0 0 10px; font-size: 16px; overflow-wrap: anywhere; }
+.corr-stat { color: var(--text-secondary); font-size: 13px; line-height: 1.6; }
+.corr-dose-chart { height: 300px; position: relative; }
+.corr-data-scroll { overflow-x: auto; max-width: 100%; margin: 12px 0; }
+.corr-data-table { width: 100%; border-collapse: collapse; font-size: 12px; text-align: left; }
+.corr-data-table th, .corr-data-table td { padding: 10px; border-bottom: 1px solid var(--border); min-width: 90px; }
+.corr-data-table th { color: var(--text-muted); font-weight: 500; }
+.corr-data-table caption { text-align: left; color: var(--text-muted); padding: 8px 0; }
+.corr-therapy-card summary { cursor: pointer; padding: 12px 0; font-size: 13px; }
+.corr-period-list { color: var(--text-secondary); font-size: 12px; line-height: 1.8; }
+.corr-chip button.chip-remove { border: 0; background: transparent; color: inherit; padding: 0 3px; }
+
+.corr-current-dose { max-width: 760px; padding: 16px; margin: 16px 0; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 10px; }
+.corr-current-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; font-size: 13px; }
+.corr-review-dose { background: transparent; color: var(--accent-light); border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; cursor: pointer; }
+.corr-current-dose ul { list-style: none; padding: 0; margin: 14px 0 0; }
+.corr-current-dose li { display: flex; justify-content: space-between; gap: 18px; font-size: 14px; padding: 8px 0; }
+.corr-current-dose li > span { min-width: 0; overflow-wrap: anywhere; }
+.corr-current-dose li > span:last-child { text-align: right; flex-shrink: 0; }
+.corr-current-dose small, .corr-ingredient-label { display: block; color: var(--text-muted); font-size: 11px; margin: 4px 0; }
+.corr-current-dose p { color: var(--text-muted); font-size: 12px; line-height: 1.5; margin: 12px 0 0; }
+.corr-stat > span { display: block; color: var(--text-muted); font-size: 12px; }
+.corr-use-timeline { padding-left: var(--corr-plot-left, 0); padding-right: var(--corr-plot-right, 0); margin: 8px 0 20px; }
+.corr-use-heading { font-size: 12px; margin-bottom: 8px; }
+.corr-use-heading > span { display: block; font-size: 11px; color: var(--text-muted); margin-top: 3px; }
+.corr-use-track { position: relative; height: 16px; background: var(--bg-secondary); border-radius: 3px; }
+.corr-use-segment { position: absolute; top: 0; height: 16px; box-sizing: border-box; border: 1px solid var(--border); }
+.corr-use-segment:focus { outline: 2px solid var(--accent); outline-offset: 2px; z-index: 1; }
+.corr-use-recorded { background: #a78bfa; }
+.corr-use-paused { background: repeating-linear-gradient(135deg, var(--text-muted) 0 2px, var(--bg-secondary) 2px 6px); }
+.corr-use-unknown { background: var(--bg-secondary); border: 1px solid var(--text-muted); }
+.corr-use-key { display: flex; flex-wrap: wrap; gap: 8px 16px; margin-top: 8px; font-size: 11px; color: var(--text-muted); }
+.corr-use-key > span { display: inline-flex; gap: 5px; align-items: center; }
+.corr-use-key i { display: inline-block; width: 12px; height: 10px; box-sizing: border-box; }
+@media (max-width: 600px) { .corr-current-dose li { flex-direction: column; gap: 0; } .corr-current-dose li > span:last-child { text-align: left; } .corr-current-heading { flex-wrap: wrap; } }
+
+/* Correlation exploration workspace */
+.corr-option-active { background: var(--bg-hover); outline: 2px solid var(--accent); outline-offset: -2px; }
+#corr-no-results { padding: 12px; font-size: 13px; color: var(--text-secondary); }
+.corr-workspace-tools, .corr-workspace-tabs, .corr-series { display: flex; flex-wrap: wrap; gap: 10px; margin: 14px 0; }
+.corr-workspace-tools { align-items: end; }
+.corr-workspace-tools label, .corr-inspector > label { display: flex; flex-direction: column; gap: 6px; font-size: 12px; color: var(--text-secondary); min-width: 0; }
+.corr-workspace-tools input, .corr-workspace-tools select, .corr-inspector input { border: 1px solid var(--border); border-radius: 6px; background: var(--bg-primary); color: var(--text-primary); padding: 8px; font: inherit; min-width: 0; max-width: 100%; }
+.corr-workspace-tabs button { background: var(--bg-secondary); color: var(--text-primary); border: 1px solid var(--border); border-radius: 6px; padding: 8px 12px; font: inherit; cursor: pointer; }
+.corr-workspace-tabs button[aria-pressed="true"] { background: var(--accent-gradient); color: white; }
+.corr-series button { display: inline-flex; align-items: center; gap: 8px; background: transparent; border: 0; color: var(--text-primary); font: inherit; font-size: 12px; cursor: pointer; padding: 6px 0; overflow-wrap: anywhere; text-align: left; }
+.corr-series button[aria-pressed="false"] { text-decoration: line-through; opacity: .6; }
+.corr-series i { width: 18px; flex-shrink: 0; border-top: 3px solid; }
+.corr-timeline-panel { min-width: 0; margin: 18px 0; }
+.corr-timeline-panel h4 { font-size: 14px; font-weight: 500; overflow-wrap: anywhere; }
+.corr-lane-chart { height: 210px; }
+.corr-inspector { padding: 14px 0; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+.corr-inspector > label { max-width: 190px; }
+#corr-readout { display: flex; flex-wrap: wrap; gap: 14px 24px; margin-top: 14px; font-size: 12px; }
+#corr-readout > div { display: flex; flex-direction: column; gap: 5px; max-width: 100%; overflow-wrap: anywhere; }
+#corr-readout span { color: var(--text-secondary); }
+.corr-pair-analysis { margin: 20px 0; min-width: 0; }
+.corr-current-references { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr)); }
+.corr-current-references .corr-current-dose { margin: 0; min-width: 0; }
+.corr-workspace-tools [hidden], #corr-therapy-results [hidden] { display: none !important; }
+@media (max-width: 600px) { .corr-chart-container, .correlation-controls { padding: 12px; } .corr-workspace-tools > label { flex: 1 1 140px; } .corr-workspace-tools input, .corr-workspace-tools select, .corr-inspector input, .corr-search { font-size: 16px; } .corr-workspace-tabs button, .corr-series button { min-height: 44px; } }
+/* Keep chips reachable while suggestions are open, including empty results. */
+.corr-options { position: static; }
+.corr-presets summary { cursor: pointer; font-size: 12px; color: var(--text-secondary); padding: 5px 0; }
+
+.corr-dose-notice { border-left: 3px solid var(--accent-light); padding: 12px 16px; margin: 14px 0; background: var(--bg-secondary); font-size: 13px; overflow-wrap: anywhere; }
+.corr-dose-notice p { color: var(--text-secondary); line-height: 1.5; margin: 8px 0; }
+.corr-pair-panel + .corr-pair-panel { border-top: 1px solid var(--border); padding-top: 18px; }
+
+.corr-ingredient-picker { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 12px 0; font-size: 13px; }
+.corr-ingredient-picker select { max-width: 100%; background: var(--bg-secondary); color: var(--text-primary); border: 1px solid var(--border); padding: 8px; border-radius: 6px; }
+
+.corr-control { display: flex; flex-direction: column; gap: 6px; min-width: 0; font-size: 12px; color: var(--text-secondary); }
+.corr-control .date-range-filter { flex-wrap: wrap; max-width: 100%; }
+.corr-custom-dates { display: flex; flex-wrap: wrap; gap: 10px; }
+.corr-ingredient-picker select { background-color: var(--select-surface); border-radius: var(--radius-sm); padding: 10px 12px; font: inherit; max-width: 100%; }
+.corr-ingredient-picker select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+@media (max-width: 600px) { .corr-control .range-btn { min-height: 44px; } .corr-custom-dates > label { flex: 1 1 120px; } .corr-ingredient-picker select { font-size: 16px; } }
+
+.corr-date-heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; font-size: 13px; }
+.corr-jump summary { color: var(--accent-light); cursor: pointer; font-size: 12px; }
+.corr-jump input { display: block; margin-top: 8px; }
+.corr-pair-tabs { display: flex; gap: 6px; overflow-x: auto; padding: 4px 2px 10px; }
+.corr-pair-tabs button { flex: 0 0 auto; max-width: 280px; white-space: normal; text-align: left; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg-secondary); color: var(--text-secondary); padding: 10px 12px; font: inherit; font-size: 12px; cursor: pointer; }
+.corr-pair-tabs button[aria-selected="true"] { background: var(--accent-gradient); color: white; }
+.corr-pair-tabs button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.corr-preset-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 230px), 1fr)); gap: 8px; }
+.corr-preset-grid .corr-preset-btn { display: flex; flex-direction: column; gap: 6px; padding: 12px; margin: 0; text-align: left; border-radius: var(--radius-sm); }
+.corr-preset-btn span { font-size: 11px; line-height: 1.5; }
+.corr-preset-btn small { color: var(--text-muted); }
+.corr-preset-btn:disabled { opacity: .5; cursor: default; }
+
+.corr-method, .corr-history, .corr-analysis-disclosure { border-top: 1px solid var(--border); margin-top: 12px; padding-top: 10px; }
+.corr-method summary, .corr-history summary, .corr-analysis-disclosure > summary { cursor: pointer; color: var(--text-secondary); font-size: 12px; }
+.corr-method p { font-size: 12px; color: var(--text-secondary); line-height: 1.6; }
+.corr-analysis-disclosure[open] > summary { margin-bottom: 12px; }
+.corr-scale-label { color: var(--text-secondary); font-size: 12px; margin: 4px 0 10px; }
+.corr-dose-notice { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; }
+.corr-dose-notice > span { flex: 1 1 220px; }
+.corr-pair-analysis { margin: 0; }
+.corr-therapy-card { padding: 0; border: 0; }
+
+.corr-confirm-dose { flex: 1 0 100%; order: 2; }
+.corr-confirm-dose summary { cursor: pointer; color: var(--accent-light); }
+.corr-confirm-dose > div { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; padding: 6px 0; }
+.corr-confirm-status:empty { display: none; }
+
+.corr-analysis-disclosure:not([data-analysis-tab="timeline"]) { border: 0; padding-top: 0; }
+.corr-analysis-disclosure:not([data-analysis-tab="timeline"]) > summary,
+.corr-analysis-disclosure[data-analysis-tab="data"] #corr-pair-detail details > summary { display: none; }

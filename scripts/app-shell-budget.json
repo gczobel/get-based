@@ -2,8 +2,8 @@
   "schemaVersion": 1,
   "scenario": "Production service-worker app-shell precache during PWA installation",
   "maximums": {
-    "resources": 348,
-    "decodedBytes": 18350000
+    "resources": 350,
+    "decodedBytes": 18373500
   },
   "reference": {
     "resources": 277,
@@ -22,8 +22,23 @@
     "multiCliAgentAdaptersDecodedBytes": 18265416,
     "cliAgentBrandAssetsResources": 346,
     "openClawAndChatWorkspaceDecodedBytes": 18334630,
-    "directProviderReasoningDecodedBytes": 18337504
+    "directProviderReasoningDecodedBytes": 18337504,
+    "doseCorrelationsResources": 350,
+    "doseCorrelationsDecodedBytes": 18308544,
+    "ingredientDoseReferencesDecodedBytes": 18314598,
+    "unifiedTherapyPresentationDecodedBytes": 18318068,
+    "correlationsReleaseNotesDecodedBytes": 18350335,
+    "correlationsReleaseNotesMeasuredBaseCommit": "6598bee5",
+    "supplementEditorUsabilityDecodedBytes": 18363220,
+    "supplementEditorUsabilityMeasuredBaseCommit": "ba6b27ea28e9101879bfdb2c5ac48f5bcc5ad9d2",
+    "supplementDoseContextDecodedBytes": 18364977,
+    "supplementDoseContextMeasuredBaseCommit": "ba6b27ea28e9101879bfdb2c5ac48f5bcc5ad9d2",
+    "supplementContextCompletenessDecodedBytes": 18367718,
+    "supplementContextCompletenessMeasuredBaseCommit": "ba6b27ea28e9101879bfdb2c5ac48f5bcc5ad9d2",
+    "supplementLeanContextDecodedBytes": 18368467,
+    "immatureGranulocytesPctSafetyDecodedBytes": 18370648,
+    "manualBodyReadingsSyncDecodedBytes": 18373031
   },
   "referenceCommit": "331112b1",
-  "measuredAt": "2026-09-04"
+  "measuredAt": "2026-09-29"
 }

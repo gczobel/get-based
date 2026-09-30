@@ -4,6 +4,7 @@
 import { createUniqueId } from './unique-id.js';
 
 export const SUPPLEMENT_RECORD_VERSION = 2;
+export const CORRELATION_LAGS = [0, 7, 14, 30, 60, 90];
 
 export const SUPPLEMENT_UNIT_OPTIONS = [
   { value: '', label: 'No unit' },
@@ -235,9 +236,12 @@ export function normalizeSupplementUnit(rawUnit) {
 export function parseSupplementQuantity(raw) {
   if (typeof raw !== 'string' || !raw.trim()) return null;
   const text = raw.trim();
-  const match = text.match(/^([+-]?(?:\d{1,3}(?:[ ,.]\d{3})+|\d+)(?:[.,]\d+)?)\s*([^\d\s].*?)?$/u);
+  const match = text.match(/^([+-]?(?:\d{1,3}(?:[ ,.]\d{3})+|\d+)(?:[.,]\d+)?)\s*([^\d\s.,].*?)?$/u);
   if (!match) return null;
   let numeric = match[1].replace(/\s/g, '');
+  // Older imports may use a dot for grouping. A nonzero single group of
+  // three decimal digits is ambiguous without locale/structured metadata.
+  if (/^[1-9]\d{0,2}\.\d{3}$/.test(numeric)) return null;
   const commaCount = (numeric.match(/,/g) || []).length;
   const dotCount = (numeric.match(/\./g) || []).length;
   if (commaCount && dotCount) {
@@ -245,11 +249,15 @@ export function parseSupplementQuantity(raw) {
     numeric = numeric.replace(decimal === ',' ? /\./g : /,/g, '').replace(decimal, '.');
   } else if (commaCount === 1 && !dotCount) {
     const [, tail = ''] = numeric.split(',');
-    numeric = tail.length === 3 && /^\d{1,3},\d{3}$/.test(numeric)
+    numeric = tail.length === 3 && /^[1-9]\d{0,2},\d{3}$/.test(numeric)
       ? numeric.replace(',', '') : numeric.replace(',', '.');
-  } else if (dotCount > 1 || (dotCount === 1 && /^\d{1,3}\.\d{3}$/.test(numeric))) {
+  } else if (dotCount > 1) {
+    // A single dot is decimal, including 0.500. Repeated separators must
+    // form complete thousands groups; never turn malformed text into a dose.
+    if (!/^[1-9]\d{0,2}(\.\d{3})+$/.test(numeric)) return null;
     numeric = numeric.replace(/\./g, '');
   } else if (commaCount > 1) {
+    if (!/^[1-9]\d{0,2}(,\d{3})+$/.test(numeric)) return null;
     numeric = numeric.replace(/,/g, '');
   }
   const value = Number(numeric);
@@ -299,4 +307,114 @@ export function migrateSupplementMedicationRecords(data) {
     if (supplement.schemaVersion === undefined) supplement.schemaVersion = SUPPLEMENT_RECORD_VERSION;
   }
   return data;
+}
+
+/** Render both existing free-text doses and structured imported doses losslessly. */
+export function supplementDoseText(dose) {
+  if (typeof dose === 'string') return dose;
+  if (!dose || typeof dose !== 'object') return '';
+  if (typeof dose.text === 'string') return dose.text;
+  return dose.value != null ? `${dose.value}${dose.unit ? ` ${dose.unit}` : ''}${dose.basis === 'day' ? '/day' : ''}` : '';
+}
+
+/** Save today's schedule without projecting it into older historical periods. */
+export function recordSupplementSchedule(previous, periods, schedule, today = localDateKey()) {
+  const result = periods.map(period => ({ ...period }));
+  const signature = value => JSON.stringify([
+    value?.mode || 'daily', value?.timesPerDay ?? null, value?.details || '',
+    value?.daysOfWeek || [], value?.intervalDays ?? null, value?.maxPerDay ?? null,
+  ]);
+  const previousSchedule = previous?.schedule || { mode: Number(previous?.timesPerDay) > 1 ? 'multiple' : 'daily', timesPerDay: previous?.timesPerDay ?? null };
+  const changed = previous && signature(previousSchedule) !== signature(schedule);
+  const open = result.find(period => period.start <= today && (!period.end || period.end >= today));
+  if (open && changed && open.start < today) {
+    const yesterday = new Date(`${today}T12:00:00`);
+    yesterday.setDate(yesterday.getDate() - 1);
+    const next = { ...open, start: today, schedule: { ...schedule } };
+    open.end = localDateKey(yesterday);
+    result.push(next);
+  } else if (open?.start === today) {
+    open.schedule = { ...schedule };
+  }
+  return result;
+}
+
+// Effective timesPerDay for an ingredient: row override wins, else the supp-level default.
+export function effectiveTimesPerDay(ing, supp) {
+  if (ing && (ing.timesPerDay === 0 || ing.timesPerDay)) return Number(ing.timesPerDay);
+  if (supp?.schedule?.mode === 'prn') return null;
+  if (supp?.schedule && (supp.schedule.timesPerDay === 0 || supp.schedule.timesPerDay)) return Number(supp.schedule.timesPerDay);
+  if (supp && (supp.timesPerDay === 0 || supp.timesPerDay)) return Number(supp.timesPerDay);
+  return null;
+}
+
+// Compute daily total when amount is parseable and there's an effective timesPerDay.
+export function ingredientDailyTotal(ing, supp) {
+  const times = effectiveTimesPerDay(ing, supp);
+  if (!ing || !times) return null;
+  const parsed = getIngredientQuantity(ing);
+  if (!parsed) return null;
+  const total = parsed.value * times;
+  if (!isFinite(total)) return null;
+  return { value: total, unit: parsed.unit, times };
+}
+
+
+/** Current ingredient totals are a reference, never a historical dose by default. */
+export function getSupplementDailyDoses(record) {
+  if (!['daily', 'multiple'].includes(record?.schedule?.mode || 'daily')) return [];
+  const ingredients = record?.ingredients || [];
+  return ingredients.flatMap(ingredient => {
+    const name = ingredient.name?.trim();
+    if (!name || ingredients.filter(i => i.name?.trim().toLowerCase() === name.toLowerCase()).length !== 1) return [];
+    const total = ingredientDailyTotal(ingredient, record);
+    if (!total || total.value <= 0 || !SUPPLEMENT_UNIT_OPTIONS.some(u => u.value === total.unit && u.value && u.value !== '%')) return [];
+    return [{ value: total.value, unit: total.unit, basis: 'day', ingredient: name, source: 'ingredient' }];
+  });
+}
+
+/** Snapshot the saved regimen from today; earlier unknown amounts stay unknown.
+ * @param {any} entry
+ * @param {string} today
+ * @param {import('../types/supplement-data.js').SupplementRecord | null} savedRecord
+ */
+export function recordIngredientDoseChange(entry, today = localDateKey(), savedRecord = null) {
+  const open = entry.periods.find(p => p.start <= today && (!p.end || p.end >= today));
+  if (!open || (open.dose && open.dose.source !== 'ingredient' && !Array.isArray(open.ingredientDoses))) return;
+  const next = getSupplementDailyDoses(entry);
+  const previous = Array.isArray(open.ingredientDoses) ? open.ingredientDoses : open.dose?.source === 'ingredient' ? [open.dose] : [];
+  const signature = doses => JSON.stringify(doses.map(d => [d.ingredient, d.value, d.unit, d.basis]).sort((a, b) => String(a[0]).localeCompare(String(b[0]))));
+  if (signature(next) === signature(previous)) return;
+  // Unchanged ingredients must not recreate a period removed during a date
+  // correction, including on subsequent saves. Earlier dates need confirmation.
+  if (savedRecord && open.start < today
+      && signature(next) === signature(getSupplementDailyDoses(savedRecord))) return;
+  let target = open;
+  if (open.start < today) {
+    const yesterday = new Date(`${today}T12:00:00`);
+    yesterday.setDate(yesterday.getDate() - 1);
+    target = { ...open, start: today };
+    open.end = localDateKey(yesterday);
+    entry.periods.push(target);
+  }
+  target.schedule = { ...entry.schedule };
+  target.ingredientDoses = next;
+  if (next.length === 1) target.dose = { ...next[0] };
+  else delete target.dose;
+}
+
+
+/** Explicitly link current ingredient totals to one existing, undosed period. */
+export function confirmIngredientDosePeriod(record, periodIndex) {
+  const periods = getSupplementPeriods(record);
+  const period = periods[periodIndex];
+  const doses = getSupplementDailyDoses(record);
+  const validDate = date => isSafeDate(date) && new Date(`${date}T12:00:00Z`).toISOString().slice(0, 10) === date;
+  if (!period || period.dose || period.ingredientDoses?.length || !doses.length) return null;
+  if (periods.some(p => !p || !validDate(p.start) || (p.end && (!validDate(p.end) || p.end < p.start)))) return null;
+  const ordered = [...periods].sort((a, b) => a.start.localeCompare(b.start));
+  if (ordered.some((p, i) => i > 0 && (!ordered[i - 1].end || ordered[i - 1].end >= p.start))) return null;
+  return { ...record, updatedAt: Date.now(), periods: periods.map((p, i) => i === periodIndex
+    ? { ...p, end: p.end || null, ingredientDoses: doses, ...(doses.length === 1 ? { dose: doses[0] } : {}), schedule: p.schedule ? { ...p.schedule } : { mode: 'daily' } }
+    : { ...p }) };
 }

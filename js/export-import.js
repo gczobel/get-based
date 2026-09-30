@@ -4,8 +4,9 @@
 import { mergeBiologyScoreAIRecords } from './biology-score-persistence.js';
 import { getErrorMessage } from './caught-error.js';
 import { state } from './state.js';
+import { onProfileSaved } from './sync-save-hooks.js';
 import { adoptProfileData } from './profile-data-writes.js';
-import { showNotification, isDebugMode } from './utils.js';
+import { showNotification, showConfirmDialog, isDebugMode } from './utils.js';
 import { saveImportedData, saveImportedDataForProfile, invalidateActiveDataCache } from './data.js';
 import { getProfiles, profileStorageKey, createProfile, updateProfileMeta, loadProfile, migrateProfileData } from './profile.js';
 import { encryptedGetItem, encryptedSetItem, getEncryptionEnabled } from './crypto.js';
@@ -35,6 +36,33 @@ import {
 } from './chat-personality-storage.js';
 
 const MAX_PORTABLE_JSON_BYTES = 512 * 1024 * 1024;
+
+async function confirmRegimenImport(target, records) {
+  const conflicts = (Array.isArray(records) ? records : []).filter(s => s?.id && target.supplements?.some(x => x.id === s.id && JSON.stringify(x) !== JSON.stringify(s)));
+  return !conflicts.length || showConfirmDialog(`Replace saved regimens (${conflicts.map(s => s.name).join(', ')})? Imported versions replace dose history and remove omitted fields. Other data imports either way.`, {
+    confirmLabel: 'Use imported', cancelLabel: 'Keep saved', ariaLabel: 'Conflicting regimens',
+  });
+}
+
+function importSupplements(target, records, replace) {
+  if (!Array.isArray(records)) return;
+  const supplements = ensureImportedArray(target, 'supplements');
+  for (const s of records) {
+    if (!s?.name || !s.startDate) continue;
+    const index = s.id ? supplements.findIndex(x => x.id === s.id) : -1;
+    if (index < 0 && supplements.some(x => x.name === s.name && x.startDate === s.startDate)) continue;
+    if (index >= 0 && !replace) continue;
+    const entry = { dosage: '', endDate: null, type: 'supplement', note: '', ...s };
+    const sourceUrl = entry.sourceUrl;
+    delete entry.sourceUrl;
+    try {
+      const url = new URL(sourceUrl);
+      if (url.protocol === 'http:' || url.protocol === 'https:') entry.sourceUrl = url.toString();
+    } catch {}
+    if (index >= 0) replaceImportedArrayItem(target, 'supplements', index, entry);
+    else appendImportedArrayItem(target, 'supplements', entry);
+  }
+}
 
 async function _importNutritionData(profileId, nutrition) {
   if (!nutrition) return 0;
@@ -142,6 +170,10 @@ export function importDataJSON(file) {
         rollback = JSON.stringify(state.importedData);
         rollbackProfile = state.currentProfile;
         rollbackData = state.importedData;
+        const replaceRegimens = await confirmRegimenImport(rollbackData, json.supplements);
+        if (state.currentProfile !== rollbackProfile || JSON.stringify(state.importedData) !== rollback) {
+          showNotification('Profile changed. Retry import.', 'info'); return;
+        }
         let count = 0;
         const importTs = Date.now();
         for (const entry of json.entries || []) {
@@ -494,26 +526,7 @@ export function importDataJSON(file) {
             else { appendImportedArrayItem(state.importedData, 'chatSummaries', s); }
           }
         }
-        // Import supplements
-        if (json.supplements && Array.isArray(json.supplements)) {
-          const supplements = ensureImportedArray(state.importedData, 'supplements');
-          for (const s of json.supplements) {
-            if (!s.name || !s.startDate) continue;
-            const exists = supplements.some(x => x.name === s.name && x.startDate === s.startDate);
-            if (!exists) {
-              const entry = { name: s.name, dosage: s.dosage || '', startDate: s.startDate, endDate: s.endDate || null, type: s.type || 'supplement', note: s.note || '' };
-              if (s.ingredients) entry.ingredients = s.ingredients;
-              if (s.periods && s.periods.length > 1) entry.periods = s.periods;
-              if (s.sourceUrl) {
-                try {
-                  const sourceUrl = new URL(s.sourceUrl);
-                  if (sourceUrl.protocol === 'http:' || sourceUrl.protocol === 'https:') entry.sourceUrl = sourceUrl.toString();
-                } catch {}
-              }
-              appendImportedArrayItem(state.importedData, 'supplements', entry);
-            }
-          }
-        }
+        importSupplements(state.importedData, json.supplements, replaceRegimens);
         // Import notes
         if (json.notes && Array.isArray(json.notes)) {
           const notes = ensureImportedArray(state.importedData, 'notes');
@@ -577,186 +590,164 @@ export function importDataJSON(file) {
 async function _importDatabaseBundle(json) {
   const profiles = getProfiles();
   let created = 0, merged = 0, firstImportedId = null;
+  const plans = [];
   for (const bp of json.profiles) {
     if (!bp.name && !bp.id) continue;
     // Match by id first, then by name
     let existing = profiles.find(p => p.id === bp.id);
     if (!existing && bp.name) existing = profiles.find(p => p.name === bp.name);
     const importData = bp.data || {};
-    if (existing) {
-      // A portable import that targets an existing identity is an explicit
-      // decision to keep that profile. Retire any durable delete intent before
-      // metadata updates queue sync, or the restored data remains blocked and
-      // the next pull can delete it again.
-      _reviveImportedProfileSyncIdentity(existing.id);
-      // Merge into existing profile — update metadata from bundle
-      if (!firstImportedId) firstImportedId = existing.id;
-      const meta = {};
-      if (bp.name) meta.name = bp.name;
-      if (bp.sex) meta.sex = bp.sex;
-      if (bp.dob) meta.dob = bp.dob;
-      if (bp.location) meta.location = bp.location;
-      if (Array.isArray(bp.tags) && bp.tags.length) meta.tags = bp.tags;
-      if (bp.notes) meta.notes = bp.notes;
-      if (bp.status && bp.status !== 'active') meta.status = bp.status;
-      if (bp.avatar) meta.avatar = bp.avatar;
-      if (bp.pinned) meta.pinned = bp.pinned;
-      if (bp.height) { meta.height = bp.height; meta.heightUnit = bp.heightUnit || 'cm'; }
-      if (Object.keys(meta).length) await updateProfileMeta(existing.id, meta);
-      const storageKey = profileStorageKey(existing.id, 'imported');
-      const raw = await encryptedGetItem(storageKey);
-      let current;
-      try { current = raw ? JSON.parse(raw) : {}; } catch { current = {}; }
-      // Entries: date-keyed upsert
-      if (Array.isArray(importData.entries)) {
-        const entries = ensureImportedArray(current, 'entries');
-        for (const entry of importData.entries) {
-          if (!entry.date || !entry.markers) continue;
-          const idx = entries.findIndex(ex => ex.date === entry.date);
-          if (idx >= 0) { replaceImportedArrayItem(current, 'entries', idx, mergeRestoredLabEntry(entries[idx], entry)); }
-          else { appendImportedArrayItem(current, 'entries', entry); }
+    if (existing && plans.some(p => p.existing?.id === existing.id)) throw new Error('Duplicate profile in bundle.');
+    const key = existing ? profileStorageKey(existing.id, 'imported') : '';
+    const raw = key ? await encryptedGetItem(key) : null;
+    let current;
+    try { current = raw ? JSON.parse(raw) : {}; } catch { current = {}; }
+    const replaceRegimens = await confirmRegimenImport(current, importData.supplements);
+    plans.push({ bp, existing, importData, key, raw, current, replaceRegimens });
+  }
+  // Resolve every conflict, then validate every snapshot before the first write.
+  for (const p of plans) if (p.key && await encryptedGetItem(p.key) !== p.raw) throw new Error('Profile changed. Retry import.');
+  try {
+    for (const { bp, existing, importData, raw, current, replaceRegimens } of plans) {
+      if (existing) {
+        // Entries: date-keyed upsert
+        if (Array.isArray(importData.entries)) {
+          const entries = ensureImportedArray(current, 'entries');
+          for (const entry of importData.entries) {
+            if (!entry.date || !entry.markers) continue;
+            const idx = entries.findIndex(ex => ex.date === entry.date);
+            if (idx >= 0) { replaceImportedArrayItem(current, 'entries', idx, mergeRestoredLabEntry(entries[idx], entry)); }
+            else { appendImportedArrayItem(current, 'entries', entry); }
+          }
         }
-      }
-      // Notes: deduplicate by date+text
-      if (Array.isArray(importData.notes)) {
-        const notes = ensureImportedArray(current, 'notes');
-        for (const n of importData.notes) {
-          if (!n.date || !n.text) continue;
-          if (!notes.some(x => x.date === n.date && x.text === n.text)) appendImportedArrayItem(current, 'notes', n);
+        // Notes: deduplicate by date+text
+        if (Array.isArray(importData.notes)) {
+          const notes = ensureImportedArray(current, 'notes');
+          for (const n of importData.notes) {
+            if (!n.date || !n.text) continue;
+            if (!notes.some(x => x.date === n.date && x.text === n.text)) appendImportedArrayItem(current, 'notes', n);
+          }
         }
-      }
-      // Supplements: deduplicate by name+startDate
-      if (Array.isArray(importData.supplements)) {
-        const supplements = ensureImportedArray(current, 'supplements');
-        for (const s of importData.supplements) {
-          if (!s.name || !s.startDate) continue;
-          if (!supplements.some(x => x.name === s.name && x.startDate === s.startDate)) appendImportedArrayItem(current, 'supplements', s);
+        importSupplements(current, importData.supplements, replaceRegimens);
+        // Health goals: deduplicate by text
+        if (Array.isArray(importData.healthGoals)) {
+          const healthGoals = ensureImportedArray(current, 'healthGoals');
+          for (const g of importData.healthGoals) {
+            if (!g.text) continue;
+            if (!healthGoals.some(x => x.text === g.text)) appendImportedArrayItem(current, 'healthGoals', g);
+          }
         }
-      }
-      // Health goals: deduplicate by text
-      if (Array.isArray(importData.healthGoals)) {
-        const healthGoals = ensureImportedArray(current, 'healthGoals');
-        for (const g of importData.healthGoals) {
-          if (!g.text) continue;
-          if (!healthGoals.some(x => x.text === g.text)) appendImportedArrayItem(current, 'healthGoals', g);
+        // Context fields: replace if present in bundle
+        for (const field of ['diagnoses', 'diet', 'exercise', 'sleepRest', 'lightCircadian', 'stress', 'loveLife', 'environment', 'menstrualCycle', 'emfAssessment', 'genetics', 'biometrics']) {
+          if (importData[field] != null) current[field] = importData[field];
         }
-      }
-      // Custom markers: merge (don't overwrite existing)
-      if (importData.customMarkers && typeof importData.customMarkers === 'object') {
-        if (!current.customMarkers) current.customMarkers = {};
-        for (const [key, def] of Object.entries(importData.customMarkers)) {
-          if (!current.customMarkers[key]) current.customMarkers[key] = def;
+        if (importData.contextSourceSettings && typeof importData.contextSourceSettings === 'object' && !Array.isArray(importData.contextSourceSettings)) {
+          current.contextSourceSettings = importData.contextSourceSettings;
         }
-      }
-      // Ref overrides: merge (don't overwrite existing)
-      if (importData.refOverrides && typeof importData.refOverrides === 'object') {
-        if (!current.refOverrides) current.refOverrides = {};
-        for (const [key, ovr] of Object.entries(importData.refOverrides)) {
-          if (!current.refOverrides[key]) current.refOverrides[key] = ovr;
+        if ([7, 30, 90].includes(Number(importData.nutritionContextDays))) {
+          current.nutritionContextDays = /** @type {7|30|90} */ (Number(importData.nutritionContextDays));
         }
-      }
-      // Context fields: replace if present in bundle
-      for (const field of ['diagnoses', 'diet', 'exercise', 'sleepRest', 'lightCircadian', 'stress', 'loveLife', 'environment', 'menstrualCycle', 'emfAssessment', 'genetics', 'biometrics']) {
-        if (importData[field] != null) current[field] = importData[field];
-      }
-      if (importData.contextSourceSettings && typeof importData.contextSourceSettings === 'object' && !Array.isArray(importData.contextSourceSettings)) {
-        current.contextSourceSettings = importData.contextSourceSettings;
-      }
-      if ([7, 30, 90].includes(Number(importData.nutritionContextDays))) {
-        current.nutritionContextDays = /** @type {7|30|90} */ (Number(importData.nutritionContextDays));
-      }
-      if (importData.nutritionTargets && typeof importData.nutritionTargets === 'object' && !Array.isArray(importData.nutritionTargets)) {
-        current.nutritionTargets = importData.nutritionTargets;
-      }
-      if (importData.interpretiveLens) current.interpretiveLens = importData.interpretiveLens;
-      if (importData.contextNotes) current.contextNotes = importData.contextNotes;
-      // Change history: merge by field+date, imported snapshot wins on conflict
-      if (Array.isArray(importData.changeHistory)) {
-        const changeHistory = ensureImportedArray(current, 'changeHistory');
-        for (const entry of importData.changeHistory) {
-          if (!entry.field || !entry.date) continue;
-          const idx = changeHistory.findIndex(e => e.field === entry.field && e.date === entry.date);
-          if (idx >= 0) { replaceImportedArrayItem(current, 'changeHistory', idx, entry); }
-          else { appendImportedArrayItem(current, 'changeHistory', entry); }
+        if (importData.nutritionTargets && typeof importData.nutritionTargets === 'object' && !Array.isArray(importData.nutritionTargets)) {
+          current.nutritionTargets = importData.nutritionTargets;
         }
-        sortImportedArray(current, 'changeHistory', (a, b) => a.date.localeCompare(b.date));
-        trimImportedArray(current, 'changeHistory', 200);
-      }
-      // Chat summaries: merge by threadId
-      if (Array.isArray(importData.chatSummaries)) {
-        const chatSummaries = ensureImportedArray(current, 'chatSummaries');
-        for (const s of importData.chatSummaries) {
-          if (!s.threadId) continue;
-          const idx = chatSummaries.findIndex(e => e.threadId === s.threadId);
-          if (idx >= 0) { replaceImportedArrayItem(current, 'chatSummaries', idx, s); }
-          else { appendImportedArrayItem(current, 'chatSummaries', s); }
+        if (importData.interpretiveLens) current.interpretiveLens = importData.interpretiveLens;
+        if (importData.contextNotes) current.contextNotes = importData.contextNotes;
+        // Change history: merge by field+date, imported snapshot wins on conflict
+        if (Array.isArray(importData.changeHistory)) {
+          const changeHistory = ensureImportedArray(current, 'changeHistory');
+          for (const entry of importData.changeHistory) {
+            if (!entry.field || !entry.date) continue;
+            const idx = changeHistory.findIndex(e => e.field === entry.field && e.date === entry.date);
+            if (idx >= 0) { replaceImportedArrayItem(current, 'changeHistory', idx, entry); }
+            else { appendImportedArrayItem(current, 'changeHistory', entry); }
+          }
+          sortImportedArray(current, 'changeHistory', (a, b) => a.date.localeCompare(b.date));
+          trimImportedArray(current, 'changeHistory', 200);
         }
-      }
-      // Import snapshots: merge by stable snapshot id
-      if (Array.isArray(importData.importSnapshots)) {
-        const importSnapshots = ensureImportedArray(current, 'importSnapshots');
-        for (const snap of importData.importSnapshots) {
-          if (snap?.id) {
-            clearTombstone(current, 'importSnapshots', snap.id);
-            const idx = importSnapshots.findIndex(s => s.id === snap.id);
-            if (idx >= 0) {
-              const existingAt = Number(importSnapshots[idx]?.importedAt) || 0;
-              const incomingAt = Number(snap.importedAt) || 0;
-              if (incomingAt >= existingAt) replaceImportedArrayItem(current, 'importSnapshots', idx, snap);
-            } else {
-              appendImportedArrayItem(current, 'importSnapshots', snap);
+        // Chat summaries: merge by threadId
+        if (Array.isArray(importData.chatSummaries)) {
+          const chatSummaries = ensureImportedArray(current, 'chatSummaries');
+          for (const s of importData.chatSummaries) {
+            if (!s.threadId) continue;
+            const idx = chatSummaries.findIndex(e => e.threadId === s.threadId);
+            if (idx >= 0) { replaceImportedArrayItem(current, 'chatSummaries', idx, s); }
+            else { appendImportedArrayItem(current, 'chatSummaries', s); }
+          }
+        }
+        // Import snapshots: merge by stable snapshot id
+        if (Array.isArray(importData.importSnapshots)) {
+          const importSnapshots = ensureImportedArray(current, 'importSnapshots');
+          for (const snap of importData.importSnapshots) {
+            if (snap?.id) {
+              clearTombstone(current, 'importSnapshots', snap.id);
+              const idx = importSnapshots.findIndex(s => s.id === snap.id);
+              if (idx >= 0) {
+                const existingAt = Number(importSnapshots[idx]?.importedAt) || 0;
+                const incomingAt = Number(snap.importedAt) || 0;
+                if (incomingAt >= existingAt) replaceImportedArrayItem(current, 'importSnapshots', idx, snap);
+              } else {
+                appendImportedArrayItem(current, 'importSnapshots', snap);
+              }
+            }
+          }
+          sortImportedArray(current, 'importSnapshots', (a, b) => (b.importedAt || 0) - (a.importedAt || 0));
+        }
+        // Marker definitions and display overrides: preserve existing values.
+        for (const field of ['customMarkers', 'refOverrides', 'categoryLabels', 'categoryIcons', 'markerLabels', 'markerPlacements', 'manualValues']) {
+          if (importData[field] && typeof importData[field] === 'object') {
+            if (!current[field]) current[field] = {};
+            for (const [k, v] of Object.entries(importData[field])) {
+              if (!current[field][k]) current[field][k] = v;
             }
           }
         }
-        sortImportedArray(current, 'importSnapshots', (a, b) => (b.importedAt || 0) - (a.importedAt || 0));
-      }
-      // Display overrides: merge labels/icons/manualValues (don't overwrite existing)
-      for (const field of ['categoryLabels', 'categoryIcons', 'markerLabels', 'markerPlacements', 'manualValues']) {
-        if (importData[field] && typeof importData[field] === 'object') {
-          if (!current[field]) current[field] = {};
-          for (const [k, v] of Object.entries(importData[field])) {
-            if (!current[field][k]) current[field][k] = v;
+        if (importData.manualMetricTombstones && typeof importData.manualMetricTombstones === 'object'
+            && !Array.isArray(importData.manualMetricTombstones)) {
+          if (!current.manualMetricTombstones) current.manualMetricTombstones = {};
+          for (const [key, deletedAt] of Object.entries(importData.manualMetricTombstones)) {
+            const incoming = Number(deletedAt) || 0;
+            const existing = Number(current.manualMetricTombstones[key]) || 0;
+            if (incoming > existing) current.manualMetricTombstones[key] = incoming;
           }
         }
+        // Save
+        const persisted = await saveImportedDataForProfile(existing.id, current, {
+          forceProfileScope: true, expectedData: raw, skipSync: true,
+        });
+        if (!persisted) throw new Error('Could not save.');
+        merged++;
+        // Clear delete intents before metadata queues sync for this restored profile.
+        _reviveImportedProfileSyncIdentity(existing.id);
+        if (!firstImportedId) firstImportedId = existing.id;
+        const meta = {};
+        for (const field of ['name', 'sex', 'dob', 'location', 'notes', 'avatar', 'pinned']) if (bp[field]) meta[field] = bp[field];
+        if (Array.isArray(bp.tags) && bp.tags.length) meta.tags = bp.tags;
+        if (bp.status && bp.status !== 'active') meta.status = bp.status;
+        if (bp.height) { meta.height = bp.height; meta.heightUnit = bp.heightUnit || 'cm'; }
+        try { if (!await updateProfileMeta(existing.id, meta)) throw new Error('Metadata save failed.'); }
+        finally { onProfileSaved(existing.id, current); }
+        if (bp.chat) await _importChatData(existing.id, bp.chat);
+        await _importNutritionData(existing.id, bp.nutrition);
+      } else {
+        const id = await createProfile(bp.name || 'Imported', {
+          sex: bp.sex || null, dob: bp.dob || null,
+          location: bp.location || { country: '', zip: '' },
+          tags: bp.tags || [], notes: bp.notes || '',
+          status: bp.status || 'active', avatar: bp.avatar || null,
+          height: bp.height || null, heightUnit: bp.heightUnit || 'cm',
+        });
+        if (!firstImportedId) firstImportedId = id;
+        if (bp.pinned) await updateProfileMeta(id, { pinned: true });
+        const persisted = await saveImportedDataForProfile(id, importData, {
+          forceProfileScope: true,
+        });
+        if (!persisted) throw new Error('Could not save.');
+        created++;
+        if (bp.chat) await _importChatData(id, bp.chat);
+        await _importNutritionData(id, bp.nutrition);
       }
-      if (importData.manualMetricTombstones && typeof importData.manualMetricTombstones === 'object'
-          && !Array.isArray(importData.manualMetricTombstones)) {
-        if (!current.manualMetricTombstones) current.manualMetricTombstones = {};
-        for (const [key, deletedAt] of Object.entries(importData.manualMetricTombstones)) {
-          const incoming = Number(deletedAt) || 0;
-          const existing = Number(current.manualMetricTombstones[key]) || 0;
-          if (incoming > existing) current.manualMetricTombstones[key] = incoming;
-        }
-      }
-      // Save
-      const persisted = await saveImportedDataForProfile(existing.id, current, {
-        forceProfileScope: true,
-      });
-      if (!persisted) throw new Error('The imported profile could not be saved.');
-      if (bp.chat) await _importChatData(existing.id, bp.chat);
-      await _importNutritionData(existing.id, bp.nutrition);
-      merged++;
-    } else {
-      // Create new profile
-      const id = await createProfile(bp.name || 'Imported', {
-        sex: bp.sex || null, dob: bp.dob || null,
-        location: bp.location || { country: '', zip: '' },
-        tags: bp.tags || [], notes: bp.notes || '',
-        status: bp.status || 'active', avatar: bp.avatar || null,
-        height: bp.height || null, heightUnit: bp.heightUnit || 'cm',
-      });
-      if (!firstImportedId) firstImportedId = id;
-      if (bp.pinned) await updateProfileMeta(id, { pinned: true });
-      // Write data
-      const persisted = await saveImportedDataForProfile(id, importData, {
-        forceProfileScope: true,
-      });
-      if (!persisted) throw new Error('The imported profile could not be saved.');
-      if (bp.chat) await _importChatData(id, bp.chat);
-      await _importNutritionData(id, bp.nutrition);
-      created++;
     }
-  }
+  } catch (error) { throw new Error(`Saved profiles: ${created + merged}. Import stopped: ${getErrorMessage(error)}`); }
   // Switch to the first imported profile (so user lands on real data, not empty default)
   const targetId = firstImportedId || state.currentProfile;
   await loadProfile(targetId);

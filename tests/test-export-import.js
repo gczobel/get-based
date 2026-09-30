@@ -112,7 +112,7 @@ return (async function() {
   assert('JSON and database bundle imports restore nutritionTargets',
     exportImportSrc.includes('state.importedData.nutritionTargets = json.nutritionTargets')
       && exportImportSrc.includes('current.nutritionTargets = importData.nutritionTargets'));
-  assert('Supplement import preserves safe sourceUrl', exportImportSrc.includes('entry.sourceUrl = sourceUrl.toString()'));
+  assert('Supplement import preserves safe sourceUrl', exportImportSrc.includes("if (url.protocol === 'http:' || url.protocol === 'https:') entry.sourceUrl = url.toString()"));
   // Light & Sun stack — earlier export schema dropped these silently;
   // import learned them in v1.6.x but export hadn't followed suit.
   assert('Client export includes sunSessions', exportSrc.includes('sunSessions: data.sunSessions'));
@@ -484,8 +484,8 @@ return (async function() {
   // _importDatabaseBundle merge logic
   assert('Bundle import matches by id first', exportImportSrc.includes('profiles.find(p => p.id === bp.id)'));
   assert('Bundle import falls back to name match', exportImportSrc.includes('profiles.find(p => p.name === bp.name)'));
-  assert('Bundle import clears stale sync deletion state before merging',
-    /if \(existing\) \{[\s\S]{0,500}_reviveImportedProfileSyncIdentity\(existing\.id\)/.test(exportImportSrc));
+  assert('Bundle import revives sync identity only after its guarded save succeeds',
+    /expectedData: raw, skipSync: true,[\s\S]{0,80}if \(!persisted\) throw[\s\S]{0,220}_reviveImportedProfileSyncIdentity\(existing\.id\)/.test(exportImportSrc));
   assert('Bundle import republishes the complete post-write profile state',
     exportImportSrc.includes('saveImportedDataForProfile(existing.id, current, {') &&
     exportImportSrc.includes('forceProfileScope: true'));
@@ -494,8 +494,8 @@ return (async function() {
   assert('Bundle import deduplicates notes', exportImportSrc.includes('notes.some(x => x.date === n.date && x.text === n.text)'));
   assert('Bundle import deduplicates supplements', exportImportSrc.includes('supplements.some(x => x.name === s.name && x.startDate === s.startDate)'));
   assert('Bundle import merges health goals', exportImportSrc.includes('healthGoals.some(x => x.text === g.text)'));
-  assert('Bundle import merges custom markers', exportImportSrc.includes("!current.customMarkers[key]"));
-  assert('Bundle import merges ref overrides', exportImportSrc.includes("!current.refOverrides[key]"));
+  assert('Bundle import merges custom markers', /for \(const field of \[\'customMarkers\', \'refOverrides\',[\s\S]{0,350}if \(!current\[field\]\[k\]\)/.test(exportImportSrc));
+  assert('Bundle import merges ref overrides', /for \(const field of \[\'customMarkers\', \'refOverrides\',[\s\S]{0,350}current\[field\]\[k\] = v/.test(exportImportSrc));
   assert('Bundle import replaces context fields', exportImportSrc.includes("for (const field of ['diagnoses', 'diet', 'exercise'"));
   assert('Bundle import caps changeHistory at 200', exportImportSrc.includes("trimImportedArray(current, 'changeHistory', 200)"));
   assert('Bundle import merges chat summaries', exportImportSrc.includes('chatSummaries.findIndex'));

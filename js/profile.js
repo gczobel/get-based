@@ -1,7 +1,8 @@
 // @ts-check
 import { rememberProfileData } from './profile-data-writes.js';
 import { readProfileForLoad } from './profile-load-safety.js';
-import { state } from './state.js';
+import { state, resetCorrelationSelection } from './state.js';
+import { restoreCorrelationWorkspace } from './correlation-workspace-store.js';
 import { COUNTRY_LATITUDES, LATITUDE_BANDS } from './constants.js';
 import { isDebugMode, showConfirmDialog, showNotification } from './utils.js';
 import { encryptedSetItem, encryptedGetItem, getEncryptionEnabled, isUnlocked } from './crypto.js';
@@ -23,9 +24,7 @@ import {
   clearLocalProfileDeleteIntent, isDemoProfileId, markLocalProfileDeleteIntent,
   queueEligibleProfileSync,
 } from './profile-sync-policy.js';
-
 export { migrateProfileData, profileStorageKey };
-
 /** @type {Record<string, (...args: any[]) => any>} */
 const profileDeps = {
   deleteProfileFromRelay: async () => {},
@@ -36,7 +35,6 @@ const profileDeps = {
   showConfirmDialog,
   showNotification,
 };
-
 export function configureProfileDeps(deps = {}) {
   const previous = { ...profileDeps };
   const previousStoreDeps = configureProfileListStoreDeps(deps);
@@ -336,7 +334,8 @@ export async function loadProfile(profileId) {
   state.phaseOverlayMode = savedPhaseOverlay === 'on' ? 'on' : 'off';
   state.profileSex = getProfileSex(profileId);
   state.profileDob = getProfileDob(profileId);
-  state.selectedCorrelationMarkers = [];
+  resetCorrelationSelection();
+  await restoreCorrelationWorkspace(profileId);
   state.chatHistory = [];
   state.chatThreads = [];
   state.currentThreadId = null;

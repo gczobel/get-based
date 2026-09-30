@@ -10,12 +10,14 @@ const runtime = vi.hoisted(() => ({
   getProfiles: vi.fn(() => [{ id: 'profile-1', name: 'Primary' }]),
   refreshImportRuntimeShell: vi.fn(async () => {}),
   saveImportedData: vi.fn(),
+  onProfileSaved: vi.fn(),
   saveImportedDataForProfile: vi.fn(async (profileId, importedData) => {
     await runtime.encryptedSetItem(`${profileId}:imported`, JSON.stringify(importedData));
     return true;
   }),
   setSelectedNodeUrl: vi.fn(),
   showNotification: vi.fn(),
+  showConfirmDialog: vi.fn(async () => true),
   state: { currentProfile: 'profile-1', importedData: {} },
 }));
 
@@ -23,7 +25,9 @@ vi.mock('../js/state.js', () => ({ state: runtime.state }));
 vi.mock('../js/utils.js', () => ({
   isDebugMode: () => false,
   showNotification: runtime.showNotification,
+  showConfirmDialog: runtime.showConfirmDialog,
 }));
+vi.mock('../js/sync-save-hooks.js', () => ({ onProfileSaved: runtime.onProfileSaved }));
 vi.mock('../js/data.js', () => ({
   saveImportedData: runtime.saveImportedData,
   invalidateActiveDataCache: vi.fn(),
@@ -35,7 +39,7 @@ vi.mock('../js/profile.js', () => ({
   loadProfile: vi.fn(async () => {}),
   migrateProfileData: vi.fn(),
   profileStorageKey: (id, kind) => `${id}:${kind}`,
-  updateProfileMeta: vi.fn(),
+  updateProfileMeta: vi.fn(async () => true),
 }));
 vi.mock('../js/crypto.js', () => ({
   encryptedGetItem: runtime.encryptedGetItem,
@@ -85,6 +89,7 @@ describe('JSON restore runtime', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     runtime.saveImportedData.mockResolvedValue(true);
+    runtime.showConfirmDialog.mockResolvedValue(true);
     localStorage.clear();
     runtime.encryptedGetItem.mockImplementation(async key => localStorage.getItem(key));
     runtime.encryptedSetItem.mockImplementation(async (key, value) => localStorage.setItem(key, value));
@@ -190,13 +195,21 @@ describe('JSON restore runtime', () => {
     expect(runtime.refreshImportRuntimeShell).toHaveBeenCalledWith({ chat: true });
   });
 
-  it('revives an existing profile before merging a database bundle into it', async () => {
+  it('revives and syncs an existing profile only after the guarded bundle save succeeds', async () => {
     localStorage.setItem('labcharts-profile-delete-intent-profile-1', '{"at":1}');
     localStorage.setItem('labcharts-tombstone-pending-profile-1', '{"at":2}');
+    const { updateProfileMeta } = await import('../js/profile.js');
     runtime.saveImportedDataForProfile.mockImplementationOnce(async (profileId, importedData) => {
+      expect(localStorage.getItem('labcharts-profile-delete-intent-profile-1')).toBe('{"at":1}');
+      expect(localStorage.getItem('labcharts-tombstone-pending-profile-1')).toBe('{"at":2}');
+      expect(updateProfileMeta).not.toHaveBeenCalled();
+      await runtime.encryptedSetItem(`${profileId}:imported`, JSON.stringify(importedData));
+      return true;
+    });
+    updateProfileMeta.mockImplementationOnce(async () => {
       expect(localStorage.getItem('labcharts-profile-delete-intent-profile-1')).toBeNull();
       expect(localStorage.getItem('labcharts-tombstone-pending-profile-1')).toBeNull();
-      await runtime.encryptedSetItem(`${profileId}:imported`, JSON.stringify(importedData));
+      expect(JSON.parse(localStorage.getItem('profile-1:imported')).diet.type).toBe('whole-food');
       return true;
     });
     const backup = {
@@ -215,10 +228,76 @@ describe('JSON restore runtime', () => {
     expect(runtime.saveImportedDataForProfile).toHaveBeenCalledWith(
       'profile-1',
       expect.objectContaining({ diet: { type: 'whole-food' } }),
-      { forceProfileScope: true },
+      { forceProfileScope: true, expectedData: null, skipSync: true },
     );
     expect(JSON.parse(localStorage.getItem('profile-1:imported')))
       .toMatchObject({ diet: { type: 'whole-food' } });
+  });
+
+  it('stops before overwriting a later profile changed after bundle preflight', async () => {
+    const profiles = [{ id: 'profile-1', name: 'Primary' }, { id: 'profile-2', name: 'Second' }];
+    runtime.getProfiles.mockReturnValueOnce(profiles);
+    const before = { entries: [{ date: '2026-01-01', markers: { glucose: 90 } }],
+      supplements: [{ id: 'tmg', name: 'TMG', startDate: '2026-03-24', dosage: '500 mg' }] };
+    localStorage.setItem('profile-2:imported', JSON.stringify(before));
+    localStorage.setItem('labcharts-profile-delete-intent-profile-2', '{"at":1}');
+    localStorage.setItem('labcharts-tombstone-pending-profile-2', '{"at":2}');
+    const latest = structuredClone(before);
+    latest.entries[0].markers.hba1c = 5;
+    latest.supplements[0].dosage = '2000 mg';
+    runtime.saveImportedDataForProfile.mockImplementationOnce(async (id, data) => {
+      localStorage.setItem(`${id}:imported`, JSON.stringify(data));
+      localStorage.setItem('profile-2:imported', JSON.stringify(latest));
+      return true;
+    }).mockImplementationOnce(async (id, data, options) => {
+      expect(options.expectedData).toBe(JSON.stringify(before));
+      return localStorage.getItem(`${id}:imported`) === options.expectedData;
+    });
+    const backup = { type: 'database', profiles: profiles.map(p => ({ ...p,
+      data: { entries: [{ date: '2026-01-01', markers: { insulin: 6 } }] } })) };
+    await importDataJSON(new File([JSON.stringify(backup)], 'concurrent.json'));
+    const restored = JSON.parse(localStorage.getItem('profile-2:imported'));
+    expect(restored.entries[0].markers).toEqual({ glucose: 90, hba1c: 5 });
+    expect(restored.supplements).toEqual(latest.supplements);
+    const { updateProfileMeta } = await import('../js/profile.js');
+    expect(updateProfileMeta).toHaveBeenCalledExactlyOnceWith('profile-1', { name: 'Primary' });
+    expect(runtime.onProfileSaved).toHaveBeenCalledExactlyOnceWith('profile-1', JSON.parse(localStorage.getItem('profile-1:imported')));
+    expect(localStorage.getItem('labcharts-profile-delete-intent-profile-2')).toBe('{"at":1}');
+    expect(localStorage.getItem('labcharts-tombstone-pending-profile-2')).toBe('{"at":2}');
+    expect(runtime.showNotification).toHaveBeenLastCalledWith(expect.stringContaining('Saved profiles: 1. Import stopped'), 'error');
+  });
+
+  it('reports saved profiles if a later bundle write cannot be combined safely', async () => {
+    runtime.getProfiles.mockReturnValueOnce([{ id: 'profile-1' }, { id: 'profile-2' }]);
+    runtime.saveImportedDataForProfile.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+    const backup = { type: 'database', profiles: ['profile-1', 'profile-2'].map(id => ({ id, data: { diet: { type: 'imported' } } })) };
+    await importDataJSON(new File([JSON.stringify(backup)], 'conflict.json'));
+    expect(runtime.showNotification).toHaveBeenLastCalledWith(expect.stringContaining('Saved profiles: 1. Import stopped'), 'error');
+    const { updateProfileMeta } = await import('../js/profile.js');
+    expect(updateProfileMeta).toHaveBeenCalledExactlyOnceWith('profile-1', {});
+    expect(runtime.showNotification.mock.calls.some(([, kind]) => kind === 'success')).toBe(false);
+  });
+
+  it.each(['reject', 'false'])('queues committed restore data when metadata saving fails (%s)', async failure => {
+    const { updateProfileMeta } = await import('../js/profile.js');
+    if (failure === 'reject') updateProfileMeta.mockRejectedValueOnce(new Error('Storage full'));
+    else updateProfileMeta.mockResolvedValueOnce(false);
+    localStorage.setItem('labcharts-profile-delete-intent-profile-1', '{"at":1}');
+    const backup = { type: 'database', profiles: [{ id: 'profile-1', name: 'Renamed', data: { diet: { type: 'restored' } } }] };
+    await importDataJSON(new File([JSON.stringify(backup)], 'metadata-failure.json'));
+    const committed = JSON.parse(localStorage.getItem('profile-1:imported'));
+    expect(committed.diet.type).toBe('restored');
+    expect(runtime.onProfileSaved).toHaveBeenCalledExactlyOnceWith('profile-1', committed);
+    expect(localStorage.getItem('labcharts-profile-delete-intent-profile-1')).toBeNull();
+    expect(runtime.showNotification).toHaveBeenLastCalledWith(expect.stringContaining('Saved profiles: 1. Import stopped'), 'error');
+    expect(runtime.showNotification.mock.calls.some(([, kind]) => kind === 'success')).toBe(false);
+  });
+
+  it.each(['customMarkers', 'refOverrides'])('preserves existing %s definitions while adding imported ones', async field => {
+    localStorage.setItem('profile-1:imported', JSON.stringify({ [field]: { saved: { unit: 'mg' } } }));
+    const backup = { type: 'database', profiles: [{ id: 'profile-1', data: { [field]: { saved: { unit: 'g' }, added: { unit: 'mmol/L' } } } }] };
+    await importDataJSON(new File([JSON.stringify(backup)], 'definitions.json'));
+    expect(JSON.parse(localStorage.getItem('profile-1:imported'))[field]).toEqual({ saved: { unit: 'mg' }, added: { unit: 'mmol/L' } });
   });
 
   it('restores Biology Score insights from JSON and keeps newer local interpretations', async () => {
@@ -459,4 +538,127 @@ describe('JSON restore runtime', () => {
       'success',
     );
   });
+  it('preserves ingredient frequency, identity and a single ongoing dose period from a client export', async () => {
+    const dose = { ingredient: 'TMG', value: 500, unit: 'mg', basis: 'day', source: 'ingredient' };
+    const tmg = { id: 'sm_import_tmg', schemaVersion: 2, name: 'TMG Powder', type: 'supplement',
+      startDate: '2026-03-24', endDate: null, dosage: 'scoop', note: '', timesPerDay: 1,
+      schedule: { mode: 'daily', timesPerDay: 1 }, lifecycle: { state: 'active' },
+      ingredients: [{ name: 'TMG', amountValue: 500, amountUnit: 'mg' }],
+      periods: [{ start: '2026-03-24', end: null, dose, ingredientDoses: [dose], schedule: { mode: 'daily' } }],
+      currentDose: dose, sourceUrl: 'https://example.test/tmg', brand: 'Test',
+      servingSize: { value: 1, unit: 'scoop' }, importProvenance: { reviewed: true }, futureField: { keep: true },
+    };
+    await importDataJSON(new File([JSON.stringify({ version: 2, entries: [{ date: '2026-05-22', markers: { 'biochemistry.glucose': 4.56 } }], supplements: [tmg] })], 'regimen.json'));
+    const imported = runtime.state.importedData.supplements.find(s => s.id === tmg.id);
+    expect(imported).toEqual(tmg);
+    const { prepareTherapyHistory, therapyExposure } = await import('../js/therapy-correlations.js');
+    const history = prepareTherapyHistory(imported, '2026-09-28');
+    expect(history.currentDoses[0]).toMatchObject({ value: 500, confirmedSince: '2026-03-24' });
+    expect(therapyExposure(history, '2026-09-28')).toMatchObject({ value: 500, usage: 1 });
+  });
+
+  it.each(['profile', 'database'])('restores updated regimens by stable identity in a %s import', async format => {
+    const saved = { id: 'stable-id', name: 'Original', startDate: '2026-01-01', periods: [{ start: '2026-01-01', end: null }] };
+    const unrelated = { ...saved, id: 'unrelated', name: 'Keep me' };
+    runtime.state.importedData.supplements = [saved, unrelated];
+    localStorage.setItem('profile-1:imported', JSON.stringify(runtime.state.importedData));
+    const edited = { ...saved, name: 'Renamed', startDate: '2026-02-01', sourceUrl: 'javascript:alert(1)',
+      periods: [{ start: '2026-02-01', end: '2026-03-01', dose: '500 mg' }, { start: '2026-03-02', end: null, dose: '2000 mg' }] };
+    const added = { ...edited, id: 'new-id', name: 'New' };
+    const data = { entries: [{ date: '2026-05-22', markers: { 'biochemistry.glucose': 4.56 } }], supplements: [edited, added, { ...added, name: 'Latest name' }] };
+    const backup = format === 'profile' ? data : { type: 'database', profiles: [{ id: 'profile-1', name: 'Primary', data }] };
+    await importDataJSON(new File([JSON.stringify(backup)], 'identities.json'));
+    const records = format === 'profile' ? runtime.state.importedData.supplements : JSON.parse(localStorage.getItem('profile-1:imported')).supplements;
+    expect(records).toHaveLength(3);
+    expect(records[0]).toMatchObject({ id: saved.id, name: edited.name, startDate: edited.startDate, periods: edited.periods });
+    expect(records[0].sourceUrl).toBeUndefined();
+    expect(records[1]).toEqual(unrelated);
+    expect(records[2]).toMatchObject({ id: 'new-id', name: 'Latest name', periods: edited.periods });
+  });
+
+  it.each(['profile', 'database'])('asks before replacing a conflicting regimen in a %s import', async format => {
+    const saved = { id: 'stable', name: 'TMG', startDate: '2026-03-24', updatedAt: 200,
+      periods: [{ start: '2026-03-24', end: null, dose: '500 mg', schedule: { mode: 'daily' } }],
+      ingredients: [{ name: 'TMG', amount: '500 mg' }], schedule: { mode: 'daily' },
+      lifecycle: { state: 'active' }, sourceUrl: 'https://example.test/tmg', futureField: { keep: true } };
+    runtime.state.importedData.supplements = [saved];
+    localStorage.setItem('profile-1:imported', JSON.stringify(runtime.state.importedData));
+    async function restore(record) {
+      const data = { entries: [{ date: '2026-05-22', markers: { glucose: 90 } }], supplements: [record] };
+      const backup = format === 'profile' ? data : { type: 'database', profiles: [{ id: 'profile-1', name: 'Primary', data }] };
+      await importDataJSON(new File([JSON.stringify(backup)], 'partial.json'));
+      return format === 'profile' ? runtime.state.importedData.supplements : JSON.parse(localStorage.getItem('profile-1:imported')).supplements;
+    }
+    const incoming = { id: saved.id, name: 'Updated TMG', startDate: saved.startDate,
+      updatedAt: 100, periods: [{ start: saved.startDate, end: null, dose: '2000 mg' }] };
+    runtime.showConfirmDialog.mockResolvedValueOnce(false);
+    expect(await restore(incoming)).toEqual([saved]);
+    expect(runtime.showConfirmDialog).toHaveBeenCalledWith(expect.stringContaining('remove omitted fields'), expect.objectContaining({ confirmLabel: 'Use imported', cancelLabel: 'Keep saved' }));
+    const applied = await restore(incoming);
+    expect(applied).toEqual([{ dosage: '', endDate: null, type: 'supplement', note: '', ...incoming }]);
+    expect(applied[0].ingredients).toBeUndefined();
+    expect(applied[0].sourceUrl).toBeUndefined();
+    const undated = { id: saved.id, name: incoming.name, startDate: saved.startDate, periods: saved.periods };
+    expect((await restore(undated))[0].periods).toEqual(saved.periods);
+  });
+
+  it('aborts a profile import if data changes while resolving regimen conflicts', async () => {
+    runtime.state.importedData.supplements = [{ id: 'stable', name: 'TMG', startDate: '2026-03-24' }];
+    runtime.showConfirmDialog.mockImplementationOnce(async () => {
+      runtime.state.importedData.supplements[0].note = 'Concurrent edit';
+      return true;
+    });
+    await importDataJSON(new File([JSON.stringify({ entries: [], supplements: [{ id: 'stable', name: 'Changed', startDate: '2026-03-24' }] })], 'conflict.json'));
+    expect(runtime.state.importedData.supplements[0]).toMatchObject({ name: 'TMG', note: 'Concurrent edit' });
+    expect(runtime.saveImportedData).not.toHaveBeenCalled();
+  });
+
+  it('preserves concurrent stored edits while a bundle conflict is open', async () => {
+    const saved = { supplements: [{ id: 'stable', name: 'TMG', startDate: '2026-03-24' }] };
+    localStorage.setItem('profile-1:imported', JSON.stringify(saved));
+    runtime.showConfirmDialog.mockImplementationOnce(async () => {
+      localStorage.setItem('profile-1:imported', JSON.stringify({ ...saved, note: 'Concurrent edit' }));
+      return true;
+    });
+    await importDataJSON(new File([JSON.stringify({ type: 'database', profiles: [{ id: 'profile-1', data: { supplements: [{ ...saved.supplements[0], name: 'Changed' }] } }] })], 'bundle.json'));
+    expect(runtime.saveImportedDataForProfile).not.toHaveBeenCalled();
+    expect(JSON.parse(localStorage.getItem('profile-1:imported'))).toEqual({ ...saved, note: 'Concurrent edit' });
+  });
+
+  it('preflights every bundle conflict before saving or updating any profile', async () => {
+    runtime.getProfiles.mockReturnValueOnce([{ id: 'profile-1', name: 'First' }, { id: 'profile-2', name: 'Second' }]);
+    const first = { supplements: [{ id: 'a', name: 'First regimen', startDate: '2026-03-24' }] };
+    const second = { supplements: [{ id: 'b', name: 'Second regimen', startDate: '2026-03-24' }] };
+    localStorage.setItem('profile-1:imported', JSON.stringify(first));
+    localStorage.setItem('profile-2:imported', JSON.stringify(second));
+    runtime.showConfirmDialog.mockResolvedValueOnce(true).mockImplementationOnce(async () => {
+      localStorage.setItem('profile-2:imported', JSON.stringify({ ...second, note: 'Concurrent change' }));
+      return true;
+    });
+    const profiles = [first, second].map((data, index) => ({ id: `profile-${index + 1}`, name: 'Renamed profile', data: { supplements: [{ ...data.supplements[0], note: 'Imported change' }] } }));
+    await importDataJSON(new File([JSON.stringify({ type: 'database', profiles })], 'two-profiles.json'));
+    expect(runtime.saveImportedDataForProfile).not.toHaveBeenCalled();
+    const { updateProfileMeta, createProfile } = await import('../js/profile.js');
+    expect(updateProfileMeta).not.toHaveBeenCalled();
+    expect(createProfile).not.toHaveBeenCalled();
+    expect(JSON.parse(localStorage.getItem('profile-1:imported'))).toEqual(first);
+    expect(JSON.parse(localStorage.getItem('profile-2:imported'))).toEqual({ ...second, note: 'Concurrent change' });
+  });
+
+  it('keeps an unlinked daily regimen intact without inventing historical dose dates', async () => {
+    const tmg = { id: 'sm_unlinked', name: 'Unlinked TMG', startDate: '2026-03-24', timesPerDay: 1,
+      ingredients: [{ name: 'TMG', amount: '500 mg' }], periods: [{ start: '2026-03-24', end: null }],
+      sourceUrl: 'javascript:alert(1)',
+    };
+    await importDataJSON(new File([JSON.stringify({ entries: [{ date: '2026-05-22', markers: { 'biochemistry.glucose': 4.56 } }], supplements: [tmg] })], 'unlinked.json'));
+    const imported = runtime.state.importedData.supplements.find(s => s.id === tmg.id);
+    expect(imported.timesPerDay).toBe(1);
+    expect(imported.periods).toEqual(tmg.periods);
+    expect(imported.sourceUrl).toBeUndefined();
+    const { prepareTherapyHistory, therapyExposure } = await import('../js/therapy-correlations.js');
+    const history = prepareTherapyHistory(imported, '2026-09-28');
+    expect(history.currentDoses[0].value).toBe(500);
+    expect(therapyExposure(history, '2026-09-28').value).toBeNull();
+  });
+
 });

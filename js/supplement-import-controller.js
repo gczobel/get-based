@@ -4,6 +4,7 @@
 import { getErrorMessage } from './caught-error.js';
 import { escapeHTML, isDebugMode, showNotification } from './utils.js';
 import { getAIProvider } from './api.js';
+import { loadContextEditorStylesheet } from './context-card-editor-ui.js';
 import { callAssistantFeatureAI, hasAssistantFeatureProvider } from './ai-feature-routing.js';
 import { buildVisionContent, formatImageBlock, isValidImageType, resizeImage } from './image-utils.js';
 import { suppActionAttrs } from './supplement-action-delegates.js';
@@ -108,6 +109,12 @@ function finishImportProgress(id, success) {
   }, success ? 2500 : 6000);
 }
 
+function loadImportReviewStyles() {
+  return loadContextEditorStylesheet().catch(error => {
+    if (isDebugMode()) console.warn('[supplementImportStyles]', error);
+  });
+}
+
 export async function scanSupplementLabel(input) {
   const files = Array.from(input.files || []).slice(0, 4);
   input.value = '';
@@ -118,6 +125,7 @@ export async function scanSupplementLabel(input) {
   const progressId = startImportProgress(document.querySelector('.supp-scan-label'), 'Preparing label photos…');
   let completed = false;
   try {
+    await loadImportReviewStyles();
     const provider = getAIProvider();
     const imageBlocks = [];
     for (const file of files) {
@@ -149,7 +157,7 @@ export function renderPendingImportReview() {
   const facts = [draft.product, draft.genericName, draft.brand, draft.dosageForm,
     draft.servingSize?.value != null ? formatSupplementAmount(draft.servingSize.value, draft.servingSize.unit) : ''].filter(Boolean);
   if (applied) {
-    return `<div class="supp-import-review supp-import-review-applied" role="status"><div class="supp-import-review-header"><strong>Selected facts are ready to edit</strong><span>Nothing is saved yet.</span></div><div class="supp-import-review-facts supp-import-review-sources">${sourceFacts.map(fact => `<span>${escapeHTML(fact)}</span>`).join('')}</div><div class="supp-import-review-directions">Review the editable identity, active ingredients, other label ingredients, quality evidence, personal regimen, and dates below. Correct or remove anything before choosing ${document.getElementById('supp-form-panel')?.getAttribute('data-edit-index') === '-1' ? 'Add' : 'Update'}.</div></div>`;
+    return `<div class="supp-import-review supp-import-review-applied" role="status"><div class="supp-import-review-header"><strong>Selected facts are ready to edit</strong><span>Nothing is saved yet.</span></div><div class="supp-import-review-facts supp-import-review-sources">${sourceFacts.map(fact => `<span>${escapeHTML(fact)}</span>`).join('')}</div><div class="supp-import-review-directions">Review the editable identity, active ingredients, other label ingredients, quality evidence, personal regimen, and dates below. Correct or remove anything before choosing ${document.getElementById('supp-form-panel')?.getAttribute('data-edit-index') === '-1' ? 'Add supplement' : 'Save changes'}.</div></div>`;
   }
   return `<div class="supp-import-review" role="region" aria-label="Review imported supplement facts">
     <div class="supp-import-review-header"><strong>${evidence.length > 1 ? 'Choose facts from combined evidence' : 'Choose facts to import'}</strong><span>Uncheck anything irrelevant. You will edit selected facts in the form before saving.</span></div>
@@ -363,6 +371,7 @@ export async function fetchSupplementFromURL() {
   const progressId = startImportProgress(document.querySelector('.supp-url-fetch'), 'Reading product page…');
   let completed = false;
   try {
+    await loadImportReviewStyles();
     const isLocal = ['localhost', '127.0.0.1'].includes(getUtilsRuntimeHostname());
     let html;
     if (isLocal) {
