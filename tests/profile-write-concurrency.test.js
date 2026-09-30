@@ -327,3 +327,39 @@ it('persists remote wearable metrics while invalidating only a deleted manual la
   expect((await read()).wearableSummary).toEqual({ sources: remote.wearableSummary.sources, metrics: { steps } });
   expect(state.importedData.wearableSummary.metrics).toEqual({ steps });
 });
+
+
+it.each(['entry deletion', 'supplement deletion', 'edit', 'none'])('checks import snapshot inside the write lock: %s', async change => {
+  state.importedData.supplements = [{ id: 'tmg', name: 'TMG', startDate: '2026-03-24', dosage: '500 mg' }];
+  expect(await saveImportedData()).toBe(true);
+  const expectedData = await crypto.encryptedGetItem(key);
+  const imported = JSON.parse(expectedData);
+  imported.contextNotes = 'Imported data';
+  const peer = JSON.parse(expectedData);
+  if (change === 'entry deletion') peer.entries = [];
+  if (change === 'supplement deletion') peer.supplements = [];
+  if (change === 'edit') peer.supplements[0].dosage = '2000 mg';
+  // This write occurs after bundle preflight, before the locked save reads storage.
+  await crypto.encryptedSetItem(key, JSON.stringify(peer));
+  const write = vi.spyOn(crypto, 'encryptedSetItem');
+  const saved = await saveImportedDataForProfile(profileId, imported, { forceProfileScope: true, expectedData });
+  expect(saved).toBe(change === 'none');
+  if (change !== 'none') {
+    expect(write).not.toHaveBeenCalled();
+    expect(await read()).toEqual(peer);
+  } else {
+    expect((await read()).contextNotes).toBe('Imported data');
+    expect((await read()).supplements).toEqual(imported.supplements);
+  }
+});
+
+it('does not mistake nested object key order after adoption for a concurrent period edit', () => {
+  const persisted = { supplements: [{ id: 'dose-order', periods: [{ start: '2026-01-01', dose: { text: '75 mg/day', ingredient: 'Example' } }] }] };
+  const live = { supplements: [{ id: 'dose-order', periods: [{ start: '2026-01-01', dose: { ingredient: 'Example', text: '75 mg/day' } }] }] };
+  const intent = structuredClone(live);
+  intent.supplements[0].periods[0].dose.text = '100 mg/day';
+  expect(mergeProfileMutation(live, intent, persisted)).toEqual(intent);
+  const peer = structuredClone(persisted);
+  peer.supplements[0].periods[0].dose.text = '90 mg/day';
+  expect(() => mergeProfileMutation(live, intent, peer)).toThrow(/Concurrent edits/);
+});

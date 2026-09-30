@@ -2,24 +2,32 @@
 // chat-marker-prompts.js — marker and correlation prompts that open chat
 
 import { state } from './state.js';
-import { formatValue, getStatus } from './utils.js';
+import { CONTEXT_SOURCE_IDS, isContextSourceEnabled } from './context-source-registry.js';
+import { formatValue, getStatus, showNotification } from './utils.js';
 import { getActiveData } from './data.js';
-import { getEffectiveRange, getEffectiveRangeForDate, getEffectiveRangeLabelForDate, getLatestValueIndex } from './marker-analysis.js';
+import { getEffectiveRangeForDate, getEffectiveRangeLabelForDate, getLatestValueIndex } from './marker-analysis.js';
 import { openChatPanel } from './chat-panel.js';
 import { createNewThread, ensureActiveThread, loadChatThreads, renameThread } from './chat-threads.js';
 import { loadChatHistory, saveChatHistory } from './chat-history.js';
 import { closeChatModalRuntime } from './chat-runtime.js';
 
-async function openSourcePrompt(prompt, threadName, { closeModal = false } = {}) {
+/** @param {string} prompt @param {string} threadName @param {{closeModal?: boolean, canOpen?: () => boolean}} [options] */
+async function openSourcePrompt(prompt, threadName, { closeModal = false, canOpen = () => true } = {}) {
+  const profile = state.currentProfile;
+  if (!canOpen()) return;
   if (closeModal) closeChatModalRuntime();
   const threadsLoaded = await loadChatThreads();
-  if (threadsLoaded === false) return;
-  ensureActiveThread();
-  await loadChatHistory();
-  if (state.chatHistory.length > 0) {
-    await saveChatHistory();
-    createNewThread();
-  }
+  if (threadsLoaded === false || state.currentProfile !== profile || !canOpen()) return;
+  if (state.chatThreads.length) {
+    ensureActiveThread();
+    await loadChatHistory();
+    if (state.currentProfile !== profile || !canOpen()) return;
+    if (state.chatHistory.length > 0) {
+      await saveChatHistory();
+      if (state.currentProfile !== profile || !canOpen()) return;
+      createNewThread();
+    }
+  } else ensureActiveThread();
   renameThread(state.currentThreadId, threadName);
   await openChatPanel(prompt);
 }
@@ -76,25 +84,22 @@ export function askAIAboutMarker(markerId) {
   void openSourcePrompt(prompt, marker.name, { closeModal: true });
 }
 
-export function askAIAboutCorrelations() {
-  if (state.selectedCorrelationMarkers.length < 2) return;
-  const data = getActiveData();
-  const parts = state.selectedCorrelationMarkers.map(key => {
-    const [catKey, markerKey] = key.split('.');
-    const marker = data.categories[catKey]?.markers[markerKey];
-    if (!marker) return null;
-    const valuesText = marker.values
-      .map((v, i) => v !== null ? `${data.dates[i]}: ${formatValue(v)} ${marker.unit}` : null)
-      .filter(Boolean).join(', ');
-    const mr = getEffectiveRange(marker);
-    const latestIdx = getLatestValueIndex(marker.values);
-    const status = latestIdx !== -1 ? getStatus(marker.values[latestIdx], mr.min, mr.max) : 'no data';
-    return `- ${marker.name}: ${valuesText} (ref: ${marker.refMin}\u2013${marker.refMax} ${marker.unit}${marker.optimalMin != null ? `, optimal: ${marker.optimalMin}\u2013${marker.optimalMax}` : ''}, status: ${status})`;
-  }).filter(Boolean);
-  const names = state.selectedCorrelationMarkers.map(key => {
-    const [catKey, markerKey] = key.split('.');
-    return data.categories[catKey]?.markers[markerKey]?.name || key;
-  });
-  const prompt = `Analyze the correlation between these biomarkers: ${names.join(', ')}.\n\nHere are my values:\n${parts.join('\n')}\n\nHow do these markers relate to each other? Are there any patterns, imbalances, or concerns based on their combined trends?`;
-  void openSourcePrompt(prompt, `Correlations: ${names.join(' + ')}`);
+function correlationSourcesAllowed(includeTherapies) {
+  return isContextSourceEnabled(CONTEXT_SOURCE_IDS.LAB_MARKERS)
+    && (!includeTherapies || isContextSourceEnabled(CONTEXT_SOURCE_IDS.SUPPLEMENTS_MEDS));
+}
+
+export async function askAIAboutCorrelations() {
+  if (state.selectedCorrelationMarkers.length < 1) return;
+  if (!correlationSourcesAllowed(state.selectedCorrelationSupplements.length > 0)) { showNotification('Enable selected sources in AI Context.', 'info'); return; }
+  const profile = state.currentProfile;
+  const { prepareCorrelationSelection, therapyCorrelationPrompt } = await import('./therapy-correlations.js');
+  if (profile !== state.currentProfile) return;
+  const includeTherapies = state.selectedCorrelationSupplements.length > 0;
+  const canOpen = () => correlationSourcesAllowed(includeTherapies);
+  const selection = prepareCorrelationSelection(getActiveData(), state.importedData, state.selectedCorrelationMarkers, state.selectedCorrelationSupplements, 0, state.correlationView);
+  if (selection.rangeError || !(selection.comparisons.length || selection.markerPairs.length)) return;
+  const prompt = therapyCorrelationPrompt(selection);
+  if (!prompt) { showNotification('Too much data for AI. Select fewer items or a shorter date range.', 'info'); return; }
+  void openSourcePrompt(prompt, 'Biomarker and dose exploration', { canOpen });
 }

@@ -324,19 +324,19 @@
 .supp-form .note-editor-actions button { max-width: 100%; }
 .supp-form-title { font-size: 14px; font-weight: 600; margin-bottom: 12px; }
 .supp-form-section-title {
-  margin: 16px 0 9px; padding-bottom: 5px; border-bottom: 1px solid var(--border);
+  margin: 24px 0 12px; padding-bottom: 8px; border-bottom: 1px solid var(--border);
   color: var(--text-primary); font-size: 12px; font-weight: 700;
 }
-.supp-label-hint { font-weight: 400; color: var(--text-muted); }
-.supp-form-help { margin-top: 5px; color: var(--text-muted); font-size: 10px; line-height: 1.45; }
-.supp-form-row { display: flex; gap: 12px; margin-bottom: 10px; flex-wrap: wrap; min-width: 0; max-width: 100%; }
+.supp-label-hint { margin-inline-start: 5px; font-weight: 400; color: var(--text-muted); }
+.supp-form-help { margin: 8px 0 12px; color: var(--text-muted); font-size: 11px; line-height: 1.5; }
+.supp-form-row { display: flex; gap: 16px 12px; margin-bottom: 16px; flex-wrap: wrap; min-width: 0; max-width: 100%; }
 .supp-form-field { flex: 1 1 150px; min-width: 0; max-width: 100%; }
 .modal .supp-form-row { flex-wrap: wrap; }
 .modal .supp-form-field { min-width: min(140px, 100%); }
 .supp-form-field-compact { flex: 0 0 100px; }
 .supp-form-field-wide { flex: 2 1 220px; }
 .supp-form-field label {
-  display: block; font-size: 12px; color: var(--text-muted); margin-bottom: 4px; font-weight: 500;
+  display: block; font-size: 12px; color: var(--text-muted); margin-bottom: 8px; line-height: 1.5; font-weight: 500;
 }
 .supp-form-field input,
 .supp-form-field select,
@@ -351,7 +351,7 @@
 .supp-form-field textarea { resize: vertical; line-height: 1.45; }
 .supp-form-field select { cursor: pointer; }
 .supp-form-field select option { background: var(--select-popup-surface); }
-.supp-ingredient-row { display: flex; gap: 6px; margin-bottom: 6px; align-items: center; flex-wrap: wrap; min-width: 0; max-width: 100%; }
+.supp-ingredient-row { display: flex; gap: 8px; margin-bottom: 12px; align-items: center; flex-wrap: wrap; min-width: 0; max-width: 100%; }
 .supp-ingredient-row .supp-ing-name { flex: 3 1 140px; min-width: 110px; }
 .supp-ingredient-row .supp-ing-amount { flex: 1 1 80px; min-width: 70px; }
 .supp-ingredient-row .supp-ing-unit { flex: 0 0 105px; min-width: 90px; }
@@ -387,7 +387,7 @@
 .supp-ingredient-add { background: none; border: 1px dashed var(--border-color); color: var(--text-muted); font-size: 12px; padding: 4px 10px; border-radius: 6px; cursor: pointer; }
 .supp-ingredient-add:hover { border-color: var(--accent); color: var(--accent); }
 .supp-ingredient-add:disabled { opacity: 0.5; cursor: wait; }
-.supp-period-row { display: flex; gap: 6px; margin-bottom: 4px; align-items: center; min-width: 0; max-width: 100%; }
+.supp-period-row { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; align-items: center; min-width: 0; max-width: 100%; }
 .supp-period-row input[type="date"] { flex: 1 1 0; min-width: 0; max-width: 100%; font-size: 12px; padding: 5px 8px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 6px; color: var(--text-primary); }
 .supp-period-row .supp-period-dose { flex: 1.4 1 130px; min-width: 100px; font-size: 12px; padding: 5px 8px; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 6px; color: var(--text-primary); }
 .supp-period-row input[type="date"]:focus { border-color: var(--accent); outline: none; }
@@ -395,37 +395,10 @@
 .supp-period-arrow { color: var(--text-muted); font-size: 12px; flex-shrink: 0; }
 .supp-period-remove { background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 16px; padding: 2px 6px; border-radius: 4px; flex-shrink: 0; }
 .supp-period-remove:hover { color: var(--danger, #ef4444); background: rgba(239, 68, 68, 0.1); }
-.supp-period-actions { display: flex; gap: 6px; margin-top: 4px; }
+.supp-period-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 4px; }
 .supp-period-add { background: none; border: 1px dashed var(--border-color); color: var(--text-muted); font-size: 12px; padding: 4px 10px; border-radius: 6px; cursor: pointer; }
 .supp-period-add:hover { border-color: var(--accent); color: var(--accent); }
-.supp-import-review {
-  margin: 10px 0 14px; padding: 12px; border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--border));
-  border-radius: 8px; background: color-mix(in srgb, var(--accent) 5%, var(--bg-card));
-  color: var(--text-secondary); font-size: 12px;
-}
-.supp-import-review-header { display: flex; justify-content: space-between; gap: 10px; margin-bottom: 8px; }
-.supp-import-review-header span { color: var(--text-muted); font-size: 10px; }
-.supp-import-review-facts { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 8px; }
-.supp-import-review-facts span { padding: 2px 7px; border-radius: 999px; background: var(--bg-primary); border: 1px solid var(--border); }
-.supp-import-review-ingredients { display: grid; gap: 3px; }
-.supp-import-review-ingredients small { color: var(--text-muted); }
-.supp-import-review-applied { border-color: color-mix(in srgb, var(--green, #22c55e) 35%, var(--border)); background: color-mix(in srgb, var(--green, #22c55e) 5%, var(--bg-card)); }
-.supp-import-review-choices { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 4px; }
-.supp-import-choice { display: flex; gap: 7px; align-items: flex-start; min-width: 0; padding: 5px 7px; border: 1px solid var(--border-color); border-radius: 6px; background: var(--bg-primary); cursor: pointer; line-height: 1.35; }
-.supp-import-choice:hover { border-color: color-mix(in srgb, var(--accent) 55%, var(--border-color)); }
-.supp-import-choice input { flex: 0 0 auto; margin-top: 2px; accent-color: var(--accent); }
-.supp-import-choice > span { min-width: 0; }
-.supp-import-choice small { display: block; margin-top: 1px; color: var(--text-muted); font-size: 9px; }
-.supp-import-review-label { margin: 9px 0 4px; color: var(--text-muted); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; }
-.supp-import-review-label small { font-weight: 400; text-transform: none; letter-spacing: 0; }
-.supp-import-review-quality-label { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.supp-import-filter-btn { border: 1px solid var(--border-color); border-radius: 5px; padding: 3px 7px; background: var(--bg-primary); color: var(--text-secondary); font: inherit; font-size: 9px; text-transform: none; letter-spacing: 0; cursor: pointer; }
-.supp-import-filter-btn:hover { border-color: var(--accent); color: var(--accent); }
-.supp-import-review-quality { display: grid; gap: 4px; }
 .supp-quality-kind { display: inline-block; min-width: 76px; color: var(--text-muted); font-size: 10px; text-transform: capitalize; }
-.supp-import-review-directions { margin-top: 8px; line-height: 1.45; }
-.supp-import-review-issues { margin-top: 8px; color: var(--yellow); }
-.supp-import-review-actions { display: flex; gap: 7px; margin-top: 10px; }
 .supp-list-ingredients { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 3px; min-width: 0; max-width: 100%; overflow: hidden; }
 .supp-ing-pill { max-width: 100%; min-width: 0; overflow: hidden; text-overflow: ellipsis; font-size: 10px; padding: 1px 6px; border-radius: 10px; background: var(--bg-primary); border: 1px solid var(--border-color); color: var(--text-secondary); white-space: nowrap; }
 .supp-list-quality { margin-top: 4px; color: var(--text-muted); font-size: 10px; }
@@ -502,9 +475,7 @@
   .supp-period-row { display: grid; grid-template-columns: 1fr 18px 1fr 34px; gap: 5px; }
   .supp-period-row .supp-period-dose { grid-column: 1 / 4; width: 100%; }
   .supp-period-remove { grid-column: 4; grid-row: 1 / 3; }
-  .supp-import-review-header { flex-direction: column; }
-  .supp-import-progress-head,
-  .supp-import-review-quality-label { align-items: flex-start; flex-direction: column; }
+  .supp-import-progress-head { align-items: flex-start; flex-direction: column; }
   .supp-import-progress-head span { text-align: left; }
   .supp-quality-column-labels { display: none; }
   .supp-quality-row { grid-template-columns: minmax(0, 1fr) 90px 28px; gap: 5px; padding: 7px; border: 1px solid var(--border-color); border-radius: 7px; }
@@ -704,3 +675,19 @@
 }
 .ctx-tips-badge:hover { background: color-mix(in srgb, var(--accent) 15%, transparent); border-color: var(--accent); }
 .ctx-tips-badge:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.supp-period-ingredient-choice { width: 100%; min-width: 0; grid-column: 1 / -1; padding: 6px; color: var(--text-primary); background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 6px; }
+.supp-period-row > .supp-ingredient-add { grid-column: 1 / 4; font-size: 11px; }
+
+.supp-period-dose-summary { grid-column: 1 / -1; flex-basis: 100%; color: var(--text-secondary); overflow-wrap: anywhere; }
+
+/* Keep the open supplement editor usable on narrow screens. */
+.supp-list-dose { margin-top: 4px; font-size: 12px; color: var(--text-primary); }
+@media (max-width: 600px) {
+  #detail-modal:has(.supp-form) { width: 100%; padding: 16px; }
+  #detail-modal:has(.supp-form) > h3:first-of-type { margin: -16px -16px 16px; padding: 18px 48px 16px 16px; font-size: 20px; }
+  .supp-form input, .supp-form select, .supp-form textarea,
+  .supp-form .supp-period-row input, .supp-form .supp-ingredient-row input,
+  .supp-form .supp-ingredient-row select { font-size: 16px; min-height: 44px; }
+  .supp-form button { min-height: 44px; }
+}
