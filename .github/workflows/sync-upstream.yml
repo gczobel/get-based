@@ -1,0 +1,73 @@
+# Fork-only: merge elkimek/get-based main into a sync branch and open a PR.
+# PRs opened with GITHUB_TOKEN do not trigger other workflows, so the Tests
+# workflow is dispatched explicitly on the sync branch. Budget ceilings and
+# generated registries (MODULE_MAP.md, dom-sink-policy.json) can conflict or
+# drift after a merge, which is why this never pushes to main by itself.
+
+name: Sync upstream
+
+on:
+  schedule:
+    - cron: '17 5 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+  actions: write
+
+jobs:
+  sync:
+    if: github.repository == 'gczobel/get-based'
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      UPSTREAM: elkimek/get-based
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Merge upstream main into a sync branch
+        id: merge
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote add upstream "https://github.com/${UPSTREAM}.git"
+          git fetch upstream main
+          if git merge-base --is-ancestor upstream/main origin/main; then
+            echo "Fork main already contains upstream main."
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          branch="sync/upstream-$(date -u +%Y-%m-%d)"
+          echo "branch=$branch" >> "$GITHUB_OUTPUT"
+          git checkout -B "$branch" origin/main
+          if git merge --no-ff -m "chore: merge upstream/main into fork" upstream/main; then
+            git push --force origin "$branch"
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            git merge --abort
+            echo "changed=conflict" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Open or update the PR and run Tests
+        if: steps.merge.outputs.changed == 'true'
+        run: |
+          branch="${{ steps.merge.outputs.branch }}"
+          if [ -z "$(gh pr list --head "$branch" --json number --jq '.[0].number')" ]; then
+            gh pr create --base main --head "$branch" \
+              --title "chore: merge upstream/main into fork" \
+              --body "Automated merge of ${UPSTREAM} main. Tests are dispatched on this branch. If the budget or registry checks fail, regenerate MODULE_MAP.md / dom-sink-policy.json and raise the ceilings by the measured overshoot with a reference entry."
+          fi
+          gh workflow run test.yml --ref "$branch"
+
+      - name: Report a merge conflict
+        if: steps.merge.outputs.changed == 'conflict'
+        run: |
+          title="Upstream sync has merge conflicts"
+          if [ -z "$(gh issue list --state open --search "$title in:title" --json number --jq '.[0].number')" ]; then
+            gh issue create --title "$title" \
+              --body "Merging ${UPSTREAM} main into main conflicts. Resolve it locally with: git fetch upstream && git merge upstream/main"
+          fi
