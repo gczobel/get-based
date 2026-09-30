@@ -364,10 +364,9 @@ async function receiveSync() {
         dbg(mergeMsg);
         logSyncEvent('pull', mergeMsg);
 
-        // Raw manual wearable rows are intentionally device-local, while
-        // per-metric/date deletion markers sync. Apply those markers before
-        // persistence/render so an old local row cannot recreate a pulse the
-        // user deleted on another device.
+        // Raw wearable rows stay device-local; manual readings and deletion
+        // markers sync. Apply both before persistence/render so an old local
+        // row cannot recreate a pulse the user deleted on another device.
         await _reconcilePulledManualWearables(profileId, merged);
         const committedPull = await persistPulledImportedData(localKey, profileId, merged, remoteUpdated);
         if (restoreJoinApplied) clearRestoreJoinPending();

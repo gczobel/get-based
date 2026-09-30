@@ -5,7 +5,7 @@
   "maximums": {
     "requests": 337,
     "transferBytes": 1230000,
-    "decodedBytes": 3451000
+    "decodedBytes": 3455000
   },
   "reference": {
     "requests": 276,
@@ -41,7 +41,10 @@
     "persistenceHardeningRequests": 337,
     "persistenceHardeningTransferBytes": 1228450,
     "persistenceHardeningDecodedBytes": 3448567,
-    "persistenceHardeningMeasuredCommit": "849c0412"
+    "persistenceHardeningMeasuredCommit": "849c0412",
+    "manualBodyReadingsSyncRequests": 337,
+    "manualBodyReadingsSyncTransferBytes": 1229298,
+    "manualBodyReadingsSyncDecodedBytes": 3452992
   },
   "referenceCommit": "7747f1d7",
   "measuredAt": "2026-09-17"

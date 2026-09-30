@@ -66,9 +66,11 @@ export const MANUAL_TAGS = ['resting', 'morning-fasted', 'post-workout', 'stress
 // One-time migration flag key in the wearables meta store.
 const MIGRATION_FLAG = 'biometrics-migrated-v1';
 const MANUAL_TOMBSTONE_FIELD = 'manualMetricTombstones';
-const MANUAL_HISTORY_START = '1970-01-01';
-const MANUAL_HISTORY_END = '9999-12-31';
-const ISO_DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
+export const MANUAL_MIRROR_FIELD = 'manualBodyReadings';
+export const MIRROR_FIELDS = [...MANUAL_METRICS, 'tags', 'note'];
+export const MANUAL_HISTORY_START = '1970-01-01';
+export const MANUAL_HISTORY_END = '9999-12-31';
+export const ISO_DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 export function manualMetricTombstoneKey(metric, date) {
   if (!MANUAL_METRICS.includes(metric) || typeof date !== 'string'
@@ -127,6 +129,28 @@ function _clearManualMetricTombstone(metric, date, imported) {
   // wins over the older positive deletion clock everywhere.
   tombstones[key] = 0;
   return true;
+}
+
+export const manualMirrorKey = (field, date) => `${field}.${date}`;
+
+export function manualMirror(imported) {
+  return imported[MANUAL_MIRROR_FIELD] || (imported[MANUAL_MIRROR_FIELD] = {});
+}
+
+function _mirrorManualPatch(imported, date, patch) {
+  const mirror = manualMirror(imported);
+  for (const field of MIRROR_FIELDS) {
+    if (patch[field] != null) mirror[manualMirrorKey(field, date)] = patch[field];
+  }
+}
+
+function _unmirrorManualMetric(imported, metric, date) {
+  const mirror = imported[MANUAL_MIRROR_FIELD];
+  if (!mirror) return;
+  delete mirror[manualMirrorKey(metric, date)];
+  if (MANUAL_METRICS.some((m) => mirror[manualMirrorKey(m, date)] != null)) return;
+  delete mirror[manualMirrorKey('tags', date)];
+  delete mirror[manualMirrorKey('note', date)];
 }
 
 function _legacyBiometricField(metric) {
@@ -244,7 +268,7 @@ export async function reconcileManualMetricTombstones(profileId, imported = stat
   return { prunedRows, prunedLegacy };
 }
 
-function captureManualMutation(profileId) {
+export function captureManualMutation(profileId) {
   if (!profileId || profileId !== state.currentProfile || !state.importedData) {
     throw new Error('Switch back to the originating profile before changing manual measurements.');
   }
@@ -253,14 +277,14 @@ function captureManualMutation(profileId) {
 }
 
 /** @param {import('../types/app-state.js').ProfileData} imported */
-async function persistManualMutation(profileId, imported, baseData) {
+export async function persistManualMutation(profileId, imported, baseData) {
   if (!await saveImportedDataForProfile(profileId, imported, { baseData })) {
     throw new Error('Could not save manual measurement metadata. Check your data before retrying.');
   }
 }
 
 /** @param {import('../types/app-state.js').ProfileData} imported */
-function updateManualConnection(imported, coverageDays = 0) {
+export function updateManualConnection(imported, coverageDays = 0) {
   if (!imported.wearableConnections) imported.wearableConnections = {};
   const prev = imported.wearableConnections.manual;
   const nowISO = new Date().toISOString();
@@ -312,6 +336,7 @@ export async function logManualMetric(profileId, metric, { date, value, unit = '
   const noteClean = _sanitizeNote(note);
   if (noteClean) patch.note = noteClean;
   await _mergeManualRow(profileId, d, patch, imported);
+  _mirrorManualPatch(imported, d, patch);
   updateManualConnection(imported);
   await persistManualMutation(profileId, imported, baseData);
 }
@@ -343,6 +368,7 @@ export async function logManualBP(profileId, { date, systolic, diastolic, pulse,
   // Merge rather than replace — preserves same-day weight from a prior entry.
   const { source: _s, date: _d, ...patch } = row;
   await _mergeManualRow(profileId, d, patch, imported);
+  _mirrorManualPatch(imported, d, patch);
   updateManualConnection(imported);
   await persistManualMutation(profileId, imported, baseData);
 }
@@ -467,6 +493,7 @@ export async function deleteManualMetric(profileId, metric, date) {
   const { imported, baseData } = captureManualMutation(profileId);
   _recordManualMetricTombstone(metric, date, Date.now(), imported);
   _removeLegacyBiometric(metric, date, imported);
+  _unmirrorManualMetric(imported, metric, date);
   // Commit deletion intent before erasing local rows, so other devices and
   // recovery retain the deletion even if wearable storage fails afterwards.
   await persistManualMutation(profileId, imported, baseData);
@@ -526,6 +553,7 @@ export async function deleteAllManualMetrics(profileId) {
     if (Array.isArray(biometrics.bp)) biometrics.bp = [];
   }
   if (imported.wearableConnections) delete imported.wearableConnections.manual;
+  imported[MANUAL_MIRROR_FIELD] = {};
   await persistManualMutation(profileId, imported, baseData);
   await queueManualRowWrite(profileId, () => clearSource(profileId, 'manual'));
   return { deletedRows: rows.length, tombstonesRecorded };
