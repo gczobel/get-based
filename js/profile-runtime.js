@@ -4,8 +4,6 @@
 import { isChatModuleLoaded, loadChatModule } from './chat-loader.js';
 import { state } from './state.js';
 import {
-  ensureManualConnection,
-  hasManualData,
   reconcileManualMetricTombstones,
   isManualMetricTombstoned,
 } from './wearables-manual.js';
@@ -99,11 +97,7 @@ export async function refreshProfileWearables(profileId, biometrics) {
   try { await profileRefreshDeps.migrateBiometricsToManual(profileId, biometrics); } catch {}
   // Pull only applies readings to the active profile; catch up on open.
   try {
-    if (hasSyncedManualReadings(data) || await hasManualData(profileId)) {
-      await manualSync('applyPulledManualBodyReadings', profileId, data);
-      await manualSync('backfillManualBodyReadingsMirror', profileId);
-      if (!data.wearableConnections?.manual) await ensureManualConnection();
-    }
+    await manualSync('catchUpManualBodyReadings', profileId, data);
   } catch {}
   // The user can swap profile A→B during an IDB read. Abort before and after
   // summary persistence so A's metrics can never be saved into B's profile.
