@@ -3649,3 +3649,7 @@ tests/pwa/sveltekit-island-ownership.spec.js.map
 # Explicit external catalog input for Light acceptance
 /tests/helpers/light-device-catalog-fixture.js
 /tests/helpers/light-device-catalog-fixture.js.map
+
+# Generated manual-Sync Wearables receipt expectations
+/tests/helpers/wearable-manual-sync-expectations.js
+/tests/helpers/wearable-manual-sync-expectations.js.map
