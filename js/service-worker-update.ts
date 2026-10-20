@@ -1,5 +1,7 @@
 // service-worker-update.js - explicit PWA update prompt and SW registration
 
+import { renderVersionUpdateBody, renderVersionUpdateCopy } from './version-update-rendering.js';
+
 export interface UpdateWorkerView {
   state?: ServiceWorker['state'];
   postMessage?: ServiceWorker['postMessage'];
@@ -50,6 +52,7 @@ const UPDATE_BANNER_ID = 'version-update-banner';
 const UPDATE_ACTION_ATTR = 'data-version-update-action';
 const DEV_SW_QUERY_RE = /(?:^|[?&])dev-sw=1(?:&|$)/;
 const UPDATE_CHECK_INTERVAL_MS = 5 * 60 * 1000;
+const UPDATE_ACTIVATION_TIMEOUT_MS = 30 * 1000;
 const VERSION_CHECK_URL = '/version.js?update-check=1';
 const LAST_VERSION_CHECK_KEY = 'labcharts-version-update-last-check';
 const APP_BUILD_RE = /\bAPP_BUILD_ID\s*=\s*(['"])([^'"]+)\1/;
@@ -57,7 +60,12 @@ const APP_VERSION_RE = /\bAPP_VERSION\s*=\s*(['"])([^'"]+)\1/;
 
 let pendingRegistration: UpdateRegistrationView | null = null;
 let dismissedWaitingWorker: UpdateWorkerView | null = null;
-let updateRequested = false;
+let requestedWorker: UpdateWorkerView | null = null;
+let registeredContainer: UpdateContainerView | null = null;
+let pendingUpdateCheck: object | null = null;
+let activationTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
+let activationError: 'failed' | 'timeout' | 'unavailable' | null = null;
+let activationDeferred = false;
 let reloadAvailable = false;
 let lastUpdateCheckAt = 0;
 
@@ -141,15 +149,34 @@ function removeBanner() {
   document.body?.classList.remove('version-update-visible');
 }
 
+function clearPendingActivation() {
+  requestedWorker = null;
+  pendingUpdateCheck = null;
+  if (activationTimer !== null) globalThis.clearTimeout(activationTimer);
+  activationTimer = null;
+}
+
+function suspendVersionUpdateBanner() {
+  clearPendingActivation();
+  activationError = null;
+  activationDeferred = false;
+  removeBanner();
+}
+
 export function hideVersionUpdateBanner() {
   reloadAvailable = false;
-  removeBanner();
+  suspendVersionUpdateBanner();
 }
 
 export function showVersionUpdateBanner(registration?: UpdateRegistrationView | null) {
   const waitingWorker = getServiceWorker(registration);
   const waitingUpdate = !!waitingWorker && waitingWorker !== dismissedWaitingWorker;
-  if (!reloadAvailable && !waitingUpdate) return false;
+  if (!reloadAvailable && !waitingUpdate && !requestedWorker && !pendingUpdateCheck && !activationError) return false;
+  if (requestedWorker && waitingWorker && waitingWorker !== requestedWorker) {
+    clearPendingActivation();
+    activationDeferred = false;
+    activationError = null;
+  }
 
   pendingRegistration = registration || pendingRegistration;
 
@@ -161,17 +188,7 @@ export function showVersionUpdateBanner(registration?: UpdateRegistrationView | 
     banner.setAttribute('role', 'region');
     banner.setAttribute('aria-label', 'App update available');
     banner.setAttribute('aria-live', 'polite');
-    banner.innerHTML = `
-      <div class="version-update-body">
-        <div class="version-update-copy-row">
-          <span class="version-update-copy"><strong>Update ready.</strong> Reload when you are ready.</span>
-        </div>
-      </div>
-      <div class="version-update-actions">
-        <button type="button" class="version-update-btn version-update-btn-primary" ${UPDATE_ACTION_ATTR}="apply">Reload</button>
-        <button type="button" class="version-update-btn" ${UPDATE_ACTION_ATTR}="dismiss">Later</button>
-      </div>
-    `;
+    banner.innerHTML = renderVersionUpdateBody();
     banner.addEventListener('click', handleVersionUpdateActionClick);
     document.body.appendChild(banner);
   }
@@ -185,10 +202,23 @@ function renderVersionUpdateBanner(banner: HTMLElement) {
   const copy = banner.querySelector('.version-update-copy');
   const primaryButton = banner.querySelector<HTMLButtonElement>(`[${UPDATE_ACTION_ATTR}="apply"]`);
   const dismissButton = banner.querySelector<HTMLButtonElement>(`[${UPDATE_ACTION_ATTR}="dismiss"]`);
+  if (requestedWorker || pendingUpdateCheck) {
+    banner.setAttribute('aria-live', 'polite');
+    banner.setAttribute('aria-busy', 'true');
+    banner.setAttribute('aria-label', 'App update in progress');
+    if (copy) copy.textContent = pendingUpdateCheck
+      ? 'Checking for the update. You can choose to apply it when it is ready.'
+      : 'Updating getbased. This page will reload when the update is ready.';
+    if (primaryButton) primaryButton.textContent = 'Updating…';
+    if (primaryButton) primaryButton.disabled = true;
+    if (dismissButton) dismissButton.disabled = true;
+    return;
+  }
+
   if (reloadAvailable) {
     banner.setAttribute('aria-live', 'polite');
     banner.setAttribute('aria-busy', 'false');
-    if (copy) copy.innerHTML = '<strong>New version installed.</strong> Reload when you are ready.';
+    if (copy) copy.innerHTML = renderVersionUpdateCopy(true);
     if (primaryButton) primaryButton.textContent = 'Reload';
     if (primaryButton) primaryButton.disabled = false;
     if (dismissButton) dismissButton.disabled = false;
@@ -196,9 +226,39 @@ function renderVersionUpdateBanner(banner: HTMLElement) {
     return;
   }
 
+  if (activationDeferred) {
+    banner.setAttribute('aria-live', 'polite');
+    banner.setAttribute('aria-busy', 'false');
+    if (copy) copy.textContent = 'Update paused to protect open tabs. Close all getbased tabs and app windows, then reopen getbased to finish updating.';
+    if (primaryButton) primaryButton.textContent = !getServiceWorker(pendingRegistration) && !pendingRegistration?.update
+      ? 'Reload' : 'Retry update';
+    if (primaryButton) primaryButton.disabled = false;
+    if (dismissButton) dismissButton.disabled = false;
+    banner.setAttribute('aria-label', 'App update paused');
+    return;
+  }
+
+  if (activationError) {
+    banner.setAttribute('aria-live', 'polite');
+    banner.setAttribute('aria-busy', 'false');
+    banner.setAttribute('aria-label', 'App update needs attention');
+    const needsReload = !getServiceWorker(pendingRegistration) && !pendingRegistration?.update;
+    if (copy) copy.textContent = needsReload
+      ? 'No waiting update is available. Reload getbased to check again.'
+      : activationError === 'unavailable'
+      ? 'No waiting update is available yet. Retry the update check, or close all getbased tabs and app windows, then reopen getbased.'
+      : activationError === 'timeout'
+      ? 'The update is taking longer than expected. Retry the update, or close all getbased tabs and app windows, then reopen getbased.'
+      : 'The update could not start. Retry the update, or close all getbased tabs and app windows, then reopen getbased.';
+    if (primaryButton) primaryButton.textContent = needsReload ? 'Reload' : 'Retry update';
+    if (primaryButton) primaryButton.disabled = false;
+    if (dismissButton) dismissButton.disabled = false;
+    return;
+  }
+
   banner.setAttribute('aria-live', 'polite');
   banner.setAttribute('aria-busy', 'false');
-  if (copy) copy.innerHTML = '<strong>Update ready.</strong> Reload when you are ready.';
+  if (copy) copy.innerHTML = renderVersionUpdateCopy(false);
   if (primaryButton) primaryButton.textContent = 'Reload';
   if (primaryButton) primaryButton.disabled = false;
   if (dismissButton) dismissButton.disabled = false;
@@ -209,7 +269,7 @@ function handleVersionUpdateActionClick(event: MouseEvent) {
   const target = event.target instanceof Element
     ? event.target.closest(`[${UPDATE_ACTION_ATTR}]`)
     : null;
-  if (!target) return;
+  if (!target || requestedWorker || pendingUpdateCheck) return;
   event.preventDefault();
 
   const action = target.getAttribute(UPDATE_ACTION_ATTR);
@@ -224,7 +284,39 @@ function handleVersionUpdateActionClick(event: MouseEvent) {
   }
 }
 
+function retryMissingWaitingWorker(registration: UpdateRegistrationView) {
+  if (!registration.update) {
+    hideVersionUpdateBanner();
+    reloadPage();
+    return true;
+  }
+  const check = {};
+  pendingUpdateCheck = check;
+  activationDeferred = false;
+  activationError = null;
+  showVersionUpdateBanner(registration);
+  activationTimer = globalThis.setTimeout(() => {
+    if (pendingUpdateCheck !== check) return;
+    clearPendingActivation();
+    activationError = 'timeout';
+    showVersionUpdateBanner(registration);
+  }, UPDATE_ACTIVATION_TIMEOUT_MS);
+  Promise.resolve().then(() => pendingUpdateCheck === check ? registration.update!() : undefined).then(() => {
+    if (pendingUpdateCheck !== check) return;
+    clearPendingActivation();
+    activationError = getServiceWorker(registration) ? null : 'unavailable';
+    showVersionUpdateBanner(registration);
+  }).catch(() => {
+    if (pendingUpdateCheck !== check) return;
+    clearPendingActivation();
+    activationError = 'failed';
+    showVersionUpdateBanner(registration);
+  });
+  return true;
+}
+
 export function applyPendingServiceWorkerUpdate(registration: UpdateRegistrationView | null = pendingRegistration) {
+  if (requestedWorker || pendingUpdateCheck) return false;
   if (reloadAvailable) {
     hideVersionUpdateBanner();
     reloadPage();
@@ -232,14 +324,33 @@ export function applyPendingServiceWorkerUpdate(registration: UpdateRegistration
   }
 
   const waitingWorker = getServiceWorker(registration);
-  if (waitingWorker) {
-    updateRequested = true;
-    waitingWorker.postMessage!({ type: 'SKIP_WAITING' });
-    hideVersionUpdateBanner();
-    return true;
+  if (!waitingWorker) {
+    const offeredHere = registration === pendingRegistration && !!document.getElementById(UPDATE_BANNER_ID);
+    return !!registration && !!(activationError || activationDeferred || offeredHere) && retryMissingWaitingWorker(registration);
   }
-
-  return false;
+  pendingRegistration = registration;
+  requestedWorker = waitingWorker;
+  activationDeferred = false;
+  activationError = null;
+  showVersionUpdateBanner(registration);
+  const requestedContainer = registeredContainer;
+  activationTimer = globalThis.setTimeout(() => {
+    if (requestedWorker !== waitingWorker) return;
+    clearPendingActivation();
+    reloadAvailable = requestedContainer?.controller === waitingWorker;
+    activationError = reloadAvailable ? null : 'timeout';
+    showVersionUpdateBanner(registration);
+  }, UPDATE_ACTIVATION_TIMEOUT_MS);
+  try {
+    if (!waitingWorker.postMessage) throw new Error('Update worker is unavailable');
+    waitingWorker.postMessage({ type: 'SKIP_WAITING' });
+    return true;
+  } catch {
+    clearPendingActivation();
+    activationError = 'failed';
+    showVersionUpdateBanner(registration);
+    return false;
+  }
 }
 
 export function watchServiceWorkerRegistration(
@@ -264,6 +375,11 @@ export function watchServiceWorkerRegistration(
           && replacesController
           && canPromptForUpdate(registration, serviceWorkerContainer)) {
         dismissedWaitingWorker = null;
+        if (requestedWorker !== installingWorker) {
+          clearPendingActivation();
+          activationDeferred = false;
+          activationError = null;
+        }
         reloadAvailable = false;
         showVersionUpdateBanner(registration);
       }
@@ -368,7 +484,49 @@ export async function registerServiceWorkerUpdates({
 
   try {
     const registration = await serviceWorkerContainer.register!('/service-worker.js', { updateViaCache: 'none' });
+    registeredContainer = serviceWorkerContainer;
     reloadPage = () => win.location!.reload();
+    win.addEventListener?.('pagehide', suspendVersionUpdateBanner);
+    const reportClientBuildTo = (...workers: Array<UpdateWorkerView | null | undefined>) => {
+      const id = typeof win.APP_BUILD_ID === 'string' ? win.APP_BUILD_ID.trim() : '';
+      if (!/^[a-z\d._-]{1,128}$/i.test(id)) return;
+      for (const worker of new Set(workers)) {
+        try {
+          worker?.postMessage?.({ type: 'CLIENT_BUILD_ID', buildId: id });
+        } catch { /* A closed recipient cannot prevent another worker's reply. */ }
+      }
+    };
+    const reportClientBuild = () => {
+      reportClientBuildTo(serviceWorkerContainer.controller as UpdateWorkerView | null | undefined);
+    };
+    serviceWorkerContainer.addEventListener?.('message', (event: MessageEvent<unknown>) => {
+      const type = (event.data as { type?: unknown } | null | undefined)?.type;
+      const active = serviceWorkerContainer.controller as UpdateWorkerView | null | undefined;
+      const waiting = registration.waiting;
+      if (type === 'REQUEST_CLIENT_BUILD_ID') {
+        // A waiting worker needs a direct reply; reporting only to the active
+        // controller cannot establish that the open document is safe to update.
+        if (event.source && event.source !== active && event.source !== waiting) return;
+        reportClientBuildTo(active, event.source === waiting ? waiting : null);
+      } else if (type === 'UPDATE_ACTIVATION_DEFERRED' && requestedWorker
+        && waiting === requestedWorker && event.source === requestedWorker) {
+        clearPendingActivation();
+        activationError = null;
+        activationDeferred = true;
+        dismissedWaitingWorker = null;
+        showVersionUpdateBanner(registration);
+      }
+    });
+    win.addEventListener?.('focus', reportClientBuild);
+    win.addEventListener?.('pageshow', event => {
+      if (!event.persisted) return;
+      // BFCache restores the same document after pagehide cleared its intent.
+      // Reoffer waiting updates or an installed version's manual Reload action,
+      // without a throttled check or automatic consent from before page exit.
+      reportClientBuild();
+      if (reloadAvailable || canPromptForUpdate(registration, serviceWorkerContainer)) showVersionUpdateBanner(registration);
+    });
+    reportClientBuild();
     let refreshing = false;
     let controller = serviceWorkerContainer.controller;
     serviceWorkerContainer.addEventListener!('controllerchange', () => {
@@ -376,15 +534,21 @@ export async function registerServiceWorkerUpdates({
       if (refreshing || !nextController || nextController === controller) return;
       const previousController = controller;
       controller = nextController;
+      const requestedReplacement = nextController === requestedWorker;
+      clearPendingActivation();
+      activationDeferred = false;
+      activationError = null;
+      reportClientBuild();
       // A first install claims an already current page. Only replacement of
       // an existing controller is evidence that this page needs a reload.
-      if (!previousController && !updateRequested) return;
-      if (!updateRequested) {
+      if (!previousController && !requestedReplacement) return;
+      if (!requestedReplacement) {
         reloadAvailable = true;
         showVersionUpdateBanner(registration);
         return;
       }
       refreshing = true;
+      hideVersionUpdateBanner();
       win.location!.reload();
     });
     watchServiceWorkerRegistration(registration, serviceWorkerContainer);

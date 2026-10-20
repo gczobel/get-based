@@ -554,7 +554,7 @@ test('routstr wallet panels and delegates cover browser-only actions', async ({ 
     const hadClipboard = Object.prototype.hasOwnProperty.call(window.navigator, 'clipboard');
     const oldClipboard = window.navigator.clipboard;
     let currentMint: unknown = 'https://mint.current.test/Bitcoin';
-    let panels: Pick<typeof import('../../js/provider-wallet-panels.js'),"buildRoutstrNodeActions"|"clearRoutstrWalletTimers"|"configureRoutstrWalletPanels"|"configureRoutstrWalletRuntime"|"connectRoutstrNode"|"doRoutstrMintChange"|"doRoutstrNodeDeposit"|"doRoutstrWalletFundCustom"|"doRoutstrWalletReceiveCashu"|"doRoutstrWithdrawQuote"|"recoverPendingWalletFunding"|"refreshCashuWalletBalance"|"routstrWalletActionButtons"|"rsWalletFundCustomInput"|"showRoutstrMintEdit"|"showRoutstrNodePicker"|"showRoutstrWalletFund"|"showRoutstrWithdraw"|"showRoutstrWithdrawLightning"|"showRoutstrWithdrawToken"> | null = null;
+    let panels: Pick<typeof import('../../js/provider-wallet-panels.js'),"buildRoutstrNodeActions"|"clearRoutstrWalletTimers"|"configureRoutstrWalletPanels"|"configureRoutstrWalletRuntime"|"connectRoutstrNode"|"doRoutstrMintChange"|"doRoutstrNodeDeposit"|"doRoutstrWalletFundCustom"|"doRoutstrWalletReceiveCashu"|"doRoutstrWithdrawQuote"|"recoverPendingWalletFunding"|"refreshCashuWalletBalance"|"routstrWalletActionButtons"|"rsWalletFundCustomInput"|"showRoutstrMintEdit"|"showRoutstrNodeDeposit"|"showRoutstrNodePicker"|"showRoutstrWalletFund"|"showRoutstrWithdraw"|"showRoutstrWithdrawLightning"|"showRoutstrWithdrawToken"> | null = null;
     const getMaxWithdrawable = async () => 1234;
 
     function json(body: unknown, status = 200) {
@@ -571,6 +571,8 @@ test('routstr wallet panels and delegates cover browser-only actions', async ({ 
       return fn();
     }
 
+    localStorage.setItem('labcharts-ai-provider', 'routstr');
+    localStorage.setItem('labcharts-chat-backend', 'direct');
     const root = document.createElement('div');
     root.id = 'ai-provider-panel';
     root.innerHTML = `
@@ -693,12 +695,12 @@ test('routstr wallet panels and delegates cover browser-only actions', async ({ 
         nostrGetSelectedNode: (window as unknown as {nostrGetSelectedNode:unknown}).nostrGetSelectedNode,
         nostrSetSelectedNode: (window as unknown as {nostrSetSelectedNode:unknown}).nostrSetSelectedNode,
       };
-      panels = (await import(`/js/provider-wallet-panels.js?walletPanelsCoverage=${Date.now()}`) as unknown) as Pick<typeof import('../../js/provider-wallet-panels.js'),"buildRoutstrNodeActions"|"clearRoutstrWalletTimers"|"configureRoutstrWalletPanels"|"configureRoutstrWalletRuntime"|"connectRoutstrNode"|"doRoutstrMintChange"|"doRoutstrNodeDeposit"|"doRoutstrWalletFundCustom"|"doRoutstrWalletReceiveCashu"|"doRoutstrWithdrawQuote"|"recoverPendingWalletFunding"|"refreshCashuWalletBalance"|"routstrWalletActionButtons"|"rsWalletFundCustomInput"|"showRoutstrMintEdit"|"showRoutstrNodePicker"|"showRoutstrWalletFund"|"showRoutstrWithdraw"|"showRoutstrWithdrawLightning"|"showRoutstrWithdrawToken">;
+      panels = (await import(`/js/provider-wallet-panels.js?walletPanelsCoverage=${Date.now()}`) as unknown) as Pick<typeof import('../../js/provider-wallet-panels.js'),"buildRoutstrNodeActions"|"clearRoutstrWalletTimers"|"configureRoutstrWalletPanels"|"configureRoutstrWalletRuntime"|"connectRoutstrNode"|"doRoutstrMintChange"|"doRoutstrNodeDeposit"|"doRoutstrWalletFundCustom"|"doRoutstrWalletReceiveCashu"|"doRoutstrWithdrawQuote"|"recoverPendingWalletFunding"|"refreshCashuWalletBalance"|"routstrWalletActionButtons"|"rsWalletFundCustomInput"|"showRoutstrMintEdit"|"showRoutstrNodeDeposit"|"showRoutstrNodePicker"|"showRoutstrWalletFund"|"showRoutstrWithdraw"|"showRoutstrWithdrawLightning"|"showRoutstrWithdrawToken">;
       Object.assign(window, walletRuntimeOverrides);
       (window as unknown as {cashuGetMaxWithdrawable:unknown}).cashuGetMaxWithdrawable = getMaxWithdrawable;
       panels.configureRoutstrWalletRuntime(walletRuntimeOverrides);
       panels.configureRoutstrWalletPanels({
-        renderAIProviderPanel: (provider: unknown) => `<div id="rendered-panel">${provider}</div><div id="routstr-wallet-balance"></div><div id="routstr-node-balance"></div>`,
+        renderAIProviderPanel: (provider: unknown) => `<div id="rendered-panel">${provider}</div><div id="routstr-wallet-balance"></div><div id="routstr-node-balance"></div><div id="routstr-node-picker" style="display:none"></div>`,
         renderRoutstrModelDropdown: (models: unknown) => calls.push(['renderModels', (models as {length:unknown}).length]),
         initSettingsModelFetch: () => calls.push(['initFetch']),
         returnToChatIfOnboarding: () => calls.push(['returnChat']),
@@ -720,6 +722,10 @@ test('routstr wallet panels and delegates cover browser-only actions', async ({ 
       await wait(0);
       const fundCreatesInvoice = document.getElementById('routstr-wfund-poll')?.textContent.includes('Waiting for payment');
       await panels.clearRoutstrWalletTimers();
+      if ((await import('/js/wallet-funding-component.js')).getWalletFundingView() !== null) throw new Error('Funding view retained after close');
+      document.getElementById('routstr-wallet-fund-area')!.style.display = 'none';
+      panels.showRoutstrWalletFund();
+      await waitFor(() => document.getElementById('routstr-wcashu-input'));
       await panels.recoverPendingWalletFunding();
       const recoversPendingFunding = document.getElementById('routstr-wfund-status')?.textContent.includes('777 sats recovered');
       (window as unknown as {cashuRecoverPendingFunding:unknown}).cashuRecoverPendingFunding = async () => ({ checked: 2, recovered: 500, pending: 0, failed: 1, balance: 2000, errors: [{ message: 'mint timeout' }] });
@@ -779,7 +785,7 @@ test('routstr wallet panels and delegates cover browser-only actions', async ({ 
       (document.getElementById('routstr-wallet-actions'))!.innerHTML = panels.routstrWalletActionButtons(null);
       const toggleMenuBtn = document.querySelector<HTMLElement>('[data-routstr-wallet-action="toggle-wallet-menu"]');
       toggleMenuBtn?.click();
-      const menuToggles = document.getElementById('routstr-wallet-menu')?.style.display === 'block';
+      const menuToggles = document.getElementById('routstr-wallet-menu')?.hidden === false && toggleMenuBtn?.getAttribute('aria-expanded') === 'true';
       const backupBtn = document.querySelector<HTMLElement>('[data-wallet-action="backup"]');
       backupBtn?.click();
       await wait(0);
@@ -787,28 +793,18 @@ test('routstr wallet panels and delegates cover browser-only actions', async ({ 
 
       await panels.showRoutstrWithdraw();
       await panels.showRoutstrWithdrawLightning();
-      let withdrawInput = (document.getElementById('routstr-withdraw-input') as HTMLInputElement | null);
-      if (!withdrawInput) {
-        (document.getElementById('routstr-wallet-fund-area'))!.innerHTML = '<div id="routstr-withdraw-status"></div>';
-        panels.showRoutstrWithdrawLightning();
-        withdrawInput = (document.getElementById('routstr-withdraw-input') as HTMLInputElement | null);
-      }
-      (withdrawInput)!.value = 'alice@getbased.test';
-      (withdrawInput)!.dispatchEvent(new Event('input', { bubbles: true }));
+      const withdrawInput = (document.getElementById('routstr-withdraw-input') as HTMLInputElement);
+      withdrawInput.value = 'alice@getbased.test';
+      withdrawInput.dispatchEvent(new Event('input', { bubbles: true })); await wait(0);
       const addressShowsAmount = document.getElementById('routstr-withdraw-ln-amount')?.style.display === 'block';
-      let withdrawMaxButton = document.querySelector<HTMLElement>('[data-routstr-wallet-action="withdraw-max"]');
-      if (!withdrawMaxButton) {
-        const statusEl = document.getElementById('routstr-withdraw-status');
-        (statusEl)!.insertAdjacentHTML('beforeend', '<input id="routstr-withdraw-amount"><button data-routstr-wallet-action="withdraw-max"></button>');
-        withdrawMaxButton = document.querySelector<HTMLElement>('[data-routstr-wallet-action="withdraw-max"]');
-      }
+      const withdrawMaxButton = document.querySelector<HTMLElement>('[data-routstr-wallet-action="withdraw-max"]');
       (withdrawMaxButton)!.click();
       await waitFor(() => (document.getElementById('routstr-withdraw-amount') as HTMLInputElement | null)?.value === '1234');
       const withdrawMaxSetsInput = (document.getElementById('routstr-withdraw-amount') as HTMLInputElement | null)?.value === '1234';
       ((document.getElementById('routstr-withdraw-amount') as HTMLInputElement | null))!.value = '100';
       await panels.doRoutstrWithdrawQuote();
       const addressWithdrawCalls = calls.some(item => item[0] === 'withdrawAddress' && item[1] === 'alice@getbased.test' && item[2] === 100);
-      panels.showRoutstrWithdrawLightning();
+      await panels.showRoutstrWithdrawLightning();
       const invoiceInput = (document.getElementById('routstr-withdraw-input') as HTMLInputElement | null);
       (invoiceInput)!.value = 'lnbc200';
       await panels.doRoutstrWithdrawQuote();
@@ -821,8 +817,8 @@ test('routstr wallet panels and delegates cover browser-only actions', async ({ 
       document.querySelector<HTMLElement>('[data-routstr-wallet-action="send-token-preset"][data-amount="500"]')?.click();
       await wait(0);
       const tokenPresetCreatesToken = document.getElementById('routstr-token-result')?.textContent.includes('500 sats');
-      document.querySelector<HTMLElement>('[data-routstr-wallet-action="select-textarea"]')?.click();
-      document.querySelector<HTMLElement>('#routstr-token-result [data-routstr-wallet-action="copy-clipboard"]')?.click();
+      document.querySelector<HTMLTextAreaElement>('#routstr-token-result textarea')?.focus();
+      document.querySelector<HTMLElement>('[data-wallet-withdraw-copy]')!.click(); await wait(0);
       const copyDelegateWritesToken = clipboardWrites.some(text => String(text).includes('cashuAsent-500'));
 
       (document.getElementById('routstr-wallet-fund-area'))!.innerHTML = '<div id="routstr-wfund-status"></div>';
@@ -835,14 +831,18 @@ test('routstr wallet panels and delegates cover browser-only actions', async ({ 
       await wait(0);
       const blurDoesNotCreateInvoice = !document.getElementById('routstr-wfund-poll');
 
-      const seed = document.createElement('div');
-      seed.dataset.routstrWalletAction = 'toggle-seed-blur';
-      seed.style.filter = 'blur(4px)';
-      (document.getElementById('routstr-wallet-fund-area'))!.appendChild(seed);
-      seed.click();
-      const seedBlurToggles = seed.style.filter === '';
+      const seedHost = document.getElementById('routstr-wallet-fund-area')!;
+      const seedComponent = await import('/js/wallet-seed-component.js');
+      const seedView = seedComponent.mountWalletSeed(seedHost, { copy: () => {}, create: () => {}, restore: () => {}, continue: () => {} });
+      seedView.setMnemonic('abandon ability able about above absent absorb abstract absurd abuse access accident');
+      seedView.setState({ mode: 'manage', pending: false, status: { text: '', tone: 'secondary' } });
+      const seed = document.getElementById('wallet-seed-display')!;
+      const initiallyMasked = !seed.textContent!.includes('abandon'); seed.click();
+      const seedBlurToggles = initiallyMasked && seed.getAttribute('aria-pressed') === 'true' && seed.textContent!.includes('abandon');
+      seedComponent.disposeWalletSeed();
 
       await panels.connectRoutstrNode('https://node.one.test');
+      await panels.showRoutstrNodeDeposit('https://node.one.test');
       await panels.doRoutstrNodeDeposit('https://node.one.test', 500);
       await waitFor(() => document.getElementById('routstr-node-balance')?.textContent.includes('987'));
       const successfulNodeDepositRefreshesProvider = calls.some(item => item[0] === 'depositToNode' && item[1] === 'https://node.one.test' && item[2] === 500)
@@ -898,7 +898,6 @@ test('routstr wallet panels and delegates cover browser-only actions', async ({ 
         delete (window.navigator as unknown as {clipboard?:unknown}).clipboard;
       }
       clearTimeout((window as unknown as {_tokenClipTimer?:ReturnType<typeof setTimeout>})._tokenClipTimer);
-      clearTimeout((window as unknown as {_seedClipTimer?:ReturnType<typeof setTimeout>})._seedClipTimer);
       localStorage.removeItem('labcharts-routstr-node');
       localStorage.removeItem('labcharts-routstr-key');
       localStorage.removeItem('labcharts-routstr-model');
@@ -947,7 +946,7 @@ test('routstr wallet delegate coverage handles scoped action variants', async ({
       <div id="routstr-wallet-fund-area">
         <input id="routstr-deposit-amount" value="42">
         <input id="routstr-token-amount" value="66">
-        <input id="routstr-wfund-custom" value="123" data-routstr-wallet-key="wallet-fund-custom" data-routstr-wallet-blur="wallet-fund-custom">
+        <div id="wallet-funding-keyboard-host"></div>
         <input id="routstr-mint-input">
         <input id="routstr-withdraw-amount">
         <textarea id="delegate-textarea" data-routstr-wallet-action="select-textarea">token</textarea>
@@ -978,12 +977,9 @@ test('routstr wallet delegate coverage handles scoped action variants', async ({
         <button id="send-input" data-routstr-wallet-action="send-token-input"></button>
         <button id="send-preset" data-routstr-wallet-action="send-token-preset" data-amount="55"></button>
         <button id="withdraw-execute" data-routstr-wallet-action="withdraw-execute" data-quote-id="quote-delegate"></button>
-        <div id="seed-blur" style="filter:blur(4px)" data-routstr-wallet-action="toggle-seed-blur"></div>
-        <input id="seed-ack" type="checkbox" data-routstr-wallet-change="seed-ack">
-        <button id="routstr-seed-continue" disabled></button>
+        <div id="owned-seed-host"></div>
       </div>
       <div id="routstr-mint-edit" style="display:block"><button id="cancel-mint" data-routstr-wallet-action="cancel-mint"></button></div>
-      <div id="routstr-wallet-menu" style="display:block"></div>
     `;
     document.body.appendChild(root);
 
@@ -1053,13 +1049,19 @@ test('routstr wallet delegate coverage handles scoped action variants', async ({
         'send-preset',
         'delegate-textarea',
         'withdraw-execute',
-        'seed-blur',
       ]) {
         (document.getElementById(id))!.click();
       }
 
-      ((document.getElementById('seed-ack') as HTMLInputElement | null))!.checked = true;
-      ((document.getElementById('seed-ack') as HTMLInputElement | null))!.dispatchEvent(new Event('change', { bubbles: true }));
+      const ownedSeed = await import('/js/wallet-seed-component.js');
+      const seedView = ownedSeed.mountWalletSeed(document.getElementById('owned-seed-host')!, { copy: () => {}, create: () => {}, restore: () => {}, continue: () => {} });
+      seedView.setMnemonic('abandon ability able about above absent absorb abstract absurd abuse access accident');
+      seedView.setState({ mode: 'onboarding', pending: false, status: { text: '', tone: 'secondary' } });
+      const seedAck = document.getElementById('routstr-seed-ack') as HTMLInputElement;
+      seedAck.checked = true; seedAck.dispatchEvent(new Event('change', { bubbles: true }));
+      document.getElementById('routstr-seed-phrase')!.click();
+      const keyboardView = (await import('/js/wallet-funding-component.js')).mountWalletFunding(document.getElementById('wallet-funding-keyboard-host')!, 0, { submitCustom: () => { calls.push(['fundCustom']); }, cancelCustom: () => { calls.push(['customCanceled']); } });
+      keyboardView.setState({ ...keyboardView.getState(), custom: true });
       ((document.getElementById('routstr-wfund-custom') as HTMLInputElement | null))!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
       ((document.getElementById('routstr-wfund-custom') as HTMLInputElement | null))!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
       ((document.getElementById('routstr-wfund-custom') as HTMLInputElement | null))!.dispatchEvent(new FocusEvent('blur', { bubbles: true }));
@@ -1094,10 +1096,12 @@ test('routstr wallet delegate coverage handles scoped action variants', async ({
           && calls.some(item => item[0] === 'executeWithdraw' && item[1] === 'quote-delegate'),
         withdrawMaxAndKeyBlur: ((document.getElementById('routstr-withdraw-amount') as HTMLInputElement | null))!.value === '888'
           && calls.filter(item => item[0] === 'fundCustom').length === 1
-          && calls.some(item => item[0] === 'walletFund'),
-        seedBlurToggled: (document.getElementById('seed-blur'))!.style.filter === '',
+          && calls.filter(item => item[0] === 'customCanceled').length === 1,
+        seedBlurToggled: document.getElementById('routstr-seed-phrase')!.getAttribute('aria-pressed') === 'true',
       };
     } finally {
+      (await import('/js/wallet-funding-component.js')).disposeWalletFunding();
+      (await import('/js/wallet-seed-component.js')).disposeWalletSeed();
       root.remove();
       if (walletRuntimeModule && previousWalletRuntime) {
         walletRuntimeModule.configureRoutstrWalletRuntime(previousWalletRuntime);
@@ -1120,7 +1124,7 @@ test('routstr wallet delegate coverage handles scoped action variants', async ({
 
 test('mint selection preserves visible node refund recovery without retrying the refund', async ({ page }) => {
   await routeHtml(page, '**/wallet-mint-refund-recovery', `<!doctype html><html><body>
-    <div id="routstr-mint-edit"><input id="routstr-mint-input" value="https://mint.other.test"><div id="routstr-mint-status"></div></div>
+    <div id="routstr-mint-edit" style="display:none"></div>
     <div id="routstr-wallet-balance"></div><div id="routstr-mint-label"></div>
     <div id="routstr-wallet-fund-area" style="display:none"></div>
     <div id="routstr-node-picker"><button data-routstr-wallet-action="resume-node-refund" data-node-url="https://node.test">Check refund recovery</button></div>
@@ -1128,6 +1132,7 @@ test('mint selection preserves visible node refund recovery without retrying the
   await page.goto('/wallet-mint-refund-recovery');
   const result = await page.evaluate(async () => {
     const panels = await import('/js/' + 'provider-wallet-panels.js') as typeof import('../../js/provider-wallet-panels.js');
+    localStorage.setItem('labcharts-ai-provider', 'routstr'); localStorage.setItem('labcharts-chat-backend', 'direct');
     let selected = 'https://mint.original.test';
     let refundRequests = 0;
     panels.configureRoutstrWalletRuntime({
@@ -1139,6 +1144,7 @@ test('mint selection preserves visible node refund recovery without retrying the
       cashuGetPendingNodeRefund: async () => ({ nodeUrl: 'https://node.test', key: 'sk-node', createdAt: 1 }),
       cashuRefundNodeToToken: async () => { refundRequests++; throw new Error('Unexpected refund request'); },
     });
+    await panels.showRoutstrMintEdit(); (document.getElementById('routstr-mint-input') as HTMLInputElement).value = 'https://mint.other.test';
     await panels.doRoutstrMintChange();
     return { selected, refundRequests, recoveryVisible: document.getElementById('routstr-node-picker')?.style.display !== 'none' };
   });
@@ -1194,10 +1200,11 @@ test('native wallet switches mints across reload with saved token import, quote 
 
 
 test('pending deposit check displays unresolved token import alongside Unknown Quote without disclosing token data', async ({ page }) => {
-  await routeHtml(page, '**/wallet-import-status', '<!doctype html><html><body><div id="routstr-wfund-status"></div></body></html>');
+  await routeHtml(page, '**/wallet-import-status', '<!doctype html><html><body><div id="wallet-funding-host"></div></body></html>');
   await page.goto('/wallet-import-status');
   const statuses = await page.evaluate(async () => {
     const recovery = await import('/js/' + 'provider-wallet-funding-recovery.js') as typeof import('../../js/provider-wallet-funding-recovery.js');
+    (await import('/js/wallet-funding-component.js')).mountWalletFunding(document.getElementById('wallet-funding-host')!, 0, { submitCustom: () => {}, cancelCustom: () => {} });
     const statuses: string[] = [];
     for (const mode of ['unknown', 'none', 'recovered', 'throw'] as const) {
       await recovery.recoverPendingWalletFunding({
@@ -1233,6 +1240,7 @@ test('Browse reuses discovery across picker replacement and Refresh nodes explic
   await page.goto('/wallet-node-cache');
   const result = await page.evaluate(async () => {
     const panels = await import('/js/' + 'provider-wallet-panels.js') as typeof import('../../js/provider-wallet-panels.js');
+    localStorage.setItem('labcharts-ai-provider', 'routstr'); localStorage.setItem('labcharts-chat-backend', 'direct');
     const requests: boolean[] = [];
     panels.configureRoutstrWalletRuntime({ nostrDiscoverNodes: async (forceRefresh = false) => {
       requests.push(forceRefresh);
@@ -1246,7 +1254,7 @@ test('Browse reuses discovery across picker replacement and Refresh nodes explic
     document.getElementById('routstr-node-picker')!.outerHTML = '<div id="routstr-node-picker" style="display:none"></div>';
     await panels.showRoutstrNodePicker();
     const reopened = document.getElementById('routstr-node-picker')!.textContent;
-    document.querySelector<HTMLButtonElement>('[data-node-action="refresh"]')!.click();
+    ([...document.querySelectorAll<HTMLButtonElement>('button')].find(button => button.textContent === 'Refresh nodes'))!.click();
     await new Promise(resolve => setTimeout(resolve, 0));
     return { first, reopened, updated: document.getElementById('routstr-node-picker')!.textContent, requests };
   });
@@ -1262,6 +1270,7 @@ test('a discovery completing after the picker becomes a deposit view does not ov
   await page.goto('/wallet-node-cache-race');
   const result = await page.evaluate(async () => {
     const panels = await import('/js/' + 'provider-wallet-panels.js') as typeof import('../../js/provider-wallet-panels.js');
+    localStorage.setItem('labcharts-ai-provider', 'routstr'); localStorage.setItem('labcharts-chat-backend', 'direct');
     let finish!: (nodes: import('../../js/nostr-discovery.js').RoutstrNode[]) => void;
     panels.configureRoutstrWalletRuntime({ nostrDiscoverNodes: () => new Promise<import('../../js/nostr-discovery.js').RoutstrNode[]>(resolve => { finish = resolve; }) });
     const pending = panels.showRoutstrNodePicker();
@@ -1277,10 +1286,11 @@ test('a discovery completing after the picker becomes a deposit view does not ov
 
 
 test('a funding invoice uses the mint returned by its locked creation even if the earlier UI selection read differs', async ({ page }) => {
-  await routeHtml(page, '**/wallet-funding-mint-binding', '<!doctype html><html><body><div id="routstr-wfund-status"></div></body></html>');
+  await routeHtml(page, '**/wallet-funding-mint-binding', '<!doctype html><html><body><div id="wallet-funding-host"></div></body></html>');
   await page.goto('/wallet-funding-mint-binding');
   const result = await page.evaluate(async () => {
     const panels = await import('/js/' + 'provider-wallet-panels.js') as typeof import('../../js/provider-wallet-panels.js');
+    localStorage.setItem('labcharts-ai-provider', 'routstr'); localStorage.setItem('labcharts-chat-backend', 'direct');
     const { makeTestInvoice } = await import('/wallet-test-lightning-invoices.js');
     panels.configureRoutstrWalletRuntime({
       cashuGetMintUrl: async () => 'https://cashu.cz',
@@ -1288,9 +1298,12 @@ test('a funding invoice uses the mint returned by its locked creation even if th
         mint: 'https://mint.minibits.cash/Bitcoin', state: 'UNPAID' }),
       cashuHasWalletSeed: async () => false,
     });
+    localStorage.setItem('labcharts-ai-provider', 'routstr');
+    localStorage.setItem('labcharts-chat-backend', 'direct');
+    const view = (await import('/js/wallet-funding-component.js')).mountWalletFunding(document.getElementById('wallet-funding-host')!, 0, { submitCustom: () => {}, cancelCustom: () => {} });
     const created = await panels.doRoutstrWalletFund(1000);
-    const status = document.getElementById('routstr-wfund-status')!;
-    return { created, mint: status.dataset.mint, quote: status.dataset.quote };
+    if (document.querySelector('[data-quote],[data-mint]')) throw new Error('Private invoice identity leaked into attributes');
+    return { created, mint: view.readInvoice()?.mint, quote: view.readInvoice()?.quote };
   });
   expect(result).toEqual({ created: true, mint: 'https://mint.minibits.cash/Bitcoin', quote: 'minibits-new-quote' });
 });
@@ -1301,6 +1314,7 @@ test('an old Cashu refund is labeled separately from the selected Cuba mint and 
   await page.goto('/wallet-node-session-recovery');
   const result = await page.evaluate(async () => {
     const panels = await import('/js/' + 'provider-wallet-panels.js') as typeof import('../../js/provider-wallet-panels.js');
+    localStorage.setItem('labcharts-ai-provider', 'routstr'); localStorage.setItem('labcharts-chat-backend', 'direct');
     const api = await import('/js/' + 'api.js') as typeof import('../../js/api.js');
     const node = 'https://node.test';
     let resets = 0, deposits = 0, imports = 0, refundRequests = 0;
@@ -1326,9 +1340,10 @@ test('an old Cashu refund is labeled separately from the selected Cuba mint and 
     try {
       await panels.doRoutstrNodeWithdraw();
       const refundText = document.getElementById('routstr-node-picker')!.textContent!;
-      const oldRecoveryButton = document.querySelector<HTMLButtonElement>('[data-routstr-wallet-action="resume-node-refund"]')!.cloneNode(true);
+      const oldRecoveryButton = document.querySelector<HTMLButtonElement>('[data-wallet-node-refund-index]')!.cloneNode(true);
+      await panels.showRoutstrNodeDeposit(node);
       await panels.doRoutstrNodeDeposit(node, 500);
-      const rejectionText = document.getElementById('routstr-deposit-status')!.textContent!;
+      const rejectionText = document.getElementById('routstr-node-picker')!.textContent!;
       document.querySelector<HTMLButtonElement>('[data-routstr-wallet-action="new-node-session"]')!.click();
       await new Promise(resolve => setTimeout(resolve, 0));
       await new Promise<void>((resolve, reject) => {
@@ -1344,7 +1359,11 @@ test('an old Cashu refund is labeled separately from the selected Cuba mint and 
       document.getElementById('routstr-node-picker')!.append(oldRecoveryButton);
       (oldRecoveryButton as HTMLButtonElement).click();
       await new Promise(resolve => setTimeout(resolve, 0));
-      return { refundText, rejectionText, resets, deposits, imports, refundRequests, recoveryIds, newDepositForm };
+      const cloneIsInert = refundRequests === 1;
+      await panels.showSavedNodeRefunds();
+      document.querySelector<HTMLButtonElement>('[data-wallet-node-refund-index]')!.click();
+      await new Promise(resolve => setTimeout(resolve, 0));
+      return { refundText, rejectionText, resets, deposits, imports, refundRequests, recoveryIds, newDepositForm, cloneIsInert };
     } finally { window.fetch = oldFetch; }
   });
   expect(result.refundText).toContain('Saved refund recovery');
@@ -1353,7 +1372,7 @@ test('an old Cashu refund is labeled separately from the selected Cuba mint and 
   expect(result.refundText).toContain('separate from any later node deposit');
   expect(result.rejectionText).toContain('Wallet funds were not moved');
   expect(result.rejectionText).toContain('previous key and recovery records will be preserved');
-  expect(result).toMatchObject({ resets: 1, deposits: 1, imports: 2, refundRequests: 2, recoveryIds: [undefined, 'pendingNodeRefund'], newDepositForm: true });
+  expect(result).toMatchObject({ resets: 1, deposits: 1, imports: 2, refundRequests: 2, recoveryIds: [undefined, 'pendingNodeRefund'], newDepositForm: true, cloneIsInert: true });
 });
 
 
@@ -1362,6 +1381,7 @@ test('saved refund list and failed initial refund retries preserve journal ident
   await page.goto('/wallet-saved-refunds');
   const result = await page.evaluate(async () => {
     const panels = await import('/js/' + 'provider-wallet-panels.js') as typeof import('../../js/provider-wallet-panels.js');
+    localStorage.setItem('labcharts-ai-provider', 'routstr'); localStorage.setItem('labcharts-chat-backend', 'direct');
     const node = 'https://node.test';
     const currentId = 'pendingNodeRefund:' + 'a'.repeat(64);
     let requests = 0;
@@ -1379,14 +1399,16 @@ test('saved refund list and failed initial refund retries preserve journal ident
       },
     });
     await panels.showSavedNodeRefunds(node);
-    const listedIds = [...document.querySelectorAll<HTMLButtonElement>('[data-routstr-wallet-action="resume-node-refund"]')].map(button => button.dataset.recoveryId);
+    const nodeViews = await import('/js/wallet-node-component.js');
+    const listedIds = [0, 1].map(index => nodeViews.getWalletNodeView()!.readRecovery(index)!.id);
+    if (document.querySelector('[data-recovery-id],[data-token],[data-generation]')) throw new Error('Private recovery leaked into attributes');
     const noRequestOnList = requests === 0;
-    document.querySelector<HTMLButtonElement>('[data-recovery-id="' + currentId + '"]')!.click();
+    document.querySelector<HTMLButtonElement>('[data-wallet-node-refund-index="1"]')!.click();
     await new Promise(resolve => setTimeout(resolve, 0));
     saved = [];
     await panels.doRoutstrNodeWithdraw(node, '');
-    const failedRetry = document.querySelector<HTMLButtonElement>('[data-routstr-wallet-action="resume-node-refund"]')!;
-    const failedRecoveryId = failedRetry.dataset.recoveryId;
+    const failedRetry = document.querySelector<HTMLButtonElement>('[data-wallet-node-refund-index]')!;
+    const failedRecoveryId = nodeViews.getWalletNodeView()!.readRecovery(0)!.id;
     failedRetry.click();
     await new Promise(resolve => setTimeout(resolve, 0));
     return { listedIds, noRequestOnList, failedRecoveryId, ids, tokens };
@@ -1401,6 +1423,7 @@ test('a repeated save failure keeps the already-returned refund token visible an
   await page.goto('/wallet-refund-save-failure');
   const result = await page.evaluate(async () => {
     const panels = await import('/js/' + 'provider-wallet-panels.js') as typeof import('../../js/provider-wallet-panels.js');
+    localStorage.setItem('labcharts-ai-provider', 'routstr'); localStorage.setItem('labcharts-chat-backend', 'direct');
     const supplied: unknown[][] = [];
     panels.configureRoutstrWalletRuntime({
       cashuHasWalletSeed: async () => true,
@@ -1408,13 +1431,13 @@ test('a repeated save failure keeps the already-returned refund token visible an
     });
     await panels.doRoutstrNodeWithdraw('https://node.test', 'pendingNodeRefund', 'cashuAreturned', 'original-generation');
     const firstToken = document.querySelector<HTMLTextAreaElement>('textarea')!.value;
-    document.querySelector<HTMLButtonElement>('[data-routstr-wallet-action="resume-node-refund"]')!.click();
+    document.querySelector<HTMLButtonElement>('[data-wallet-node-refund-index]')!.click();
     await new Promise(resolve => setTimeout(resolve, 0));
     return { firstToken, secondToken: document.querySelector<HTMLTextAreaElement>('textarea')!.value, supplied };
   });
   expect(result).toEqual({ firstToken: 'cashuAreturned', secondToken: 'cashuAreturned', supplied: [
-    ['https://node.test', 'pendingNodeRefund', 'cashuAreturned', 'original-generation'],
-    ['https://node.test', 'pendingNodeRefund', 'cashuAreturned', 'original-generation'],
+    ['https://node.test', 'pendingNodeRefund', 'cashuAreturned', 'original-generation', undefined],
+    ['https://node.test', 'pendingNodeRefund', 'cashuAreturned', 'original-generation', undefined],
   ] });
 });
 
@@ -1424,6 +1447,7 @@ test('current node withdrawal remains usable after an error and unrelated saved 
   await page.goto('/wallet-unrelated-refund');
   await page.evaluate(async () => {
     const panels = await import('/js/' + 'provider-wallet-panels.js') as typeof import('../../js/provider-wallet-panels.js');
+    localStorage.setItem('labcharts-ai-provider', 'routstr'); localStorage.setItem('labcharts-chat-backend', 'direct');
     const storage = await import('/js/' + 'api-provider-storage-runtime.js') as typeof import('../../js/api-provider-storage-runtime.js');
     const crypto = await import('/js/' + 'crypto.js') as typeof import('../../js/crypto.js');
     const api = await import('/js/' + 'api.js') as typeof import('../../js/api.js');
@@ -1454,7 +1478,7 @@ test('current node withdrawal remains usable after an error and unrelated saved 
     document.getElementById('routstr-wallet-actions')!.innerHTML = buttons.routstrWalletActionButtons(null);
   });
   await page.locator('[data-node-action="withdraw"]').click();
-  await expect(page.locator('#routstr-node-picker')).toContainText('HTTP 503');
+  await expect(page.locator('#routstr-node-picker')).toContainText('Node refund outcome unconfirmed');
   await page.locator('[data-node-action="browse"]').click();
   await expect(page.locator('#routstr-node-picker')).toContainText('No online nodes found');
   await page.locator('[data-node-action="withdraw"]').click();

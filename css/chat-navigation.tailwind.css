@@ -1,0 +1,96 @@
+/* Lazy Chat navigation utilities; no global reset. */
+@import "tailwindcss/theme.css" layer(gb-theme) prefix(gb);
+@import "tailwindcss/utilities.css" prefix(gb) source(none);
+@source "../js/components/ChatThreadNavigation.svelte";
+@source "../js/chat-thread-navigation-classes.ts";
+@source "../js/components/ChatComposer.svelte";
+@source "../js/chat-composer-classes.ts";
+@import "./ui-tokens.tailwind.css";
+@import "./knowledge-base-chat.tailwind.css";
+@custom-variant thread-nav (&:is([data-chat-thread-navigation-view], [data-chat-thread-navigation-view] *));
+@custom-variant composer (&:is([data-chat-composer-view], [data-chat-composer-view] *));
+@source "../js/components/ChatResizeHandle.svelte";
+@source "../js/chat-layout-classes.ts";
+@custom-variant chat-layout (&:is([data-chat-layout-view], [data-chat-layout-view] *));
+@source "../js/components/ChatModelPicker.svelte";
+@source "../js/chat-model-picker-classes.ts";
+@custom-variant model-picker (&:is([data-chat-model-picker-view], [data-chat-model-picker-view] *));
+
+@source "../js/components/ChatPersonalityPicker.svelte";
+@source "../js/components/ChatPersonalityEditor.svelte";
+@source "../js/chat-personality-classes.ts";
+@custom-variant persona (&:is([data-chat-personality-view], [data-chat-personality-view] *, [data-chat-persona-editor-view], [data-chat-persona-editor-view] *));
+
+@custom-variant theme-glass (&:where([data-theme="glass"], [data-theme="glass"] *));
+@custom-variant theme-synth (&:where([data-theme="synth-sunrise"], [data-theme="synth-sunrise"] *));
+@custom-variant theme-neuro (&:where([data-theme="neuromancer"], [data-theme="neuromancer"] *));
+@custom-variant theme-decorative (&:where([data-theme="glass"], [data-theme="glass"] *, [data-theme="synth-sunrise"], [data-theme="synth-sunrise"] *, [data-theme="neuromancer"], [data-theme="neuromancer"] *));
+
+@source "../js/components/ChatHeader.svelte";
+@source "../js/chat-header-classes.ts";
+@source "../js/components/ChatAttestationBadge.svelte";
+@source "../js/components/ChatAttestationTooltip.svelte";
+@custom-variant header (&:is([data-chat-header-view], [data-chat-header-view] *));
+@custom-variant attestation (&:is([data-chat-attestation-view], [data-chat-attestation-view] *));
+
+@custom-variant theme-cyber (&:where([data-theme="cyberterm"], [data-theme="cyberterm"] *));
+
+@source "../js/components/ChatAttachmentPreview.svelte";
+@source "../js/components/ChatAttachmentMenu.svelte";
+@source "../js/components/ChatImageLightbox.svelte";
+@source "../js/components/ChatShell.svelte";
+@source "../js/chat-attachment-classes.ts";
+@custom-variant attachment (&:is([data-chat-attachment-view], [data-chat-attachment-view] *, [data-chat-attachment-view-dialog], [data-chat-attachment-view-dialog] *, [data-chat-attachment-drop], [data-chat-attachment-drop] *));
+
+@source "../js/components/ChatVoiceButton.svelte";
+@source "../js/components/ChatVoiceStatus.svelte";
+@source "../js/components/ChatSpeechButton.svelte";
+@custom-variant speech (&:is([data-chat-speech-view]));
+
+@source "../js/components/ChatDiscussion.svelte";
+@source "../js/chat-discussion-classes.ts";
+
+@source "../js/components/ChatCitations.svelte";
+@source "../js/components/ChatStoredImages.svelte";
+@source "../js/components/ChatThinkingStatus.svelte";
+@source "../js/chat-message-content-classes.ts";
+@custom-variant message-content (&:is([data-chat-message-content], [data-chat-message-content] *));
+
+@source "../js/components/ChatMessageActions.svelte";
+@source "../js/components/ChatMessageIcon.svelte";
+@source "../js/components/ChatAgentDraftCards.svelte";
+@source "../js/chat-message-actions-classes.ts";
+@custom-variant message-actions (&:is([data-chat-message-actions-view], [data-chat-message-actions-view] *, [data-chat-agent-draft-view], [data-chat-agent-draft-view] *));
+
+@source "../js/components/ChatMessageEditor.svelte";
+@source "../js/chat-message-editor-classes.ts";
+@custom-variant message-edit (&:is(.chat-msg.chat-user[data-chat-message-edit-view], [data-chat-message-edit-view] *));
+
+@source "../js/components/ChatTranscript.svelte";
+@source "../js/components/ChatMessage.svelte";
+@source "../js/components/ChatRecommendations.svelte";
+@source "../js/chat-transcript-classes.ts";
+@custom-variant transcript (&:is([data-chat-empty-view], [data-chat-empty-view] *, [data-chat-transcript-view], [data-chat-transcript-view] *, [data-chat-live-view], [data-chat-live-view] *, [data-chat-provider-setup-view], [data-chat-provider-setup-view] *, [data-chat-profile-setup-view], [data-chat-profile-setup-view] *, [data-chat-optional-setup-view], [data-chat-optional-setup-view] *));
+
+@source "../js/components/ChatLiveMessage.svelte";
+
+@source "../js/components/ChatOnboardingProgress.svelte";
+@source "../js/components/ChatProviderChoice.svelte";
+@source "../js/components/ChatProviderQuiz.svelte";
+@source "../js/components/ChatProviderSetup.svelte";
+@source "../js/chat-onboarding-classes.ts";
+@custom-variant onboarding (&:is([data-chat-empty-view], [data-chat-empty-view] *, [data-chat-provider-setup-view], [data-chat-provider-setup-view] *, [data-chat-provider-view], [data-chat-provider-view] *, [data-chat-onboard-progress-view], [data-chat-onboard-progress-view] *, [data-chat-profile-setup-view], [data-chat-profile-setup-view] *, [data-chat-optional-setup-view], [data-chat-optional-setup-view] *));
+
+@source "../js/components/ChatProfileSetup.svelte";
+@source "../js/chat-profile-onboarding-classes.ts";
+
+@source "../js/components/ChatOptionalSetup.svelte";
+@source "../js/chat-optional-onboarding-classes.ts";
+
+@source "../js/components/ChatEmptyState.svelte";
+
+@source "../js/components/ChatSavedSummaries.svelte";
+@source "../js/components/ChatSummaryDialog.svelte";
+@custom-variant summary (&:is([data-chat-saved-summaries-view], [data-chat-saved-summaries-view] *, [data-chat-summary-dialog], [data-chat-summary-dialog] *));
+
+@source "../js/components/RestoredThreadList.svelte";

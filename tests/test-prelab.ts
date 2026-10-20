@@ -8,6 +8,11 @@ import { createLegacyAssertions } from './helpers/legacy-assertions.js';
 // Run: node tests/test-prelab.ts  (or via npm test)
 
 import fs from 'node:fs';
+import { JSDOM } from 'jsdom';
+import { projectDashboardWelcomeView, renderDashboardWelcomeFragment } from '../js/dashboard-welcome-presentation.js';
+import postcss from 'postcss';
+import { projectChatEmpty } from '../js/chat-empty-presentation.js';
+import { reportBuilderClasses } from '../js/report-builder-classes.js';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -24,12 +29,25 @@ console.log('=== Pre-Lab Onboarding Tests ===\n');
 const chatSrc = read('js/chat.js');
 const chatPanelSrc = read('js/chat-panel.js');
 const chatOnboardingSrc = read('js/chat-onboarding.js');
+const providerQuizSrc = read('js/components/ChatProviderQuiz.svelte');
+const chatProfileFormSrc = read('js/components/ChatProfileSetup.svelte');
+const chatProfileStylesSrc = read('js/chat-profile-onboarding-classes.ts');
 const chatEmptyStateSrc = read('js/chat-empty-state.js').replace(/if \(hasLabs\)\s+return null;/g, 'if (hasLabs) return null;');
 const chatRenderSrc = read('js/chat-render.js');
 const chatSendSrc = read('js/chat-send.js');
-const labCtxSrc = read('js/lab-context.js');
+const labCtxSrc = read('js/lab-context-assembly.js');
 const onboardingViewSrc = read('js/onboarding-view.js');
 const onboardingRuntimeSrc = read('js/onboarding-view-runtime.js');
+const chatEmptyViewSrc = read('js/components/ChatEmptyState.svelte');
+const chatCatalogOwnerSrc = read('js/chat-empty-catalog-component.js');
+const chatEmptyProjectorSrc = read('js/chat-empty-presentation.ts');
+const medicalHistoryViewSrc = read('js/context-medical-history-view.js');
+const medicalHistoryComponentSrc = read('js/components/ContextMedicalHistory.svelte');
+const lifestyleFormViewSrc = read('js/context-lifestyle-form-view.js');
+const lifestyleFormComponentSrc = read('js/components/LifestyleContextForm.svelte');
+const reportBuilderViewSrc = read('js/components/ReportBuilderPresentation.svelte');
+const reportBuilderAISrc = read('js/components/ReportBuilderAI.svelte');
+
 
   assert('No sentinel return string', !labCtxSrc.includes("return 'No lab data is currently loaded for this profile.'"),
     'The old sentinel early-return should be removed');
@@ -89,9 +107,17 @@ const onboardingRuntimeSrc = read('js/onboarding-view-runtime.js');
     'Should have lifestyle-based prompt');
   assert('renderChatMessages delegates empty state', chatRenderSrc.includes('renderEmptyChatState(container, panel)'),
     'renderChatMessages should delegate empty/onboarding state');
-  assert('empty state uses _getNoDataPrompts', chatEmptyStateSrc.includes('const noDataPrompts = _getNoDataPrompts()'),
+  assert('empty state uses _getNoDataPrompts', sourceFunctionHasVariable(chatEmptyStateSrc, 'renderGeneralPromptState', 'prompts') &&
+    chatEmptyStateSrc.includes('const prompts = _getNoDataPrompts() || [') &&
+    sourceFunctionHasStatement(chatEmptyStateSrc, 'renderGeneralPromptState',
+      "return renderEmptyPresentationState(container, 'general', context, { prompts });", 'last'),
     'Empty-state renderer should call the helper');
-  assert('Prompts rendered dynamically', chatEmptyStateSrc.includes('prompts.map(p =>'),
+  assert('Prompts rendered dynamically', chatEmptyStateSrc.includes("from './chat-empty-presentation.js'") &&
+    chatEmptyProjectorSrc.includes('actions.push(...(input.prompts || []).map(value => prompt(value, value)))') &&
+    chatEmptyViewSrc.includes('{#each view.actions as item}{@render action(item)}') &&
+    JSON.stringify(projectChatEmpty({kind:'general', personalityLabel:'', connected:false,
+      prompts:['First','<literal>&']}).actions.map(item => [item.label,item.prompt,item.action])) ===
+      JSON.stringify([['First','First','use-prompt'],['<literal>&','<literal>&','use-prompt']]),
     'Prompt buttons should be generated from array');
   assert('Has lab data returns null', chatEmptyStateSrc.includes('if (hasLabs) return null'),
     '_getNoDataPrompts should return null when labs exist');
@@ -138,7 +164,8 @@ const onboardingRuntimeSrc = read('js/onboarding-view-runtime.js');
   // ═══════════════════════════════════════
   console.log('%c 4. Dashboard Nudge Subtitle ', 'font-weight:bold;color:#f59e0b');
 
-  const ccSrc = read('js/context-cards.js');
+  const catalogSrc = read('js/components/ContextCardCatalog.svelte');
+  const ccSrc = read('js/context-cards.js') + '\n' + catalogSrc;
   const healthDotsSrc = read('js/context-card-health-dots.js');
   const ctxEditorSrc = read('js/context-card-editor-ui.js');
   const lifestyleEditorSrc = read('js/context-card-lifestyle-editors-impl.js');
@@ -167,17 +194,18 @@ const onboardingRuntimeSrc = read('js/onboarding-view-runtime.js');
 
   // CSS check
   const cssSrc = readCssBundle();
-  assert('.context-section-subtitle in CSS', cssSrc.includes('.context-section-subtitle'),
+  assert('.context-section-subtitle uses scoped styling', catalogSrc.includes('context-section-subtitle gb:context-catalog:'),
     'CSS should define the subtitle class');
-  assert('Subtitle font-size 13px', cssSrc.includes('.context-section-subtitle') && cssSrc.includes('font-size: 13px'),
+  assert('Subtitle font-size 13px', /context-section-subtitle[^\n]*gb:context-catalog:text-\[13px\]/.test(catalogSrc),
     'Subtitle should be 13px');
   assert('Profile context grid is container-aware',
-    cssSrc.includes('container-type: inline-size')
-      && cssSrc.includes('@container (min-width: 580px)')
-      && cssSrc.includes('@container (min-width: 860px)'),
+    catalogSrc.includes('[container-type:inline-size]')
+      && catalogSrc.includes('@min-[580px]:grid-cols-2')
+      && catalogSrc.includes('@min-[860px]:grid-cols-3'),
     'Context cards should move between one, two, and three columns based on their widget width');
   assert('Context card labels remain readable instead of truncating',
-    cssSrc.includes('.context-card-label')
+    catalogSrc.includes('context-card-label')
+      && !/context-card-label[^\n]*(?:truncate|text-ellipsis)/.test(catalogSrc)
       && !/\.context-card-label\s*{[^}]*text-overflow:\s*ellipsis/.test(cssSrc),
     'Card labels should wrap when needed instead of hiding their meaning');
   assert('Context editors use redesigned modal shell', (ccSrc + ctxEditorSrc).includes("modal gb-form-modal ctx-editor-modal") && ctxEditorSrc.includes('gb-modal-head ctx-editor-head'),
@@ -188,10 +216,22 @@ const onboardingRuntimeSrc = read('js/onboarding-view-runtime.js');
       !ctxEditorSrc.includes('getViewRuntimeFunction') &&
       !ctxEditorSrc.includes('ctxEditorFn') &&
       !/\bwindow(?:\.|\s*\[)/.test(ctxEditorSrc) &&
-      lifestyleEditorSrc.includes("'save-diet': saveDiet") &&
-      lifestyleEditorSrc.includes("'clear-environment': () =>") &&
-      lifestyleEditorSrc.includes("confirmClearProfileContext('Environment', clearEnvironment)") &&
-      medicalHistoryEditorSrc.includes("medicalHistoryActionAttrs('close')"),
+      lifestyleEditorSrc.includes("from './context-lifestyle-form-view.js'") &&
+      sourceFunctionHasStatement(lifestyleEditorSrc, 'saveDiet', "return saveLifestyleForm('diet');") &&
+      sourceFunctionHasStatement(lifestyleEditorSrc, 'clearEnvironment', "return saveLifestyleForm('environment', true);") &&
+      lifestyleFormViewSrc.includes("from './components/LifestyleContextForm.svelte.native.js'") &&
+      lifestyleFormViewSrc.includes('save: () => { void save(owned, false); }') &&
+      lifestyleFormViewSrc.includes('const confirmed = await showConfirmDialog(`Clear all saved ${model.title.toLowerCase()} information? This cannot be undone.`') &&
+      /if \(confirmed && current\(owned\)\)\s+await save\(owned, true\);/.test(lifestyleFormViewSrc) &&
+      lifestyleFormComponentSrc.includes('onclick={() => { if (current() && !busy) save(); }}') &&
+      lifestyleFormComponentSrc.includes('onclick={() => { if (current() && !busy) clear(); }}') &&
+      !/\bwindow(?:\.|\s*\[)/.test(lifestyleFormViewSrc) &&
+      medicalHistoryEditorSrc.includes("from './context-medical-history-view.js'") &&
+      medicalHistoryViewSrc.includes("from './components/ContextMedicalHistory.svelte.native.js'") &&
+      medicalHistoryViewSrc.includes('close: () => close(owned)') &&
+      medicalHistoryComponentSrc.includes('onclick={() => { if (current()) close(); }}') &&
+      sourceFunctionHasStatement(medicalHistoryViewSrc, 'close', 'closeModalOverlay(owned.overlay);') &&
+      !/\bwindow(?:\.|\s*\[)/.test(medicalHistoryViewSrc),
     'Context editor controls should delegate to their owning modules');
   assert('Context editor actions are sticky', cssSrc.includes('.ctx-editor-modal .ctx-editor-actions') && cssSrc.includes('position: sticky') && cssSrc.includes('bottom: 0'),
     'Long context editors need reachable actions while scrolling');
@@ -208,16 +248,16 @@ const onboardingRuntimeSrc = read('js/onboarding-view-runtime.js');
     const cardEnd = insightSrc.indexOf('\n', cardStart);
     return cardStart !== -1 && insightSrc.substring(cardStart, cardEnd).includes("size: 'full'");
   })(), 'Insight page should not cram Profile Context into a half-width column');
-  assert('Settings modal content owns vertical scroll', (() => {
-    const block = (cssSrc.match(/\.settings-modal \.settings-content\s*{([\s\S]*?)}/) || [null, ''])[1];
-    return block.includes('min-height: 0') && block.includes('overflow-y: auto');
-  })(), 'Long settings sections should scroll inside the modal instead of being clipped');
-  assert('Settings modal layout shrinks to viewport height', (() => {
-    const block = (cssSrc.match(/\.settings-modal \.settings-layout\s*{([\s\S]*?)}/) || [null, ''])[1];
-    return block.includes('height: min(560px, calc(90vh - 78px))') &&
-      block.includes('height: min(560px, calc(90dvh - 78px))') &&
-      block.includes('min-height: 0');
-  })(), 'Short desktop viewports should not clip long settings panels');
+  const settingsShellSrc = read('js/components/SettingsShell.svelte');
+  assert('Settings modal content owns vertical scroll',
+    /settings-content[^"\n]*(?:\n[^"\n]*)*?gb:settings:min-h-0/.test(settingsShellSrc)
+      && /settings-content[^"\n]*(?:\n[^"\n]*)*?gb:settings:overflow-y-auto/.test(settingsShellSrc),
+    'The owned Settings content must shrink and scroll instead of clipping long sections');
+  assert('Settings modal layout shrinks to viewport height',
+    settingsShellSrc.includes('settings-layout gb:settings:grid')
+      && settingsShellSrc.includes('gb:settings:h-[min(560px,calc(90dvh-78px))] gb:settings:min-h-0')
+      && settingsShellSrc.includes('gb:settings:max-h-[calc(90dvh-78px)]'),
+    'The owned Settings layout must remain bounded in short desktop viewports');
   assert('Settings modal wheel scrolling is not blocked by global wheel guard', (() => {
     const appEventsSrc = read('js/app-event-listeners.js');
     return appEventsSrc.includes('.settings-content') && appEventsSrc.includes('e.preventDefault()');
@@ -226,19 +266,31 @@ const onboardingRuntimeSrc = read('js/onboarding-view-runtime.js');
     const appEventsSrc = read('js/app-event-listeners.js');
     return appEventsSrc.includes('.dashboard-biometric-widget-grid') && appEventsSrc.includes('.dashboard-marker-widget-grid') && appEventsSrc.includes('e.preventDefault()');
   })(), 'Dashboard picker grids must be whitelisted before the modal overflow guard prevents wheel events');
+  const prelabCssTree = postcss.parse(cssSrc);
+  function reportScrollDeclaration(className: string, property: string, value: string): boolean {
+    const utility = `gb:report-ui:[${property}:${value}]`;
+    if (!reportBuilderClasses(className).split(/\s+/).includes(utility)) return false;
+    const escaped = utility.replace(/[^A-Za-z0-9_-]/g, character => '\\' + character);
+    const selector = `.${escaped}:is([data-report-builder-view],[data-report-builder-view] *)`;
+    const matches: postcss.Rule[] = [];
+    prelabCssTree.walkRules(rule => { if (rule.selector === selector && rule.parent?.type === 'root') matches.push(rule); });
+    const declarations = matches[0]?.nodes.filter(node => node.type === 'decl' && node.prop === property);
+    return matches.length === 1 && declarations?.length === 1 && declarations[0]?.type === 'decl'
+      && declarations[0].value === value && !declarations[0].important;
+  }
   assert('Report AI overview textarea owns mouse wheel scrolling', (() => {
     const appEventsSrc = read('js/app-event-listeners.js');
-    const block = (cssSrc.match(/\.report-ai-summary-text\s*{([\s\S]*?)}/) || [null, ''])[1];
     return appEventsSrc.includes('.report-ai-summary-text') &&
-      block.includes('overflow-y: auto') &&
-      block.includes('overscroll-behavior: contain');
+      reportBuilderAISrc.includes("class={classes('report-ai-summary-text')}") &&
+      reportScrollDeclaration('report-ai-summary-text', 'overflow-y', 'auto') &&
+      reportScrollDeclaration('report-ai-summary-text', 'overscroll-behavior', 'contain');
   })(), 'Generated practitioner overview textarea must scroll before the modal wheel guard prevents the event');
   assert('Report builder content pane owns mouse wheel scrolling', (() => {
     const appEventsSrc = read('js/app-event-listeners.js');
-    const block = (cssSrc.match(/\.report-builder-scroll\s*{([\s\S]*?)}/) || [null, ''])[1];
     return appEventsSrc.includes('.report-builder-scroll') &&
-      block.includes('overflow-y: auto') &&
-      block.includes('overscroll-behavior: contain');
+      reportBuilderViewSrc.includes("class={classes('report-builder-scroll')}") &&
+      reportScrollDeclaration('report-builder-scroll', 'overflow-y', 'auto') &&
+      reportScrollDeclaration('report-builder-scroll', 'overscroll-behavior', 'contain');
   })(), 'Long report builder category lists must scroll before the modal wheel guard prevents the event');
 
   // ═══════════════════════════════════════
@@ -292,18 +344,28 @@ const onboardingRuntimeSrc = read('js/onboarding-view-runtime.js');
     return providerCheck !== -1 && providerCheck < panelOpen;
   })(), 'openChatPanel should let the panel open without a provider');
 
-  assert('Chat onboarding has profile form', chatEmptyStateSrc.includes('chat-onboard-form') && chatEmptyStateSrc.includes('chat-onboard-name'),
+  assert('Chat onboarding has profile form', chatEmptyStateSrc.includes('renderChatProfileSetup(container,') && chatProfileStylesSrc.includes('chat-onboard-form') && chatProfileFormSrc.includes('chat-onboard-name'),
     'Should show profile setup form for new visitors');
-  assert('Chat onboarding keeps optional profile context collapsed', chatEmptyStateSrc.includes('chat-onboard-more') && chatEmptyStateSrc.includes('Optional body and location context'),
+  assert('Chat onboarding keeps optional profile context collapsed', chatProfileFormSrc.includes('<details class={PROFILE_MORE}>') && !chatProfileFormSrc.includes('<details open') && chatProfileStylesSrc.includes('chat-onboard-more') && chatProfileFormSrc.includes('Optional body and location context'),
     'Optional height/weight/location fields should not crowd the first mobile onboarding step');
-  assert('Chat onboarding has compact optional task cards', chatEmptyStateSrc.includes('chat-onboard-task-grid') && chatEmptyStateSrc.includes('chat-onboard-dna'),
+  assert('Chat onboarding has compact optional task cards', chatEmptyStateSrc.includes('renderChatOptionalSetup') && read('js/components/ChatOptionalSetup.svelte').includes('chat-onboard-dna') && read('js/chat-optional-onboarding-classes.ts').includes('chat-onboard-task-grid'),
     'Optional setup should use compact cards and preserve DNA import update hook');
   assert('Chat onboarding makes AI provider setup explicit', chatEmptyStateSrc.includes('chat-onboard-provider-requested') && !chatEmptyStateSrc.includes('!providerSkipped'),
     'No-provider users should continue into context first unless they ask to connect AI');
   assert('Chat onboarding embeds context cards for provider and no-provider users',
-    chatEmptyStateSrc.includes("import { renderProfileContextCards } from './context-cards.js'") &&
-      chatEmptyStateSrc.includes('function renderChatContextCards()') &&
-      chatEmptyStateSrc.includes('${renderChatContextCards()}') &&
+    chatEmptyStateSrc.includes("import { projectProfileContextCards } from './context-cards.js'") &&
+      chatEmptyStateSrc.includes("container.querySelector('[data-chat-empty-context-slot]')") &&
+      sourceFunctionHasStatement(chatEmptyStateSrc, 'renderEmptyPresentationState',
+        'if (slot) hydrateChatEmptyCatalog(container, view, projectProfileContextCards());') &&
+      chatCatalogOwnerSrc.includes("from './components/ChatEmptyState.svelte.native.js'") &&
+      sourceFunctionHasStatement(chatCatalogOwnerSrc, 'hydrateChatEmptyCatalog',
+        'flushSync(() => component.setCatalog(catalog));') &&
+      chatEmptyViewSrc.includes("import ContextCardCatalog from './ContextCardCatalog.svelte'") &&
+      chatEmptyViewSrc.includes('{#if catalog}<ContextCardCatalog view={catalog}/>{/if}') &&
+      chatEmptyViewSrc.includes('{#if view.contextCards}') &&
+      chatEmptyViewSrc.includes('data-chat-empty-context-slot') &&
+      [false,true].every(connected => ['initial','partial'].every(kind =>
+        projectChatEmpty({kind: kind === 'initial' ? 'initial' : 'partial', personalityLabel:'', connected}).contextCards)) &&
       !chatEmptyStateSrc.includes('${!hasAIProvider() ? `<div class="chat-context-cards"'),
     'Context cards should stay available inside chat even after AI is connected');
   assert('Card onboarding focus opens card UI instead of AI prompt prefill',
@@ -314,16 +376,22 @@ const onboardingRuntimeSrc = read('js/onboarding-view-runtime.js');
       onboardingViewSrc.includes('#chat-panel .chat-context-cards') &&
       !onboardingViewSrc.includes('Help me collect the health context'),
     'setOnboardingFocus("cards") should scroll to card editors, not prefill a prompt');
-  assert('Chat onboarding lab import CTA handles no-provider state', chatEmptyStateSrc.includes('startOnboardingLabImport') && chatEmptyStateSrc.includes('requestOnboardingLabImportProvider') && chatEmptyStateSrc.includes('Connect AI to import labs'),
+  assert('Chat onboarding lab import CTA handles no-provider state', chatEmptyStateSrc.includes('startOnboardingLabImport') &&
+    chatEmptyStateSrc.includes("action === 'request-lab-import-provider'") &&
+    chatEmptyStateSrc.includes('requestOnboardingLabImportProvider()') &&
+    chatEmptyProjectorSrc.includes('Connect AI to import labs') &&
+    ['complete','handoff'].every(kind => projectChatEmpty({kind: kind === 'complete' ? 'complete' : 'handoff',
+      personalityLabel:'', connected:false}).actions.some(action =>
+        action.label === 'Connect AI to import labs' && action.action === 'request-lab-import-provider')),
     'No-provider lab-import CTA should explain AI setup instead of focusing hidden import controls');
-  assert('Chat onboarding hides composer while active', cssSrc.includes('.chat-panel.chat-onboarding-active .chat-input-area') && cssSrc.includes('display: none'),
+  assert('Chat onboarding hides composer while active', read('js/chat-composer-classes.ts').includes('gb:composer:[.chat-onboarding-active_&]:hidden') && read('js/components/ChatComposer.svelte').includes('class={COMPOSER_AREA}'),
     'Onboarding steps should not compete with the disabled composer on mobile');
   assert('Chat onboarding uses solid active surfaces', cssSrc.includes('.chat-panel.chat-onboarding-active .chat-msg.chat-ai') && cssSrc.includes('var(--bg-card) 94%'),
     'Onboarding cards should stay readable in glass/synth themes');
-  assert('Chat onboarding has OpenRouter OAuth', chatOnboardingSrc.includes('startOpenRouterOAuth') && chatOnboardingSrc.includes('paste a key manually'),
+  assert('Chat onboarding has OpenRouter OAuth', chatOnboardingSrc.includes('startOpenRouterOAuth') && providerQuizSrc.includes('paste a key manually') && providerQuizSrc.includes('data-chat-onboarding-action="start-openrouter-oauth"'),
     'Should have OAuth button and manual key option for API step');
   const hasDelegatedProviderSetup = (provider: string) =>
-    chatOnboardingSrc.includes(`chatOnboardingActionAttrs('open-provider-settings', { provider: '${provider}' })`) &&
+    providerQuizSrc.includes(`provider="${provider}"`) && providerQuizSrc.includes('action="open-provider-settings"') && chatOnboardingSrc.includes("action === 'open-provider-settings'") &&
     chatOnboardingSrc.includes(`'${provider}'`);
   assert('Chat onboarding has PPQ', hasDelegatedProviderSetup('ppq'),
     'Should have PPQ setup link');
@@ -406,6 +474,21 @@ const onboardingRuntimeSrc = read('js/onboarding-view-runtime.js');
   console.log('%c 9. Welcome Hero (Empty State) ', 'font-weight:bold;color:#f59e0b');
 
   const dashboardPageViewSrc = read('js/dashboard-page-view.js');
+  const dashboardWelcomeMarkup = read('js/components/DashboardWelcome.svelte');
+  const welcomeWitnesses = [false, true].flatMap(ready => [false, true].map(paused => {
+    const dom = new JSDOM(renderDashboardWelcomeFragment(projectDashboardWelcomeView({ ready, paused, reminder: null })));
+    const hero = dom.window.document.querySelector('.welcome-hero');
+    const dropZone = hero?.querySelector('#drop-zone');
+    const chatButton = hero?.querySelector('.welcome-chat-panel [data-dashboard-welcome-action="open-chat"]');
+    const witness = {
+      hiddenImportProgress: dropZone?.classList.contains('drop-zone-hidden') === true,
+      guidedChat: chatButton?.textContent?.trim() === 'Start guided chat',
+      delegated: chatButton?.tagName === 'BUTTON' && !chatButton.hasAttribute('onclick'),
+    };
+    dom.window.close();
+    return witness;
+  }));
+  const dashboardPresentationSources = dashboardPageViewSrc + '\n' + dashboardWelcomeMarkup;
 
   // CSS checks
   assert('.welcome-hero in CSS with text-align: center', cssSrc.includes('.welcome-hero') && cssSrc.includes('text-align: center'),
@@ -416,7 +499,16 @@ const onboardingRuntimeSrc = read('js/onboarding-view-runtime.js');
     'Subtitle class should exist');
   assert('Empty-state manual context details removed from CSS', !cssSrc.includes('.welcome-context-details') && !cssSrc.includes('.welcome-context-summary'),
     'Manual context details should not be a first-run empty-state surface');
-  assert('Mobile override at 480px', cssSrc.includes('.welcome-hero { padding: 28px 14px 24px; }'),
+  assert('Mobile override at 480px', (() => {
+    const matches: postcss.Rule[] = [];
+    prelabCssTree.walkRules(rule => {
+      if (rule.selector === '.welcome-hero' && rule.parent?.type === 'atrule'
+          && rule.parent.name === 'media' && rule.parent.params === '(max-width: 480px)') matches.push(rule);
+    });
+    const declarations = matches[0]?.nodes.filter(node => node.type === 'decl' && node.prop === 'padding');
+    return matches.length === 1 && declarations?.length === 1 && declarations[0]?.type === 'decl'
+      && declarations[0].value === '28px 14px 24px' && !declarations[0].important;
+  })(),
     'Welcome hero should have compact mobile padding');
 
   // Dead CSS removed
@@ -426,27 +518,28 @@ const onboardingRuntimeSrc = read('js/onboarding-view-runtime.js');
     'Old import button styles should be removed');
 
   // Source structure checks
-  assert('!hasData branch renders welcome-hero', dashboardPageViewSrc.includes("class=\"welcome-hero\"") && dashboardPageViewSrc.includes('if (!hasData)'),
+  assert('!hasData branch renders welcome-hero', dashboardWelcomeMarkup.includes("class=\"welcome-hero\"") && dashboardPageViewSrc.includes('if (!hasData)'),
     'Empty state should use welcome-hero class');
-  assert('No onboarding-step1 in dashboard-page-view.js', !dashboardPageViewSrc.includes('onboarding-step1'),
+  assert('No onboarding-step1 in dashboard-page-view.js', !dashboardPresentationSources.includes('onboarding-step1'),
     'Old onboarding step1 should be removed from the dashboard page view');
   assert('Hidden drop zone remains available for import progress', (() => {
-    const heroStart = dashboardPageViewSrc.indexOf('welcome-hero');
-    dashboardPageViewSrc.indexOf('</div>\\n      </div>`;', heroStart);
-    const dropZoneInHero = dashboardPageViewSrc.indexOf('id="drop-zone"', heroStart);
-    return heroStart !== -1 && dropZoneInHero !== -1 && dropZoneInHero > heroStart;
+    return welcomeWitnesses.every(view => view.hiddenImportProgress)
+      && dashboardPageViewSrc.includes('renderDashboardWelcomeFragment(projectDashboardWelcomeView(');
   })(), 'Hidden drop zone should remain inside welcome hero');
-  assert('Welcome hero has a chat-first start panel', dashboardPageViewSrc.includes('welcome-chat-panel') && dashboardPageViewSrc.includes('Start guided chat'),
+  assert('Welcome hero has a chat-first start panel', welcomeWitnesses.every(view => view.guidedChat),
     'Empty state should lead with guided chat');
-  assert('Welcome guided chat button opens chat through delegated action', dashboardPageViewSrc.includes("dashboardWelcomeActionAttrs('open-chat')"),
+  assert('Welcome guided chat button opens chat through delegated action', welcomeWitnesses.every(view => view.delegated)
+      && /if \(action === 'open-chat'\) \{\s*dashboardPageRuntimeDeps\.openChatPanel\?\.\(\);/.test(dashboardPageViewSrc)
+      && sourceFunctionHasStatement(dashboardPageViewSrc, 'installDashboardWelcomeActionDelegates',
+        "root.addEventListener('click', handleDashboardWelcomeActionClick);"),
     'AI setup should be routed from chat only when needed');
   assert('Demo cards inside welcome hero', (() => {
-    const heroStart = dashboardPageViewSrc.indexOf('welcome-hero');
-    const demoStart = dashboardPageViewSrc.indexOf('welcome-demo-section', heroStart);
-    const renderEnd = dashboardPageViewSrc.indexOf('main.innerHTML = html', heroStart);
-    return heroStart !== -1 && demoStart > heroStart && demoStart < renderEnd;
+    const heroStart = dashboardWelcomeMarkup.indexOf("view.mode === 'welcome'");
+    const demoStart = dashboardWelcomeMarkup.indexOf('welcome-demo-section', heroStart);
+    const renderEnd = dashboardWelcomeMarkup.indexOf('{:else if', heroStart);
+    return heroStart !== -1 && demoStart > heroStart && demoStart < renderEnd && dashboardPageViewSrc.includes('main.innerHTML = html');
   })(), 'Demo cards should be inside welcome hero');
-  assert('No manual context cards in empty state', !dashboardPageViewSrc.includes('welcome-context-details') && !dashboardPageViewSrc.includes('welcome-context-summary'),
+  assert('No manual context cards in empty state', !dashboardPresentationSources.includes('welcome-context-details') && !dashboardPresentationSources.includes('welcome-context-summary'),
     'Empty state should route context collection through chat');
   assert('Category header only in hasData path', (() => {
     const catHeader = dashboardPageViewSrc.indexOf('Dashboard Overview');

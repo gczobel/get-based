@@ -1,3 +1,5 @@
+import{captureLightAIView}from'./light-ai-view-values.js';
+import type { ProfileData } from '../types/app-state.js';
 // light-screen-ai-analysis.js — per-screen AI verdict for the Light
 // Environment screens (phone, tablet, laptop, monitor, TV, e-reader).
 //
@@ -7,20 +9,21 @@
 // Per-session screen-ID/fingerprint keys suppress repeated analysis of
 // unchanged data; explicit refresh bypasses the verdict cache.
 
+import { captureAIVerdictOwner } from './ai-verdict-owner.js';
 import { state } from './state.js';
-import { escapeHTML, escapeAttr } from './utils.js';
 import { hasAssistantFeatureProvider } from './ai-feature-routing.js';
-import { createAIVerdict, hashString, dotPrefix } from './ai-verdict-engine.js';
+import { createAIVerdict, hashString } from './ai-verdict-engine.js';
 import { LIGHTING_HARDWARE_CAVEATS } from './lighting-hardware-caveats.js';
 import { formatHealthGoalsText } from './health-goals-utils.js';
-import { aiActionAttrs, registerAIActionHandler } from './ai-action-delegates.js';
+import { aiActionOwner, registerAIActionHandler } from './ai-action-delegates.js';
 
 import type { LightRoom, LightScreen } from './light-env-model.js';
+import { projectEnvironmentAI } from './light-environment-ai-presentation.js';
+import { renderHTML } from './components/LightEnvironmentAI.svelte.html.js';
 import type { AIVerdictAnalysis } from './ai-verdict-engine.js';
 
 export interface AIScreen extends LightScreen { id: string; aiAnalysis?: AIVerdictAnalysis | null; }
 
-function _getScreens() { return (state.importedData?.lightEnvironment?.screens || []) as AIScreen[]; }
 function _getRooms() { return (state.importedData?.lightEnvironment?.rooms || []) as LightRoom[]; }
 function _getRoomFor(s: LightScreen) {
   if (!s?.roomId) return null;
@@ -110,8 +113,10 @@ const SYSTEM_PROMPT = [
   'No "you should" — be observational. No emoji.',
 ].join('\n');
 
+function _getScreens(data: ProfileData = state.importedData) { return (data?.lightEnvironment?.screens || []) as AIScreen[]; }
+
 const engine = createAIVerdict<AIScreen>({
-  getTarget: (id) => _getScreens().find(s => s.id === id),
+  getTarget: (id, data) => _getScreens(data).find(s => s.id === id),
   getId: (s) => s?.id,
   getAIAnalysis: (s) => s?.aiAnalysis || null,
   setAIAnalysis: (s, v) => { if (v == null) delete s.aiAnalysis; else s.aiAnalysis = v; },
@@ -132,9 +137,9 @@ registerAIActionHandler('refresh-screen', refreshScreenAIAnalysis);
 // auto-fire path; prevents tight-loop refire on transient errors.
 const _autoFiredScreenKeys = new Set<string>();
 
-export function renderScreenAIBlock(s: AIScreen | null | undefined) {
-  if (!s) return '';
-  if (!hasAssistantFeatureProvider() && !(s.aiAnalysis?.status === 'ok' && s.aiAnalysis?.dot)) return '';
+export function getScreenAIView(s: AIScreen | null | undefined) {
+  if (!s) return null;
+  if (!hasAssistantFeatureProvider() && !(s.aiAnalysis?.status === 'ok' && s.aiAnalysis?.dot)) return null;
   const status = engine.getStatus(s);
   const a = s.aiAnalysis;
   const currentFingerprint = getScreenFingerprint(s);
@@ -145,55 +150,18 @@ export function renderScreenAIBlock(s: AIScreen | null | undefined) {
   // — defaults to 'phone') AND we don't have a fresh cached verdict.
   // The hours/blue-blocker fields can be defaulted; the `device` field
   // gates a meaningful verdict.
-  const _autoKey = `${s.id}:${currentFingerprint}`;
+  const owner = captureAIVerdictOwner();
+  const _autoKey = owner.key(`${s.id}:${currentFingerprint}`);
   if (s.device && (status === 'idle' || stale) && !_autoFiredScreenKeys.has(_autoKey)) {
     _autoFiredScreenKeys.add(_autoKey);
-    setTimeout(() => engine.analyze(s).catch(() => {}), 0);
+    setTimeout(() => { if (owner.current()) void engine.analyze(s).catch(() => {}); }, 0);
   }
 
   // Shimmer ONLY while a request is genuinely in flight. Stale-ok falls
   // through to the ok branch so the ↻ button stays reachable; auto-fire
   // updates the verdict underneath.
-  if (status === 'analyzing') {
-    return `<div class="light-env-screen-ai">
-      <div class="light-env-screen-ai-head">⚡ AI verdict</div>
-      <div class="sun-detail-ai sun-detail-ai-loading">
-        <span class="sun-session-ai-dot sun-session-ai-dot-shimmer" aria-hidden="true"></span>
-        <span>Analyzing this screen…</span>
-      </div>
-    </div>`;
-  }
-  if (status === 'ok') {
-    const dot = a!.dot;
-    return `<div class="light-env-screen-ai">
-      <div class="light-env-screen-ai-head">⚡ AI verdict</div>
-      <div class="sun-detail-ai sun-detail-ai-${escapeAttr(dot)}">
-        <div class="sun-detail-ai-head">
-          <span class="sun-session-ai-dot sun-session-ai-dot-${escapeAttr(dot)}" aria-hidden="true"></span>
-          <span class="sun-detail-ai-tip"><span class="sun-session-ai-prefix" aria-hidden="true">${dotPrefix(dot)}</span> ${escapeHTML(a!.tip || '')}</span>
-          <button class="sun-session-ai-refresh" ${aiActionAttrs('refresh-screen', s.id)} title="Re-run analysis" aria-label="Re-run AI analysis">↻</button>
-        </div>
-        ${a!.detail ? `<div class="sun-detail-ai-body">${escapeHTML(a!.detail)}</div>` : ''}
-      </div>
-    </div>`;
-  }
-  if (status === 'error') {
-    const msg = a?.errorMessage ? `Analysis failed — ${a.errorMessage}` : 'Analysis failed.';
-    return `<div class="light-env-screen-ai">
-      <div class="light-env-screen-ai-head">⚡ AI verdict</div>
-      <div class="sun-detail-ai sun-detail-ai-error">
-        <span class="sun-session-ai-dot sun-session-ai-dot-gray" aria-hidden="true"></span>
-        <span>${escapeHTML(msg)}</span>
-        <button class="sun-session-ai-refresh" ${aiActionAttrs('refresh-screen', s.id)}>Try again</button>
-      </div>
-    </div>`;
-  }
-  return `<div class="light-env-screen-ai">
-    <div class="light-env-screen-ai-head">⚡ AI verdict</div>
-    <div class="sun-detail-ai sun-detail-ai-idle">
-      <span class="sun-session-ai-dot sun-session-ai-dot-gray" aria-hidden="true"></span>
-      <span>Get a circadian-impact verdict for this screen.</span>
-      <button class="sun-session-ai-refresh" ${aiActionAttrs('refresh-screen', s.id)}>Analyze screen</button>
-    </div>
-  </div>`;
+  return captureLightAIView(projectEnvironmentAI({ kind: 'screen', status, analysis: a,
+    targetId: s.id, actionOwner: aiActionOwner(),
+  }));
 }
+export function renderScreenAIBlock(s: AIScreen | null | undefined){const view=getScreenAIView(s);return view?renderHTML({view}):'';}

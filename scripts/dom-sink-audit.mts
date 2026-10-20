@@ -5,13 +5,15 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as ts from 'typescript/unstable/ast';
+import { parse } from 'svelte/compiler';
+import { scriptSource, syntaxFile } from './svelte-source.mjs';
 import { withParsedSource, withParsedSources } from './native-typescript-ast.js';
 import { sourcePath, runtimePath, walkSourceFiles } from './source-files.js';
 
 export interface DomSink { kind: string; line: number; source: string }
 export interface DomSinkFilePolicy { count: number; digest: string; kinds: Record<string, number> }
 // Policy JSON is not normalized; this view describes only its original reads.
-type PolicyReader = { scannedFiles?: unknown; sinkCount?: unknown; files?: Record<string, {count?: unknown; digest?: unknown}> };
+type PolicyReader = {schemaVersion?:unknown;scope?:unknown;reviewRule?:unknown;sourceInventoryDigest?:unknown;scannedFiles?:unknown;sinkCount?:unknown;files?:Record<string,{count?:unknown;digest?:unknown;kinds?:Record<string,unknown>}>};
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const SOURCE_ROOT = path.join(ROOT, 'js');
@@ -40,7 +42,53 @@ function normalizedNodeText(node: ts.Node, sourceFile: ts.SourceFile) {
 }
 
 export function scanDomSinks(source: string, fileName = 'source.js') {
-  return withParsedSource(source, fileName, domSinksFromFile);
+  return [...withParsedSource(scriptSource(fileName, source), syntaxFile(fileName), domSinksFromFile), ...svelteMarkupSinks(source, fileName)];
+}
+
+// Raw HTML tags and editable HTML bindings bypass Svelte's normal text escaping.
+// Include them in the same reviewed fingerprint policy as imperative DOM sinks.
+function svelteMarkupSinks(source: string, fileName: string): DomSink[] {
+  if (!fileName.endsWith('.svelte')) return [];
+  const sinks: DomSink[] = [];
+  const ast = parse(source, { filename: fileName, modern: true });
+  function visit(value: unknown): void {
+    if (!value || typeof value !== 'object') return;
+    if (Array.isArray(value)) { value.forEach(visit); return; }
+    const node = value as Record<string, unknown>;
+    function record(value: unknown): Record<string, unknown> | null {
+      return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
+    }
+    function property(value: unknown): string {
+      const member = record(value);
+      if (member?.type !== 'MemberExpression') return '';
+      const name = record(member.property);
+      return typeof (member.computed ? name?.value : name?.name) === 'string'
+        ? String(member.computed ? name?.value : name?.name) : '';
+    }
+    let kind: string | null = node.type === 'HtmlTag' ? 'svelte.html'
+      : node.type === 'BindDirective' && node.name === 'innerHTML' ? 'svelte.bind.innerHTML'
+        : node.type === 'Attribute' && typeof node.name === 'string' && ASSIGNMENT_SINKS.has(node.name)
+          ? `svelte.attribute.${node.name}` : null;
+    if (node.type === 'AssignmentExpression' && ['=', '+='].includes(String(node.operator))) {
+      const name = property(node.left);
+      if (ASSIGNMENT_SINKS.has(name)) kind = name;
+    }
+    if (node.type === 'CallExpression') {
+      const name = property(node.callee);
+      if (CALL_SINKS.has(name)) kind = name;
+      const object = record(record(node.callee)?.object);
+      if (['write', 'writeln'].includes(name) && (object?.type === 'Identifier' && object.name === 'document'
+        || property(object) === 'document')) kind = `document.${name}`;
+    }
+    if (kind) {
+      if (typeof node.start !== 'number' || typeof node.end !== 'number') throw new Error(`Missing Svelte HTML offsets: ${fileName}`);
+      sinks.push({ kind, line: source.slice(0, node.start).split('\n').length,
+        source: source.slice(node.start, node.end).replace(/\s+/g, ' ').trim() });
+    }
+    Object.values(node).forEach(visit);
+  }
+  visit(ast.fragment);
+  return sinks;
 }
 
 function domSinksFromFile(sourceFile: ts.SourceFile) {
@@ -94,17 +142,17 @@ function sinkDigest(sinks: readonly DomSink[]) {
   return crypto.createHash('sha256').update(JSON.stringify(reviewedSurface)).digest('hex');
 }
 
-export function createDomSinkPolicy() {
-  const files = listJavaScriptFiles();
+export function createDomSinkPolicy(root = ROOT) {
+  const files = listJavaScriptFiles(path.join(root, 'js'));
   const sinkFiles: Record<string, DomSinkFilePolicy> = {};
   let sinkCount = 0;
   const parsedSources = files.length ? withParsedSources(
-    new Map(files.map(file => [file, fs.readFileSync(file, 'utf8')])),
+    new Map(files.map(file => [syntaxFile(file), scriptSource(file, fs.readFileSync(file, 'utf8'))])),
     sources => new Map([...sources].map(([file, sourceFile]) => [file, domSinksFromFile(sourceFile)])),
   ) : new Map<string, DomSink[]>();
   for (const absolute of files) {
-    const relative = runtimePath(path.relative(ROOT, absolute).split(path.sep).join('/'));
-    const sinks = parsedSources.get(absolute)!;
+    const relative = runtimePath(path.relative(root, absolute).split(path.sep).join('/'));
+    const sinks = [...parsedSources.get(syntaxFile(absolute))!, ...svelteMarkupSinks(fs.readFileSync(absolute, 'utf8'), absolute)];
     if (!sinks.length) continue;
     sinkCount += sinks.length;
     sinkFiles[relative] = {
@@ -119,17 +167,25 @@ export function createDomSinkPolicy() {
   }
   return {
     schemaVersion: 1,
-    scope: 'Every non-generated JavaScript module under js/',
+    scope: 'Every authored JavaScript, TypeScript and Svelte module under js/',
     reviewRule: 'Any added or modified HTML-writing sink requires security review and a policy refresh.',
+    // A compact path-set receipt also detects a balanced add/remove of sink-free sources.
+    sourceInventoryDigest: crypto.createHash('sha256').update(JSON.stringify(files.map(file => path.relative(root, file).split(path.sep).join('/')).sort())).digest('hex'),
     scannedFiles: files.length,
     sinkCount,
     files: sinkFiles,
   };
 }
 
-export function auditDomSinks(policy: unknown = JSON.parse(fs.readFileSync(POLICY_PATH, 'utf8'))) {
-  const current = createDomSinkPolicy();
+export function auditDomSinks(policy: unknown = JSON.parse(fs.readFileSync(POLICY_PATH, 'utf8')), root = ROOT) {
+  const current = createDomSinkPolicy(root);
   const failures: string[] = [];
+  for (const field of ['schemaVersion', 'scope', 'reviewRule'] as const) {
+    if ((policy as PolicyReader)[field] !== current[field]) failures.push(`sink policy ${field} changed`);
+  }
+  if (current.sourceInventoryDigest !== (policy as PolicyReader).sourceInventoryDigest) {
+    failures.push('authored source inventory changed');
+  }
   if (current.scannedFiles !== (policy as PolicyReader).scannedFiles) {
     failures.push(`scanned file count changed: ${(policy as PolicyReader).scannedFiles} -> ${current.scannedFiles}`);
   }
@@ -148,8 +204,10 @@ export function auditDomSinks(policy: unknown = JSON.parse(fs.readFileSync(POLIC
       failures.push(`new sink-bearing file: ${file}`);
     } else if (!actual) {
       failures.push(`stale sink policy entry: ${file}`);
+    } else if (JSON.stringify(Object.entries(expected.kinds || {}).sort()) !== JSON.stringify(Object.entries(actual.kinds).sort())) {
+      failures.push(`reviewed sink kinds changed in ${file}`);
     } else if (expected.count !== actual.count || expected.digest !== actual.digest) {
-      const details = scanDomSinks(fs.readFileSync(sourcePath(path.join(ROOT, file)), 'utf8'), sourcePath(file))
+      const details = scanDomSinks(fs.readFileSync(sourcePath(path.join(root, file)), 'utf8'), sourcePath(path.join(root, file)))
         .map(sink => `${sink.kind}@${sink.line}: ${sink.source.slice(0, 140)}`)
         .join('\n    ');
       failures.push(`reviewed sink surface changed in ${file}\n    ${details}`);

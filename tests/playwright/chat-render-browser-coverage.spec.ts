@@ -8,6 +8,9 @@ test('chat render browser coverage handles lens sources and rich transcript UI',
   await page.waitForSelector('#chat-messages', { state: 'attached' });
 
   const results = await page.evaluate(async ({ chatRenderUrl }) => {
+    // The authored disclosure uses the same lazy styles as the opened Chat panel.
+    const panelStyles = await import('/js/chat-panel.js');
+    await panelStyles.loadChatPresentationStylesheets();
     const [{ state }, chatRender, chatActions, recommendationRuntime, recommendationDisclosure] = await Promise.all([
       import('/js/state.js'),
       ((import(chatRenderUrl) as Promise<unknown>) as Promise<Pick<typeof import("../../js/chat-render.js"), "_renderLensSources" | "renderChatMessages" | "showEarlierChatMessages" | "revealChatMessage"> >),
@@ -15,7 +18,7 @@ test('chat render browser coverage handles lens sources and rich transcript UI',
       import('/js/recommendations-runtime.js'),
       import('/js/chat-recommendation-disclosure.js'),
     ]);
-    const outcomes:Record<string,unknown> = {};
+    const outcomes:Record<string,unknown> = { chatPresentationStylesheetsLoaded: panelStyles.areChatPresentationStylesheetsLoaded() };
     const messages = document.getElementById('chat-messages');
     const panel = document.getElementById('chat-panel');
     const tinyPng = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
@@ -44,7 +47,9 @@ test('chat render browser coverage handles lens sources and rich transcript UI',
           '📎 2 excerpts from Private <Vault>'
         && sourceHost.querySelector<HTMLElement>('.chat-lens-source-name')?.textContent === 'report <one>.md'
         && sourceHost.querySelector<HTMLElement>('.chat-lens-source-score')?.textContent === '0.93'
-        && sourceHost.querySelector<HTMLElement>('.chat-lens-source-text')?.innerHTML.includes('Ferritin &lt;low&gt;<br>Line two') === true
+        && sourceHost.querySelector<HTMLElement>('.chat-lens-source-text')?.textContent === 'Ferritin <low>Line two'
+        && sourceHost.querySelectorAll('.chat-lens-source-text br').length === 1
+        && sourceHost.querySelectorAll('.chat-lens-source-text low').length === 0
         && sourceHost.querySelectorAll<HTMLElement>('.chat-lens-source')!.length === 2;
       outcomes.lensSourcesEmptyInputReturnsBlank = chatRender._renderLensSources([], '') === '';
 
@@ -53,12 +58,14 @@ test('chat render browser coverage handles lens sources and rich transcript UI',
       const genericAdded = appendDiscussionOutputAttribution({
         threadId: null, aiMsgEl: liveDiscussion, provider: 'openrouter', modelId: 'example/model',
       });
+      const genericDiscussionUnchanged = liveDiscussion.childNodes.length === 0;
       const grokAdded = appendDiscussionOutputAttribution({
         threadId: null, aiMsgEl: liveDiscussion, provider: 'openrouter', modelId: 'x-ai/grok-4',
       });
-      outcomes.liveDiscussionMatchesTranscriptAttribution = !genericAdded && grokAdded
+      outcomes.liveDiscussionMatchesTranscriptAttribution = !genericAdded && genericDiscussionUnchanged && grokAdded
         && liveDiscussion.querySelectorAll<HTMLElement>('.chat-provider-attribution')!.length === 1
-        && liveDiscussion.textContent === 'Written with Grok';
+        && liveDiscussion.textContent.trim() === 'Written with Grok'
+        && liveDiscussion.querySelector('.chat-provider-attribution')?.textContent === 'Written with Grok';
 
       const attentionWrapper = document.createElement('details');
       attentionWrapper.className = 'rec-chat-wrapper rec-chat-unseen';
@@ -87,13 +94,14 @@ test('chat render browser coverage handles lens sources and rich transcript UI',
 
       previousRecommendationBridge = recommendationRuntime.configureRecommendationModuleBridge({
         isProductRecsEnabled: () => true,
-        renderRecommendationSectionSync: (slot:unknown, { label, maxProducts }:{label?:unknown;maxProducts?:unknown}) => `
-          <div class="rec-disclosure-banner">Disclosure for ${slot}</div>
-          <section class="rec-section" data-max="${maxProducts}">
-            <h3 class="rec-section-header">${label}</h3>
-            <p>${slot}</p>
-          </section>
-        `,
+        getRecommendationSectionViewSync: (slot: string, { label, maxProducts }: {label: string; maxProducts: number}) => {
+          if (maxProducts !== 2) throw new Error('Chat recommendations must retain their two-product limit');
+          return {
+            variant: 'standard', header: label, gated: false, banner: true, normalNote: false,
+            genetics: [], tiers: [{label: slot, hint: null, items: []}], products: [], coupon: null,
+            suggestionHref: null, footer: {region: 'US'}, disclaimer: false,
+          } satisfies import('../../js/tips-presentation.js').TipsSectionView;
+        },
       });
       recommendationRuntime.setRecommendationsCatalogCache({
         slots: {
@@ -194,8 +202,10 @@ test('chat render browser coverage handles lens sources and rich transcript UI',
         && rendered!.querySelector<HTMLElement>('.chat-action-bar') !== null
         && rendered!.querySelector<HTMLElement>('.chat-lens-sources-summary')?.textContent === '📎 1 excerpt from Knowledge <Base>'
         && rendered!.querySelector<HTMLElement>('.chat-lens-source-score')?.textContent === '0.88'
-        && rendered!.querySelector<HTMLElement>('.chat-lens-source-text')?.innerHTML.includes('Root cause &lt;maybe&gt;<br>Second line') === true;
-      rendered!.querySelector<HTMLElement>('.chat-emf-hint a')?.dispatchEvent(new MouseEvent('click', {
+        && rendered!.querySelector<HTMLElement>('.chat-lens-source-text')?.textContent === 'Root cause <maybe>Second line'
+        && rendered!.querySelectorAll('.chat-lens-source-text br').length === 1
+        && rendered!.querySelectorAll('.chat-lens-source-text maybe').length === 0;
+      rendered!.querySelector<HTMLElement>('[data-chat-message-action="open-emf-assessment"]')?.dispatchEvent(new MouseEvent('click', {
         bubbles: true,
         cancelable: true,
       }));
@@ -209,8 +219,10 @@ test('chat render browser coverage handles lens sources and rich transcript UI',
 
       const recommendationMessage = state.chatHistory[3];
       const initialDisclosure = rendered!.querySelector<HTMLDetailsElement>('.rec-chat-wrapper');
-      initialDisclosure!.open = false;
-      await new Promise(resolve => setTimeout(resolve, 0));
+      await new Promise<void>(resolve => {
+        initialDisclosure!.addEventListener('toggle', () => resolve(), { once: true });
+        initialDisclosure!.open = false;
+      });
       recommendationMessage!.recNew = true;
       chatRender.renderChatMessages();
       const redisplayedDisclosure = rendered!.querySelector<HTMLDetailsElement>('.rec-chat-wrapper');
@@ -218,9 +230,18 @@ test('chat render browser coverage handles lens sources and rich transcript UI',
         && redisplayedDisclosure!.querySelector<HTMLElement>('.rec-chat-new')?.textContent === 'New'
         && redisplayedDisclosure!.classList.contains('rec-chat-unseen')
         && !redisplayedDisclosure!.classList.contains('rec-chat-attention');
-      redisplayedDisclosure!.open = true;
-      await new Promise(resolve => setTimeout(resolve, 0));
+      await new Promise<void>(resolve => {
+        redisplayedDisclosure!.addEventListener('toggle', () => resolve(), { once: true });
+        redisplayedDisclosure!.open = true;
+      });
       const seenSummaryStyle = getComputedStyle(redisplayedDisclosure!.querySelector<HTMLElement>('.rec-chat-summary')!);
+      outcomes.recommendationPersistedNewCue = showedPersistedNewCue;
+      outcomes.recommendationOpenChoicePersisted = recommendationMessage!.recOpen === true;
+      outcomes.recommendationSeenFlagCleared = recommendationMessage!.recNew === false;
+      outcomes.recommendationSeenBadgeRemoved = redisplayedDisclosure!.querySelector('.rec-chat-new') === null;
+      outcomes.recommendationSeenClassRemoved = !redisplayedDisclosure!.classList.contains('rec-chat-unseen');
+      outcomes.recommendationSeenBorderVisible = seenSummaryStyle.borderTopColor !== 'rgba(0, 0, 0, 0)';
+      outcomes.recommendationSeenBackgroundVisible = seenSummaryStyle.backgroundColor !== 'rgba(0, 0, 0, 0)';
       outcomes.recommendationChoiceAndDiscoveryStatePersist = showedPersistedNewCue
         && recommendationMessage!.recOpen === true
         && recommendationMessage!.recNew === false
@@ -248,14 +269,14 @@ test('chat render browser coverage handles lens sources and rich transcript UI',
       }));
       chatRender.renderChatMessages();
       const initialWindow = [...rendered!.querySelectorAll<HTMLElement>('.chat-msg')];
-      const initialEarlier = rendered!.querySelector<HTMLElement>('.chat-history-earlier');
+      const initialEarlierText = rendered!.querySelector<HTMLElement>('.chat-history-earlier')?.textContent;
       chatRender.showEarlierChatMessages();
       const expandedWindow = [...rendered!.querySelectorAll<HTMLElement>('.chat-msg')];
       chatRender.revealChatMessage(3);
       outcomes.longTranscriptRendersBoundedWindowAndCanRevealHistory =
         initialWindow.length === 120
         && initialWindow[0]?.id === 'chat-msg-140'
-        && initialEarlier?.textContent.includes('140 remaining')
+        && initialEarlierText?.includes('140 remaining')
         && expandedWindow.length === 240
         && expandedWindow[0]?.id === 'chat-msg-20'
         && rendered!.querySelector<HTMLElement>('#chat-msg-3')?.textContent.includes('Windowed message 3');

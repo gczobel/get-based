@@ -1,3 +1,4 @@
+import type { ProfileData } from '../types/app-state.js';
 // sun-sessions-store.js — persisted Sun session lifecycle, hydration, and safety.
 //
 // This module owns importedData.sunSessions[] CRUD and dose hydration. UI flows
@@ -44,7 +45,7 @@ export interface SunSessionRecord extends Omit<SunSessionExposureInput, 'bodyExp
   atmosphere?: SessionAtmosphere | null; doses?: SessionDoses | null;
   safety?: Partial<ReturnType<typeof sessionSafety>> | null;
   exposureSegments?: ExposureSegment[]; accumulatedPausedMs?: number;
-  paused?: boolean; pausedAt?: number; engineVersion?: number; calculationStatus?: string;
+  paused?: boolean; pausedAt?: number; resumedAt?: number; engineVersion?: number; calculationStatus?: string;
   notes?: string; aiAnalysis?: unknown;
   [key: string]: unknown;
   _activeRate?: unknown; _activeRatePending?: unknown; _fractionOfMED?: unknown;
@@ -100,20 +101,20 @@ function runSessionAnalysis(session: SunSessionRecord) {
   try { Promise.resolve(storeDeps.maybeAnalyzeSessionAfterFinish(session)).catch(() => {}); } catch (_) {}
 }
 
-export function getSessions(): SunSessionRecord[] {
-  if (!state.importedData) return [];
-  if (!Array.isArray(state.importedData.sunSessions)) state.importedData.sunSessions = [];
+export function getSessions(data: Pick<ProfileData, 'sunSessions'> = state.importedData): SunSessionRecord[] {
+  if (!data) return [];
+  if (!Array.isArray(data.sunSessions)) data.sunSessions = [];
   // Strip runtime-only ticker fields that earlier dev builds may have
   // accidentally persisted onto session objects. One-time cleanup on
   // first read; no-op on records written after the fix.
-  for (const sess of state.importedData.sunSessions as SunSessionRecord[]) {
+  for (const sess of data.sunSessions as SunSessionRecord[]) {
     if (sess && (sess._activeRate || sess._activeRatePending || sess._fractionOfMED)) {
       delete sess._activeRate;
       delete sess._activeRatePending;
       delete sess._fractionOfMED;
     }
   }
-  return state.importedData.sunSessions;
+  return data.sunSessions;
 }
 
 export function getActiveSession() {
@@ -174,8 +175,10 @@ export async function stopSession(id: string) {
     await persistSessionChanges();
     return sess;
   }
-  const now = Date.now();
   if (!sess.paused) storeDeps.commitCurrentSlice(sess);
+  // Committing reads its own end clock. Capture the session boundary after
+  // that synchronous work so no modeled slice extends past the saved stop.
+  const now = Date.now();
   if (sess.paused && Number.isFinite(sess.pausedAt)) {
     sess.accumulatedPausedMs = (sess.accumulatedPausedMs || 0) + Math.max(0, now - sess.pausedAt!);
   }
@@ -267,6 +270,7 @@ export async function resumeSession(id: string) {
   sess.accumulatedPausedMs = (sess.accumulatedPausedMs || 0)
     + Math.max(0, now - (sess.pausedAt || now));
   sess.paused = false;
+  sess.resumedAt = now;
   delete sess.pausedAt;
   await persistSessionChanges();
   return sess;
@@ -380,6 +384,7 @@ export async function updateSession(id: string, patch: SessionPatch) {
     // instead of silently retaining segment totals for the old duration.
     sess.exposureSegments = [];
     sess.accumulatedPausedMs = 0;
+    delete sess.resumedAt;
     // Duration is an input to every modeled light and safety value. Never
     // persist the edited time beside estimates derived from the old time,
     // even briefly: the network-backed recalculation may be slow or fail.

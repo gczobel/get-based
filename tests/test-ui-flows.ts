@@ -61,8 +61,7 @@ return (async function() {
     S.profileDob = '1987-11-22';
     dataModule.saveImportedData();
     navModule.buildSidebar();
-    viewsModule.navigate('dashboard');
-    await wait(50);
+    await viewsModule.navigate('dashboard');
   }
   const data = dataModule.getActiveData();
   assert('Setup: demo data loaded', data.dates.length > 0, `${data.dates.length} dates`);
@@ -85,7 +84,8 @@ return (async function() {
       }],
       manualValues: {}
     });
-    const entriesHtml = settingsModule.renderDataEntriesSection();
+    settingsModule.openSettingsModal('data');
+    const entriesHtml = document.getElementById('data-entries-section')!.innerHTML;
     assert('Settings Data remove wrapper is callable', typeof settingsModule.removeImportedEntryFromSettings === 'function');
     assert('PDF import remove action is module-only', typeof pdfImport.removeImportedEntry === 'function'
       && !('removeImportedEntry' in window));
@@ -101,11 +101,11 @@ return (async function() {
     assert('Settings Data remove wrapper records sync tombstone',
       S.importedData._deleted?.entries?.includes('2099-12-31'));
   } finally {
+    settingsModule.closeSettingsModal();
     S.importedData = originalImportedData;
     dataModule.saveImportedData();
     navModule.buildSidebar();
-    viewsModule.navigate('dashboard');
-    await wait(50);
+    await viewsModule.navigate('dashboard');
   }
 
   // ═══════════════════════════════════════════════
@@ -143,8 +143,8 @@ return (async function() {
   // 1. DASHBOARD — renders all key sections
   // ═══════════════════════════════════════════════
   console.log('%c 1. Dashboard rendering', 'font-weight:bold;color:#6366f1');
-  viewsModule.navigate('dashboard');
-  await wait(50);
+  // Navigation completes after the lazy Dashboard renderer and hydration settle.
+  await viewsModule.navigate('dashboard');
 
   assert('Dashboard has main content', main!.innerHTML.length > 500);
   assert('Dashboard has Focus summary', main!.innerHTML.includes('Current Focus'));
@@ -225,8 +225,7 @@ return (async function() {
   assert('Correlations view rendered', main!.innerHTML.includes('orrelation'));
 
   // Back to dashboard
-  viewsModule.navigate('dashboard');
-  await wait(50);
+  await viewsModule.navigate('dashboard');
   assert('Back to dashboard', !!sidebar!.querySelector<HTMLElement>('.nav-item.active[data-category="dashboard"]'));
 
   // Lens pages are dedicated workspaces; they should not duplicate sidebar
@@ -260,8 +259,7 @@ return (async function() {
   }
   if (savedLabsOrder == null) localStorage.removeItem(labsOrderKey);
   else localStorage.setItem(labsOrderKey, savedLabsOrder);
-  viewsModule.navigate('dashboard');
-  await wait(50);
+  await viewsModule.navigate('dashboard');
 
   // ═══════════════════════════════════════════════
   // 3. SETTINGS MODAL — open, tabs, provider switch, close
@@ -427,8 +425,7 @@ return (async function() {
   // Verify the optional dashboard widget can be shown after save
   viewsModule.closeModal();
   await wait(20);
-  viewsModule.navigate('dashboard');
-  await wait(50);
+  await viewsModule.navigate('dashboard');
   viewsModule.showDashboardWidget?.('supplements');
   await wait(50);
   const suppSection = main!.querySelector<HTMLElement>('.supp-timeline-section');
@@ -447,8 +444,7 @@ return (async function() {
   assert('Supplement removed from state', (S.importedData.supplements || []).length === initialSuppCount);
 
   // Verify dashboard updated after delete
-  viewsModule.navigate('dashboard');
-  await wait(50);
+  await viewsModule.navigate('dashboard');
   const suppSectionAfter = main!.querySelector<HTMLElement>('.supp-timeline-section');
   const stillShows = suppSectionAfter?.innerHTML.includes('__UI_TEST_SUPP__');
   assert('Dashboard no longer shows deleted supplement', !stillShows);
@@ -616,8 +612,7 @@ return (async function() {
   // ═══════════════════════════════════════════════
   console.log('%c 7. Context cards', 'font-weight:bold;color:#6366f1');
 
-  viewsModule.navigate('dashboard');
-  await wait(50);
+  await viewsModule.navigate('dashboard');
 
   // Open diet editor
   await contextCards.openDietEditor();
@@ -625,16 +620,21 @@ return (async function() {
   assert('Diet editor opens', modalOverlay!.classList.contains('show'));
   const editorModal = document.getElementById('detail-modal');
   assert('Diet editor uses redesigned context modal shell',
-    editorModal!.classList.contains('ctx-editor-modal') && editorModal!.classList.contains('gb-form-modal'));
+    editorModal!.hasAttribute('data-context-form-modal')
+      && !!editorModal!.querySelector('[data-context-form-view="diet"]')
+      && getComputedStyle(editorModal!).overflowY === 'auto');
   assert('Diet editor has accurate dialog label', editorModal!.getAttribute('aria-label') === 'Diet & Digestion');
-  assert('Diet editor has redesigned modal header', !!editorModal!.querySelector<HTMLElement>('.ctx-editor-head .gb-modal-title'));
-  assert('Diet editor has pill buttons', !!editorModal!.querySelector<HTMLElement>('.ctx-btn-group'));
+  assert('Diet editor has redesigned modal header', editorModal!.querySelector('#lifestyle-form-title')?.textContent === 'Diet & Digestion'
+    && editorModal!.getAttribute('aria-labelledby') === 'lifestyle-form-title');
+  assert('Diet editor has pill buttons', !!editorModal!.querySelector('[role="group"] button[aria-pressed]'));
 
   // Check editor has save/cancel actions
-  const actions = editorModal!.querySelector<HTMLElement>('.ctx-editor-actions');
+  const saveBtn = [...editorModal!.querySelectorAll<HTMLButtonElement>('[data-context-form-view] button')]
+    .find(button => button.textContent?.trim() === 'Save');
+  const actions = saveBtn?.parentElement;
   assert('Editor has action buttons', !!actions);
-  const saveBtn = actions?.querySelector<HTMLElement>('button');
-  assert('Editor has save button', !!saveBtn);
+  assert('Editor has save button', !!saveBtn && !saveBtn.disabled
+    && [...actions!.querySelectorAll('button')].some(button => button.textContent?.trim() === 'Cancel'));
 
   // Close without saving
   viewsModule.closeModal();
@@ -648,7 +648,7 @@ return (async function() {
   assert('Profile Context widget renders on dashboard', ctxCards.length >= 5);
 
   // Check health dot structure
-  const dot = main!.querySelector<HTMLElement>('[id^="ctx-dot-"]');
+  const dot = main!.querySelector<HTMLElement>('[data-context-status-slot="indicator"] .ctx-health-dot');
   assert('Health dot element exists', !!dot);
   assert('Health dot has dot class', dot?.classList.contains('ctx-health-dot'));
 
@@ -785,8 +785,7 @@ return (async function() {
   // ═══════════════════════════════════════════════
   console.log('%c 14. Sidebar search', 'font-weight:bold;color:#6366f1');
 
-  viewsModule.navigate('dashboard');
-  await wait(50);
+  await viewsModule.navigate('dashboard');
   const staticNavCategories = new Set([
     'dashboard', 'labs', 'biology-scores', 'correlations', 'compare', 'recommendations',
     'reports', 'knowledge', 'context', 'custom-markers', 'light', 'body', 'wearables',
@@ -876,8 +875,7 @@ return (async function() {
   // ═══════════════════════════════════════════════
   // SUMMARY
   // ═══════════════════════════════════════════════
-  viewsModule.navigate('dashboard');
-  await wait(20);
+  await viewsModule.navigate('dashboard');
 
   console.log(`\n%c UI Flows: ${pass} passed, ${fail} failed `,
     fail > 0

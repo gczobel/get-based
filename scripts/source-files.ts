@@ -1,12 +1,19 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import {fileURLToPath} from 'node:url';
+import {generatedInlineStyleMapOutputs} from './inline-style-map-owners.mjs';
+const generatedInlineStyleMaps = new Set(generatedInlineStyleMapOutputs.map(file => path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', file)));
 
-export const SOURCE_EXTENSIONS = new Set(['.js', '.mjs', '.cjs', '.ts', '.mts', '.cts']);
+export const SOURCE_EXTENSIONS = new Set(['.js', '.mjs', '.cjs', '.ts', '.mts', '.cts', '.svelte']);
 const TYPESCRIPT_EXTENSION: Record<string, string> = { '.js': '.ts', '.mjs': '.mts', '.cjs': '.cts' };
 const JAVASCRIPT_EXTENSION: Record<string, string> = { '.ts': '.js', '.mts': '.mjs', '.cts': '.cjs' };
 
 /** Resolve an existing runtime URL to its authored source, preferring TS. */
 export function sourcePath(file: string): string {
+  if (/\.svelte\.(?:native|html)\.js$/.test(file)) {
+    const component = file.replace(/\.(?:native|html)\.js$/, '');
+    if (fs.existsSync(component)) return component;
+  }
   const extension = path.extname(file);
   const replacement = TYPESCRIPT_EXTENSION[extension];
   const candidate = replacement ? file.slice(0, -extension.length) + replacement : file;
@@ -14,13 +21,16 @@ export function sourcePath(file: string): string {
 }
 
 export function runtimePath(file: string): string {
+  // Declarations describe a runtime artifact; they are not emitted modules.
+  if (/\.d\.[cm]?ts$/.test(file)) return file;
+  if (file.endsWith('.svelte')) return `${file}.native.js`;
   const extension = path.extname(file);
   return JAVASCRIPT_EXTENSION[extension]
     ? file.slice(0, -extension.length) + JAVASCRIPT_EXTENSION[extension] : file;
 }
 
 export function isSourceFile(file: string): boolean {
-  return SOURCE_EXTENSIONS.has(path.extname(file)) && !/\.d\.[cm]?ts$/.test(file);
+  return !generatedInlineStyleMaps.has(path.resolve(file)) && SOURCE_EXTENSIONS.has(path.extname(file)) && !/\.d\.[cm]?ts$/.test(file);
 }
 
 /** Generated JS siblings never count as additional source modules. */

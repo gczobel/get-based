@@ -2,9 +2,12 @@ import { createRetryingStylesheetLoader } from './retrying-module-loader.js';
 // emf-runtime.js - module-only lazy access to the EMF assessment feature.
 
 import { showNotification } from './utils.js';
+import { closeEMFInterpretation as closeLoadedEMFInterpretation } from './emf-interpretation-runtime.js';
 
 export interface EMFEditorOptions {
   returnLabel?: string;
+  /** A caller can retire a pending lazy open without changing shared loader caching. */
+  isCurrent?: () => boolean;
   onReturn?: (() => void) | null;
 }
 export interface EMFModule {
@@ -98,13 +101,16 @@ export async function loadEMFModule() {
 }
 
 export async function openEMFAssessmentEditor(options: EMFEditorOptions = {}) {
+  if (options.isCurrent && !options.isCurrent()) return false;
   try {
     const [mod] = await Promise.all([
       loadEMFModule(),
       emfRuntimeDeps.loadStylesheet(),
     ]);
+    if (options.isCurrent && !options.isCurrent()) return false;
     return mod.openEMFAssessmentEditor(options);
   } catch (err) {
+    if (options.isCurrent && !options.isCurrent()) return false;
     console.error('[emf] Could not load assessment UI:', err);
     showNotification('Could not open the EMF assessment. Reload the app to finish updating, then try again.', 'error');
     return false;
@@ -112,6 +118,7 @@ export async function openEMFAssessmentEditor(options: EMFEditorOptions = {}) {
 }
 
 export async function closeEMFInterpretation() {
-  const mod = await loadEMFModule();
-  return mod.closeEMFInterpretation();
+  // Keep the Promise API while aborting an existing owner in this same turn.
+  if (emfModule) return emfModule.closeEMFInterpretation();
+  return closeLoadedEMFInterpretation();
 }

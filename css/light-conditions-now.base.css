@@ -1,0 +1,36 @@
+@import "tailwindcss" prefix(gb) source(none) reference;
+@utility light-layout-conditions-page-dashboard-widget-data-widget-id-light-conditions-n { gap: 0; }
+@utility light-layout-conditions-conditions-now-data-conditions-tooltip-light-conditions {
+  cursor: help;
+}
+@utility light-layout-conditions-conditions-now-button-data-conditions-tooltip-light-con {
+  cursor: pointer;
+}
+@utility light-layout-conditions-conditions-now-data-conditions-tooltip-focus-visible-li {
+  outline: 2px solid color-mix(in srgb, var(--accent) 78%, transparent);
+  outline-offset: 3px;
+  border-radius: var(--radius-sm);
+}
+
+/* Readable foreground tokens are separate from the unchanged severity dots. */
+[data-theme="light"] [data-light-conditions-presentation] {
+  --conditions-green: var(--success-ink);
+  --conditions-yellow: var(--warning-ink);
+  --conditions-orange: var(--warning-ink);
+  --conditions-red: var(--danger-ink);
+  --conditions-purple: #6d28d9;
+  --conditions-accent: var(--accent-light, var(--accent));
+}
+:is([data-theme="neuromancer"], [data-theme="cyberterm"]) [data-light-conditions-presentation] {
+  --conditions-muted: var(--text-secondary);
+}
+/* Cross-widget dashboard-body integration retains its Light owner. */
+.light-page .dashboard-widget[data-widget-id="light-conditions-now"] .dashboard-widget-body { @apply gb:light-layout-conditions-page-dashboard-widget-data-widget-id-light-conditions-n; }
+/* Conditions tooltip carriers retain their lazy Light owner. The shared overlay
+   and app-wide carriers are eager in app-shell.base.css. */
+.conditions-now [data-conditions-tooltip],
+.light-conditions-now-actions [data-conditions-tooltip] { @apply gb:light-layout-conditions-conditions-now-data-conditions-tooltip-light-conditions; }
+.conditions-now button[data-conditions-tooltip],
+.light-conditions-now-actions button[data-conditions-tooltip] { @apply gb:light-layout-conditions-conditions-now-button-data-conditions-tooltip-light-con; }
+.conditions-now [data-conditions-tooltip]:focus-visible,
+.light-conditions-now-actions [data-conditions-tooltip]:focus-visible { @apply gb:light-layout-conditions-conditions-now-data-conditions-tooltip-focus-visible-li; }

@@ -1,6 +1,10 @@
+import { publishChatComposerPlaceholder } from './chat-composer-input-port.js';
+import { setChatVoiceAvailable } from './chat-voice-view.js';
+import { refreshChatHeaderWebSearch } from './chat-header-presentation.js';
+import { closePersonalityPickerView } from './chat-personality-picker-view.js';
 // chat-panel.js — Chat panel chrome, web-search toggle, and input state
 
-import { isAIPaused, supportsWebSearch } from './api.js';
+import { isAIPaused } from './api.js';
 import {
   loadChatThreads, ensureActiveThread, renderThreadList, restoreRailState,
 } from './chat-threads.js';
@@ -102,9 +106,7 @@ export function setChatWebSearchEnabled(val: unknown) {
 }
 
 export async function setChatBackendFromUI(value: unknown) {
-  const select = document.getElementById('chat-backend-select') as HTMLSelectElement|null;
   if (value === 'codex') {
-    if (select) select.disabled = true;
     try {
       await connectDetectedCodex();
       persistChatBackend('codex');
@@ -113,7 +115,6 @@ export async function setChatBackendFromUI(value: unknown) {
       persistChatBackend('direct');
       showNotification(error instanceof Error ? error.message : 'CLI agent could not connect.', 'error', 9000);
     } finally {
-      if (select) select.disabled = false;
       await refreshLocalAgentAvailability(true);
     }
   } else {
@@ -125,8 +126,7 @@ export async function setChatBackendFromUI(value: unknown) {
 }
 
 function updateWebSearchToggleVisibility() {
-  const label = document.querySelector('#chat-panel .chat-websearch-toggle-label') as HTMLElement|null;
-  if (label) label.style.display = !isCodexChatBackend() && supportsWebSearch() ? '' : 'none';
+  refreshChatHeaderWebSearch();
 }
 
 export function refreshWebSearchToggle() {
@@ -258,10 +258,6 @@ export function toggleChatFullscreen() {
   panel.classList.toggle('chat-panel-fullscreen', next);
   document.body.classList.toggle('chat-fullscreen', next);
   localStorage.setItem('labcharts-chat-fullscreen', next ? 'true' : 'false');
-  const button = document.querySelector('.chat-fullscreen-btn') as HTMLElement|null;
-  button?.setAttribute('aria-pressed', String(next));
-  button?.setAttribute('aria-label', next ? 'Exit fullscreen chat' : 'Enter fullscreen chat');
-  if (button) button.title = next ? 'Exit fullscreen' : 'Enter fullscreen';
   syncChatLayout();
 }
 
@@ -283,9 +279,6 @@ export async function openChatPanel(prefillMessage?: Parameters<typeof setChatIn
   // not just additive — when localStorage flips to false.
   const fullscreen = localStorage.getItem('labcharts-chat-fullscreen') === 'true';
   panel.classList.toggle('chat-panel-fullscreen', fullscreen);
-  const fullscreenButton = panel.querySelector('.chat-fullscreen-btn');
-  fullscreenButton?.setAttribute('aria-pressed', String(fullscreen));
-  fullscreenButton?.setAttribute('aria-label', fullscreen ? 'Exit fullscreen chat' : 'Enter fullscreen chat');
   // Body classes drive the dashboard auto-shift — `.chat-open` adds
   // padding-right matching the chat panel's responsive width so the
   // dashboard reflows instead of hiding behind the panel; `.chat-
@@ -306,8 +299,6 @@ export async function openChatPanel(prefillMessage?: Parameters<typeof setChatIn
   updateChatHeaderTitle();
   updatePersonalityBar();
   // Sync web search toggle
-  const wsCb = panel.querySelector('#chat-websearch-checkbox') as HTMLInputElement|null;
-  if (wsCb) wsCb.checked = getChatWebSearchEnabled();
   updateWebSearchToggleVisibility();
   // An in-flight answer exists only in the live request/typewriter state
   // until it finishes. Reloading the persisted thread here would erase that
@@ -346,12 +337,11 @@ export async function openChatPanel(prefillMessage?: Parameters<typeof setChatIn
 export function updateChatInputState() {
   const input = document.getElementById('chat-input') as HTMLTextAreaElement|null;
   const sendBtn = document.getElementById('chat-send-btn') as HTMLButtonElement|null;
-  const voiceBtn = document.getElementById('chat-voice-btn') as HTMLButtonElement|null;
   const noAI = !hasChatResponseBackend();
   const blocked = chatThreadInputBlocked;
   if (input) {
     input.disabled = noAI || blocked;
-    input.placeholder = blocked
+    publishChatComposerPlaceholder(blocked
       ? 'Conversations are paused to protect saved chats'
       : noAI
         ? (isAIPaused()
@@ -359,12 +349,12 @@ export function updateChatInputState() {
           : isCodexChatBackend()
           ? 'Codex is unavailable on this computer'
           : 'Connect an AI provider in Settings to chat')
-        : 'Ask about your lab results...';
+        : null);
   }
   if (sendBtn) sendBtn.disabled = noAI || blocked;
   // Dictation is routed through getbased's independent voice service. A CLI
   // agent handles the resulting text, but does not need to transport audio.
-  if (voiceBtn) voiceBtn.disabled = noAI || blocked;
+  setChatVoiceAvailable(!noAI && !blocked);
   refreshChatComposer();
   updateWebSearchToggleVisibility();
 }
@@ -388,9 +378,9 @@ export function closeChatPanel() {
   stopMobileChatViewportSync();
   const panel = document.getElementById('chat-panel');
   panel?.classList.remove('open');
+  syncChatLayout();
   if (panel) updateChatPanelAccessibility(panel, false);
-  document.querySelector('.chat-personality-bar')?.classList.remove('open');
-  document.querySelector('.chat-personality-current')?.setAttribute('aria-expanded', 'false');
+  closePersonalityPickerView();
   document.querySelector('.discuss-persona-picker')?.remove();
   document.getElementById('chat-backdrop')?.classList.remove('open');
   // body.style.overflow no longer set on open (so nothing to restore)

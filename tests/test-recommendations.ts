@@ -35,9 +35,12 @@ const _realFetch = globalThis.fetch;
   const recRuntimeSrc = await fetchWithRetry('js/recommendations-runtime.js');
   const recRegionSrc = await fetchWithRetry('js/recommendations-region.js');
   const mainSrc = await fetchWithRetry('js/main.js');
-  const chatRenderSrc = await fetchWithRetry('js/chat-render.js');
   const chatSendSrc = await fetchWithRetry('js/chat-send.js');
   const viewsSrc = await fetchWithRetry('js/views.js');
+  const viewsRuntimeSrc = await fetchWithRetry('js/views-runtime.js');
+  const chartCardSrc = read('js/components/CategoryChartCard.svelte');
+  const sidebarPagesSrc = read('js/components/SidebarNavigation.svelte');
+  const recommendationDelegatesSrc = read('js/recommendation-action-delegates.js');
   const recommendationActionsSrc = await fetchWithRetry('js/recommendation-actions.js');
   const categoryPageViewSrc = await fetchWithRetry('js/category-page-view.js');
   const categoryViewRenderersSrc = await fetchWithRetry('js/category-view-renderers.js');
@@ -48,9 +51,11 @@ const _realFetch = globalThis.fetch;
   const dashboardRecommendationWidgetSrc = await fetchWithRetry('js/dashboard-recommendation-widget.js');
   await fetchWithRetry('js/context-cards.js');
   const navSrc = await fetchWithRetry('js/nav.js');
-  const lensPagesSrc = await fetchWithRetry('js/lens-pages.js');
   const settingsSrc = await fetchWithRetry('js/settings.js');
-  const settingsDisplaySrc = await fetchWithRetry('js/settings-display-panel.js');
+  const settingsDisplaySrc = await fetchWithRetry('js/components/DisplaySettings.svelte');
+  const recommendationCardSrc = await fetchWithRetry('js/components/RecommendationCard.svelte');
+  const lensActionButtonsSrc = await fetchWithRetry('js/components/LensActionButtons.svelte');
+  const lensContentPresentationSrc = await fetchWithRetry('js/lens-content-presentation.js');
   const chatSystemPromptSrc = await fetchWithRetry('js/chat-system-prompt.js');
   const swSrc = await readServiceWorkerSource(relative => fetchWithRetry(relative));
 
@@ -145,7 +150,7 @@ const _realFetch = globalThis.fetch;
   const noFileResult = await recommendationsModule.renderRecommendationSection('nonexistent.marker', { label: 'Test' });
   assert('renderRecommendationSection returns empty for unknown slot', noFileResult === '' || typeof noFileResult === 'string');
   const { configureRecommendationModuleBridge } = await import('../js/recommendations-runtime.js');
-  const previousRecommendationBridge = configureRecommendationModuleBridge({ renderRecommendationSection: null });
+  const previousRecommendationBridge = configureRecommendationModuleBridge({ renderRecommendationSection: null, getRecommendationSectionView: null });
   const { createRecommendationActions } = await import('../js/recommendation-actions.js');
   const originalGetElementById = document.getElementById;
   const modalStub = { className: 'modal', innerHTML: '' };
@@ -161,8 +166,8 @@ const _realFetch = globalThis.fetch;
     getGlobalRecommendationCandidates: () => [],
     setRecommendationState: () => {},
   }).openRecommendationDetail('missing.slot', 'Missing section');
-  await Promise.resolve();
-  assert('openRecommendationDetail handles missing renderRecommendationSection without stuck loading',
+  for (let turn = 0; turn < 5; turn++) await Promise.resolve();
+  assert('openRecommendationDetail handles missing typed section getter without stuck loading',
     modalStub.innerHTML.includes('No tip details are available for this topic.'));
   document.getElementById = originalGetElementById;
   configureRecommendationModuleBridge(previousRecommendationBridge);
@@ -233,14 +238,16 @@ const _realFetch = globalThis.fetch;
   assert('chat-send.js delegates supplement slot detection through runtime adapter',
     chatSendSrc.includes('detectChatSendSupplementSlots') &&
     chatSendSrc.includes("from './chat-send-runtime.js'"));
-  assert('chat-render.js delegates recommendation rendering through runtime adapter',
-    chatRenderSrc.includes('renderChatRecommendationSections')
-      && chatRenderSrc.includes("from './chat-render-runtime.js'")
-      && !/\bwindow(\.|\s*\[)/.test(chatRenderSrc));
+  const transcriptPresentation = read('/js/chat-transcript-presentation.js');
+  const recommendationsView = read('/js/components/ChatRecommendations.svelte');
+  assert('Chat presentation delegates recommendation rendering through runtime adapter',
+    transcriptPresentation.includes('getChatRecommendationSectionViews(message.recSlots)')
+      && transcriptPresentation.includes("from './chat-render-runtime.js'")
+      && !/\bwindow(\.|\s*\[)/.test(transcriptPresentation));
   assert('chat-send.js detects recSlots for live rendering', chatSendSrc.includes('_recSlots'));
-  assert('chat-render.js has rec-chat-wrapper class', chatRenderSrc.includes('rec-chat-wrapper'));
-  assert('category-view-renderers.js has chart-rec placeholder in header', categoryViewRenderersSrc.includes('chart-rec-'));
-  assert('category-view-renderers.js keeps chart title text separate from tips host', categoryViewRenderersSrc.includes('chart-card-title-text') && categoryViewRenderersSrc.includes('chart-card-tips-host'));
+  assert('Authored Chat recommendations retain the disclosure wrapper', recommendationsView.includes('rec-chat-wrapper') && recommendationsView.includes('<details'));
+  assert('category-view-renderers.js has chart-rec placeholder in header', chartCardSrc.includes('id="chart-rec-{view.id}"') && categoryViewRenderersSrc.includes('renderCategoryChartCard(projectCategoryChartCard('));
+  assert('category-view-renderers.js keeps chart title text separate from tips host', chartCardSrc.includes('class="chart-card-title-text"') && chartCardSrc.includes('class="chart-card-tips-host"'));
   assert('category-page-view.js imports chart card recommendation module', categoryPageViewSrc.includes("from './chart-card-recs.js'"));
   assert('category-page-view.js delegates catalog globals through runtime adapter',
     categoryPageViewSrc.includes("from './category-page-runtime.js'")
@@ -260,21 +267,21 @@ const _realFetch = globalThis.fetch;
     'detectSupplementSlots', 'loadCatalog',
   ].every(name => !(name in window)));
   assert('nav.js exposes recommendations sidebar helper', navSrc.includes('openRecommendationsFromSidebar'));
-  const recNavMarkup = navSrc.match(/data-category="recommendations"[\s\S]{0,500}/)?.[0] || '';
+  const recNavMarkup = sidebarPagesSrc.match(/data-category="recommendations"[\s\S]{0,500}/)?.[0] || '';
   assert('Tips sidebar routes to dedicated page',
-    recNavMarkup.includes("_navNavigateAttrs('recommendations')") &&
+    navSrc.includes("sidebarAction(_navNavigateAttrs('recommendations'), 'navigate', 'recommendations')") && recNavMarkup.includes('view.recommendations.action.name') && recNavMarkup.includes('view.recommendations.action.route') &&
     navSrc.includes("return _navActionAttrs('navigate', { route })") &&
     recNavMarkup.includes('nav-item-label">Tips'));
   assert('Recommendations sidebar item does not open Settings', !recNavMarkup.includes('openSettingsModal'));
-  assert('views.js exposes dedicated Recommendations page', viewsSrc.includes('export function showRecommendations') && viewsSrc.includes('openRecommendationDetail'));
+  assert('views.js exposes dedicated Recommendations page', viewsSrc.includes('showRecommendations,') && viewsSrc.includes('openRecommendationDetail,') && viewsRuntimeSrc.includes('export function showRecommendations') && viewsRuntimeSrc.includes('export function openRecommendationDetail'));
   assert('views.js delegates recommendation actions to recommendation-actions.js',
     viewsSrc.includes("from './recommendation-actions.js'") &&
     recommendationActionsSrc.includes('export function createRecommendationActions'));
   assert('recommendation-actions.js delegates browser globals through recommendations runtime',
     recommendationActionsSrc.includes("from './recommendations-runtime.js'")
-      && recommendationActionsSrc.includes('closeRecommendationsModal')
+      && recommendationActionsSrc.includes('initRecommendationDetailDelegates') && recommendationDelegatesSrc.includes("from './recommendations-runtime.js'") && recommendationDelegatesSrc.includes('closeRecommendationsModal()') && !/\bwindow(\.|\s*\[)/.test(recommendationDelegatesSrc)
       && recommendationActionsSrc.includes('openRecommendationsChatPanel')
-      && recommendationActionsSrc.includes('renderRecommendationsDetailSection')
+      && recommendationActionsSrc.includes('getRecommendationsDetailSectionView')
       && !/\bwindow(\.|\s*\[)/.test(recommendationActionsSrc));
   assert('dashboard has Recommendations widget surface', dashboardWidgetsSrc.includes("id: 'recommendations'") && dashboardWidgetsSrc.includes('renderDashboardRecommendationsWidget'));
   assert('dashboard recommendation widget uses configured runtime actions',
@@ -284,13 +291,16 @@ const _realFetch = globalThis.fetch;
     !dashboardRecommendationWidgetSrc.includes("from './settings-runtime-bridge.js'") &&
     !dashboardRecommendationWidgetSrc.includes('globalThis'));
   assert('hidden tips render a Show action',
-    dashboardRecommendationWidgetSrc.includes("candidate.dismissed ? 'Show' : 'Hide'") &&
-    dashboardRecommendationWidgetSrc.includes("dashboardRecommendationActionAttrs('dismiss'") &&
-    dashboardRecommendationWidgetSrc.includes("on: candidate.dismissed ? 'false' : 'true'"));
+    recommendationCardSrc.includes("card.dismissed ? 'Show' : 'Hide'") &&
+    recommendationCardSrc.includes('data-dashboard-rec-action="dismiss"') &&
+    recommendationCardSrc.includes("data-dashboard-rec-on={card.dismissed ? 'false' : 'true'}"));
   assert('dismissRecommendation can restore a dismissed recommendation',
     /function dismissRecommendation\(id, on = true\)[\s\S]{0,120}setRecommendationState\('dismissed', id, !!on\)/.test(recommendationActionsSrc));
   assert('Recommendations page header directly toggles its dashboard widget',
-    lensPagesSrc.includes("lensPageActionAttrs(dashboardAction, { id: 'recommendations' })") &&
+    lensActionButtonsSrc.includes('data-lens-page-action={button.action}') &&
+    lensActionButtonsSrc.includes('data-lens-page-id={button.id}') &&
+    lensContentPresentationSrc.includes("options.recommendationsVisible ? 'remove-dashboard-widget' : 'add-dashboard-widget'") &&
+    lensContentPresentationSrc.includes("id: 'recommendations'") &&
     !viewsSrc.includes("openDashboardWidgetPicker && window.openDashboardWidgetPicker()\">Add to Dashboard"));
 
   // ═══════════════════════════════════════
@@ -298,7 +308,7 @@ const _realFetch = globalThis.fetch;
   // ═══════════════════════════════════════
   console.log('%c 10. Settings Toggle ', 'font-weight:bold;color:#f59e0b');
 
-  assert('Settings has Tips toggle', settingsDisplaySrc.includes('<label class="settings-label">Tips</label>'));
+  assert('Settings has Tips toggle', /<label[^>]*for="settings-product-recs"[^>]*>Tips<\/label>/.test(settingsDisplaySrc));
   assert('Settings has product-recs toggle', settingsDisplaySrc.includes('settings-product-recs'));
   assert('Settings calls setProductRecsEnabled', settingsSrc.includes('setProductRecsEnabled'));
 
@@ -338,8 +348,21 @@ const _realFetch = globalThis.fetch;
   console.log('%c 13. Security ', 'font-weight:bold;color:#f59e0b');
 
   assert('Product URLs validated to https?', recProductsSrc.includes("'https?://'") || recProductsSrc.includes('/^https?:\\/\\//'));
-  assert('escapeHTML used for product rendering', recProductsSrc.includes('escapeHTML(product.brand)'));
-  assert('escapeHTML used for slot label', recSrc.includes('escapeHTML(label)'));
+  const unsafeLiteral = '<img src=x onerror="alert(1)"> & literal';
+  const {buildProductRow} = await import('../js/recommendations-products.js');
+  const productLiteral = buildProductRow({brand: unsafeLiteral}, 'INTL');
+  const {JSDOM} = await import('jsdom');
+  const productDOM = new JSDOM(productLiteral);
+  assert('Authored product rendering escapes literal catalog markup',
+    productDOM.window.document.querySelector('strong')?.textContent === unsafeLiteral && !productDOM.window.document.querySelector('img,script,[onerror]'));
+  productDOM.window.close();
+  const {renderHTML: renderTipsSection} = await import('../js/components/TipsSection.svelte.html.js');
+  const sectionLiteral = renderTipsSection({view: {variant: 'standard', header: unsafeLiteral, gated: false, banner: false, normalNote: false,
+    genetics: [], tiers: [], products: [], coupon: null, suggestionHref: null, footer: {region: 'Worldwide'}, disclaimer: false}});
+  const sectionDOM = new JSDOM(sectionLiteral);
+  assert('Authored section rendering escapes literal slot labels',
+    sectionDOM.window.document.querySelector('.rec-section-header')?.textContent === unsafeLiteral && !sectionDOM.window.document.querySelector('img,script,[onerror]'));
+  sectionDOM.window.close();
 
   // ═══════════════════════════════════════
   // 14. Light-device catalog wiring

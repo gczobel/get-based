@@ -47,7 +47,11 @@ function privateRequestError(error: unknown, elapsedMs: number, modelId: string)
   return new Error(`${message} ${reservationHint}`);
 }
 
-export async function fetchRoutstrModels() {
+let catalogRequest = 0;
+export async function fetchRoutstrModels({ isCurrent = () => true }: { isCurrent?: () => boolean } = {}) {
+  const request = ++catalogRequest;
+  const selectedNode = getRoutstrNodeUrl(), key = getRoutstrKey();
+  const ownsCatalog = () => request === catalogRequest && getRoutstrNodeUrl() === selectedNode && getRoutstrKey() === key && isCurrent();
   try {
     const nodeUrl = _requireNodeUrl();
     const res = await fetch(nodeUrl + '/v1/models');
@@ -80,6 +84,8 @@ export async function fetchRoutstrModels() {
         };
       }
     }
+    // Reject replaced node/account/view replies before any cache or selection writes.
+    if (!ownsCatalog()) return [];
     localStorage.setItem('labcharts-routstr-pricing', JSON.stringify(pricingCache));
     const visionIds = enabled.filter(function(m) {
       if (!m.id || !m.architecture) return false;
@@ -177,9 +183,10 @@ export async function callRoutstrAPI(opts: ProviderRequestOptions) {
   );
 }
 
-export async function createRoutstrAccount(cashuToken: string) {
+export async function createRoutstrAccount(cashuToken: string, nodeUrl = _requireNodeUrl(), expectedKey = getRoutstrKey(nodeUrl)) {
+  // Capture destination and credential before lazy loading or waiting for the wallet lock.
   const { depositTokenToNode } = await import('./cashu-wallet.js');
-  return depositTokenToNode(_requireNodeUrl(), cashuToken);
+  return depositTokenToNode(nodeUrl, cashuToken, expectedKey);
 }
 
 export async function getRoutstrBalance() {

@@ -94,7 +94,7 @@ export async function refreshRelayStorage(btn?: SyncDiagnoseActionElement | null
   try {
     const result = await fetchOwnerStorageFromRelay();
     if (!result) {
-      showNotification('Could not reach relay storage probe (older relay or offline?)', 'error');
+      showNotification('Could not reach relay storage. Check the Self-service URL in Relay & device options and the relay’s /self/ reverse-proxy routing; the relay may also be offline or outdated.', 'error');
       return;
     }
     showNotification(`Relay reports ${(result.storedBytes / (1024 * 1024)).toFixed(2)} MB`, 'success');

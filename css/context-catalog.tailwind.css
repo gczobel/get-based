@@ -1,0 +1,23 @@
+/* Eager shared catalog utilities; no reset or external rendering backend. */
+@import "tailwindcss/theme.css" layer(gb-theme) prefix(gb);
+@import "tailwindcss/utilities.css" prefix(gb) source(none);
+@import "./ui-tokens.tailwind.css";
+@source "../js/components/ContextCardCatalog.svelte";
+@source "../js/components/ContextNotes.svelte";
+@source "../js/components/ContextCardStatus.svelte";
+@source "../js/context-card-catalog-classes.ts";
+@custom-variant context-catalog (&:is([data-context-cards-view], [data-context-cards-view] *));
+
+@source "../js/components/ContextFoodContaminantsBadge.svelte";
+@custom-variant food-badge (&:is([data-food-contaminant-badge], [data-food-contaminant-badge] *));
+
+@source "../js/components/ContextNutritionLink.svelte";
+@custom-variant nutrition-link (&:is([data-nutrition-context-link], [data-nutrition-context-link] *));
+
+/* Standalone Note editor; reuse native targets without changing shared modal ownership.
+   Textarea utilities retain the original class specificity. Former inline receivers
+   use the existing modal ID to outrank shared normal rules, without !important. */
+@source "../js/components/NoteEditorPresentation.svelte";
+@source "../js/note-editor-classes.ts";
+@custom-variant note-editor-field (&:where(#detail-modal #note-textarea));
+@custom-variant note-editor-inline (&:is(#detail-modal *));

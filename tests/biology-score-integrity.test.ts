@@ -1,3 +1,4 @@
+import {JSDOM} from 'jsdom';
 import type {BiologyOverview,BiologyInterpretedDomain} from '../types/biology-scores.js';
 import type {ScoreProfileContext} from '../js/biology-score-types.js';
 interface FixtureMarker {values:Array<number|null|undefined>;name?:string|undefined;[key:string]:unknown}
@@ -378,7 +379,12 @@ describe('Biology Scores integrity', () => {
     expect(all.find(i => i.id === 'fluidFiltrationCoherence')!.title).toBe('Kidney & Filtration');
     expect(all.some(i => /hydration/i.test(i.title))).toBe(false);
     const html = (renderDashboardBiologicalCoherenceWidget as unknown as (ctx:{data:FixtureData},compute:typeof scores)=>ReturnType<typeof renderDashboardBiologicalCoherenceWidget>)({ data: dataset() }, scores);
-    expect(html).toContain('db-hero-bio-num">—<small>'); expect(html).not.toContain('locked');
+    const number = new JSDOM(html).window.document.querySelector('.db-hero-bio-num');
+    expect(number).not.toBeNull();
+    expect(number!.firstChild!.nodeType).toBe(3);
+    expect(number!.firstChild!.nodeValue).toBe('—');
+    expect(number!.querySelector('small')!.textContent).toBe('/100');
+    expect(html).not.toContain('locked');
     expect(getBiologyScoreMapping().find(i => i.id === 'ironHandling')!.inputs.filter(i => i.core)).toHaveLength(3);
   });
   it('retains canonical precision through a filtered HbA1c display projection', () => {
@@ -440,7 +446,11 @@ describe('Biology Scores integrity', () => {
     expect(getScorePresentation(s)).toMatchObject({ value: s.rawScore, historical: true, status: 'Historical score' });
     let html = renderScoreDetail(s);
     expect(html).toContain('Historical score'); expect(html).toContain('Jan 2026');
-    expect(html).toContain(`biology-score-dial-number">${s.rawScore}`);
+    const dial = new JSDOM(html).window.document.querySelector('.biology-score-dial-number');
+    expect(dial).not.toBeNull();
+    expect(dial!.firstChild!.nodeType).toBe(3);
+    expect(dial!.firstChild!.nodeValue).toBe(String(s.rawScore));
+    expect(dial!.querySelector('small')!.textContent).toBe('/100');
     d.categories.thyroid!.markers.ft4!.singleDate = '2024-07-08';
     s = score(d, 'thyroidCoherence');
     expect(getScorePresentation(s).status).toBe('Mixed-date estimate');

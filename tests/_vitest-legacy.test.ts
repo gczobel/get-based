@@ -201,6 +201,7 @@ const LEGACY_TESTS = [
   './test-client-list-delegated-actions.ts',
   './test-provider-wallet-delegated-actions.ts',
   './test-provider-panel-renderers-runtime.ts',
+  './test-ppq-provider.ts',
   './test-provider-panel-delegated-actions.ts',
   './test-chat-empty-state-delegated-actions.ts',
   './test-modal-lifecycle-integrations.js',
@@ -305,5 +306,8 @@ for (const path of LEGACY_TESTS) {
       throw importError;
     }
     expect(fails, fails.join('\n  ')).toHaveLength(0);
-  });
+  // These cold integrations load JSDOM and large compiled UI graphs under V8
+  // coverage. The audit also parses the complete production DOM-sink corpus.
+  // Bound that harness work separately from shipping performance gates.
+  }, path === './test-no-native-dialogs.js' || path === './test-biology-scores.js' || path === './test-audit.ts' ? 30_000 : undefined);
 }

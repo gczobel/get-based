@@ -1,0 +1,13 @@
+// Keep the established module URL and exports while sharing provider controls.
+export {
+  CREDENTIAL_PANEL as OR_PANEL,
+  CREDENTIAL_COPY as OR_COPY,
+  CREDENTIAL_INPUT as OR_INPUT,
+  PROVIDER_ACTIONS as OR_ACTIONS,
+  CREDENTIAL_BUTTON as OR_BUTTON,
+  CREDENTIAL_PRIMARY as OR_PRIMARY,
+  CREDENTIAL_SECONDARY as OR_SECONDARY,
+  PROVIDER_LINK as OR_LINK,
+  PROVIDER_NOTICE as OR_NOTICE,
+  PROVIDER_TONES as OR_TONES,
+} from './provider-settings-classes.js';

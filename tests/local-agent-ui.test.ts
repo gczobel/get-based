@@ -7,36 +7,41 @@ import { describe, expect, it } from 'vitest';
 import {
   detectCompanionPlatform, getCLIAgentModelProvider, getCompanionCommand, getLinuxCompanionInstallCommand, getLinuxCompanionRunCommand,
 } from '../js/settings-cli-agent-panel.js';
+import { buildAiSettingsSnapshot } from '../js/ai-settings-presentation.js';
 import { getCLIAgentBrandAsset, renderCLIAgentBrandIcon } from '../js/cli-agent-brand-assets.js';
+import { renderHTML as renderProviderQuizHTML } from '../js/components/ChatProviderQuiz.svelte.html.js';
 
 const read = (path: string) => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8');
 
 describe('local agent selection UI', () => {
   it('places CLI inference in AI providers and keeps connection internals hidden', () => {
-    const source = read('js/settings-cli-agent-panel.ts');
+    const source = read('js/settings-cli-agent-panel.ts') + read('js/components/CliAgentSettings.svelte') + read('js/cli-companion-commands.ts');
     const settings = read('js/settings.js');
     const agentAccess = read('js/settings-agent-access-panel.js');
     expect(source).toContain('Installed CLIs');
     expect(source).toContain('data-settings-action="rescan-cli-agents"');
-    expect(source).toContain('data-settings-action="toggle-cli-codex"');
-    expect(settings).toContain('data-settings-action="show-cli-agent-provider"');
-    expect(settings).toContain('CLI agents');
+    expect(source).toContain('action="toggle-cli-codex"');
+    expect(read('js/components/SettingsToggle.svelte')).toContain('data-settings-action={action}');
+    expect(read('js/components/AiSettings.svelte')).toContain("choice.id === 'cli' ? 'show-cli-agent-provider' : 'switch-ai-provider'");
+    expect(buildAiSettingsSnapshot({ enabled: true, hideProviders: false, provider: 'openrouter', backend: 'direct' }).choices.find(choice => choice.id === 'cli')?.label).toBe('CLI agents');
     expect(source).not.toContain('settings-beta-badge">Experimental');
     expect(agentAccess).not.toContain('Installed CLIs');
     expect(source).not.toContain('id="agent-chat-endpoint"');
     expect(source).not.toContain('id="agent-chat-token"');
     expect(source).not.toContain('Paste the Agent Host pairing token');
-    expect(source).toContain('Local CLI sessions receive health data only through getbased&rsquo;s approved tools');
-    expect(source).toContain('A personal gateway may use tools already configured there under that gateway&rsquo;s own approval policy');
-    expect(source).toContain('it does not receive getbased&rsquo;s local tools');
+    expect(source).toContain('Local CLI sessions receive health data only through getbased’s approved tools');
+    expect(source).toContain('A personal gateway may use tools already configured there under that gateway’s own approval policy');
+    expect(source).toContain('it does not receive getbased’s local tools');
     expect(source).toContain('control-cli-companion');
     expect(source).toContain('copy-cli-companion-run');
     expect(source).toContain('copy-cli-companion-start');
     expect(source).toContain('Connect your installed CLI agents');
     expect(source).toContain('getbased-companion.mjs');
     expect(source).toContain('Review the source on GitHub');
-    expect(settings).toContain('controlCLICompanion');
-    expect(settings).toContain('copyCLICompanionRunCommand');
+    expect(settings).not.toContain('controlCLICompanion');
+    expect(settings).not.toContain('copyCLICompanionRunCommand');
+    expect(source).toContain('cliController.control(action)');
+    expect(source).toContain("cliController.copy('run')");
   });
 
   it('keeps provider selection out of the chat header', () => {
@@ -61,7 +66,7 @@ describe('local agent selection UI', () => {
   });
 
   it('uses current provider identification assets and publishes their provenance', () => {
-    const settings = read('js/settings.js');
+    const choices = buildAiSettingsSnapshot({ enabled: true, hideProviders: false, provider: 'openrouter', backend: 'direct' }).choices;
     const serviceWorker = readServiceWorkerSource(relative => read(relative));
     const expectedHashes = {
       openrouter: '5b49593d44e6aa41011be377e182cd89e57473f1948e0dfb128f99a92adfc68d',
@@ -70,7 +75,7 @@ describe('local agent selection UI', () => {
     };
     for (const [provider, expectedHash] of Object.entries(expectedHashes)) {
       const path = `brands/ai-provider-${provider}.svg`;
-      expect(settings).toContain(`src="/${path}"`);
+      expect(choices.find(choice => choice.id === provider)?.asset).toBe(`/${path}`);
       expect(serviceWorker).toContain(`/${path}`);
       expect(createHash('sha256').update(read(path)).digest('hex')).toBe(expectedHash);
     }
@@ -78,15 +83,19 @@ describe('local agent selection UI', () => {
     const ppqBytes = Buffer.from(ppqSvg.match(/base64,([^\"]+)/)?.[1] || '', 'base64');
     expect(createHash('sha256').update(ppqBytes).digest('hex'))
       .toBe('d1c6cab3f71ed07d4ebf086efbaa2e517dadfd5009a564b15780c4be5cda9de5');
-    expect(settings).toContain('src="/brands/ai-provider-ppq.svg"');
+    expect(choices.find(choice => choice.id === 'ppq')?.asset).toBe('/brands/ai-provider-ppq.svg');
     expect(serviceWorker).toContain('/brands/ai-provider-ppq.svg');
     expect(read('brands/AI_PROVIDERS.md')).toContain('do not imply');
   });
 
   it('offers existing AI accounts in chat onboarding', () => {
     const source = read('js/chat-onboarding.js');
-    expect(source).toContain('Use an AI subscription I already have');
-    expect(source).toContain("branch === 'cli'");
+    const choices = renderProviderQuizHTML({ branch: '', name: 'Test' });
+    const cli = renderProviderQuizHTML({ branch: 'cli', name: 'Test' });
+    expect(choices).toContain('Use an AI subscription I already have');
+    expect(choices).toContain('data-chat-provider-branch="cli"');
+    expect(cli).toContain('data-chat-provider="cli"');
+    expect(cli).toContain('data-chat-onboarding-action="open-provider-settings"');
     expect(source).toContain("provider === 'cli'");
   });
 
@@ -111,11 +120,11 @@ describe('local agent selection UI', () => {
   });
 
   it('renders Codex model and reasoning controls from the CLI catalog', () => {
-    const source = read('js/settings-cli-agent-panel.ts');
+    const source = read('js/settings-cli-agent-panel.ts') + read('js/cli-agent-models-presentation.ts') + read('js/components/CliAgentModels.svelte');
     expect(source).toContain("action: 'set-cli-agent-model'");
     expect(source).toContain("action: 'set-cli-agent-effort'");
     expect(source).toContain('listAgentModels');
-    expect(source).toContain('class="cli-agent-picker"');
+    expect(source).toContain('class="cli-agent-picker ');
     expect(source).not.toContain('<select id="cli-agent-model"');
     expect(source).not.toContain('<select id="cli-agent-effort"');
     expect(source).toContain("action: 'set-cli-agent-provider-filter'");

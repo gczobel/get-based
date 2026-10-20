@@ -7,6 +7,8 @@ import { state } from './state.js';
 import { bindSyncAppliedRefresh } from './utils.js';
 import { addUtilsRuntimeListener } from './utils-runtime.js';
 import { isDemoProfileId } from './profile-sync-policy.js';
+import { MESSENGER_TOKEN_KEY, MESSENGER_ENABLED_KEY, MESSENGER_CONTEXT_KEY_KEY,
+  AGENT_ACCESS_MIGRATION_PROFILE_KEY, retireAgentAccessLegacySource } from './agent-access-legacy-source.js';
 
 export interface AgentAccessRecord extends Record<string, unknown> {
   version?: number;
@@ -26,22 +28,23 @@ interface AgentAccessProfile {
 }
 interface MessengerOwner { id?: unknown; writeKey?: unknown }
 
-const MESSENGER_TOKEN_KEY = 'labcharts-messenger-token';
-const MESSENGER_ENABLED_KEY = 'labcharts-messenger-enabled';
-const MESSENGER_CONTEXT_KEY_KEY = 'labcharts-agent-context-key';
 const AGENT_ACCESS_SYNC_VERSION = 1;
 
 let _getSyncRelay: () => string = () => 'wss://sync.getbased.health';
 let _getAppOwner: () => MessengerOwner | null = () => null;
 let _debug: (...args: unknown[]) => void = () => {};
-let _buildLabContext: (options?: LabContextOptions) => string = () => '';
+export const buildDefaultSyncMessengerContext = (_options?: LabContextOptions) => '';
+let _buildLabContext: (options?: LabContextOptions) => string = buildDefaultSyncMessengerContext;
+type ContextPreparation = () => Promise<(options?: LabContextOptions) => string>;
+let _prepareContext: ContextPreparation | null = null;
 let _buildWearableSeriesSection: typeof buildWearableSeries = async () => '';
 let _getAgentWearableSeriesDays: () => number = () => 0;
 let _getProfiles: () => StoredProfileRecord[] = () => [];
 let _contextPushTimer: ReturnType<typeof setTimeout> | null = null;
 let _contextPushInFlight = false;
 let _blockedContextPushIdentity = '';
-let _agentAccessMigrationDirty = false;
+let agentAccessMigrationDirty = new WeakSet<object>();
+let unclaimedAgentAccessSource = new WeakSet<object>();
 
 function cancelPendingContextPush() {
   if (_contextPushTimer != null) {
@@ -76,6 +79,14 @@ export function configureSyncMessenger({
   if (typeof buildWearableSeriesSection === 'function') _buildWearableSeriesSection = buildWearableSeriesSection;
   if (typeof getAgentWearableSeriesDays === 'function') _getAgentWearableSeriesDays = getAgentWearableSeriesDays;
   if (typeof getProfiles === 'function') _getProfiles = getProfiles;
+}
+
+// Separate from the existing configuration object: its getter order and
+// synchronous injected-provider contract remain unchanged.
+export function configureSyncMessengerContextPreparation(prepare: ContextPreparation | null) {
+  const previous = _prepareContext;
+  _prepareContext = typeof prepare === 'function' ? prepare : null;
+  return previous;
 }
 
 function currentSyncRelay() {
@@ -126,6 +137,34 @@ function writeAgentAccess(patch: Partial<AgentAccessRecord>) {
   return next;
 }
 
+function agentAccessProfileId() {
+  return state.currentProfile || (typeof localStorage !== 'undefined' && localStorage.getItem('labcharts-active-profile')) || 'default';
+}
+
+function legacySourceBelongsToCurrentProfile() {
+  try {
+    const owner = localStorage.getItem(AGENT_ACCESS_MIGRATION_PROFILE_KEY);
+    return !owner || owner === agentAccessProfileId();
+  } catch { return false; }
+}
+
+function hasBoundLegacyAgentAccessSource() {
+  try { return localStorage.getItem(AGENT_ACCESS_MIGRATION_PROFILE_KEY) === agentAccessProfileId(); }
+  catch { return false; }
+}
+
+function claimLegacyAgentAccessSource() {
+  try {
+    if (!legacySourceBelongsToCurrentProfile()) return false;
+    const profileId = agentAccessProfileId();
+    localStorage.setItem(AGENT_ACCESS_MIGRATION_PROFILE_KEY, profileId);
+    return localStorage.getItem(AGENT_ACCESS_MIGRATION_PROFILE_KEY) === profileId;
+  } catch {
+    dbg('Agent Access legacy source could not be bound to its profile; migration remains retryable');
+    return false;
+  }
+}
+
 function legacyLocalEnabled() {
   try { return localStorage.getItem(MESSENGER_ENABLED_KEY) === 'true'; } catch { return false; }
 }
@@ -164,29 +203,28 @@ let _lastAgentAccessMigrationSignature: string | null = null;
 
 export function _resetAgentAccessMigrationStateForTesting() {
   _lastAgentAccessMigrationSignature = null;
-  _agentAccessMigrationDirty = false;
+  agentAccessMigrationDirty = new WeakSet<object>();
+  unclaimedAgentAccessSource = new WeakSet<object>();
   _contextPushInFlight = false;
   _blockedContextPushIdentity = '';
 }
 
 export function isAgentAccessMigrationDirty() {
-  return _agentAccessMigrationDirty;
+  return agentAccessMigrationDirty.has(state.importedData);
 }
 
 export function clearAgentAccessMigrationDirty() {
-  _agentAccessMigrationDirty = false;
+  agentAccessMigrationDirty.delete(state.importedData);
 }
 
 export function clearLegacyAgentAccessSecrets() {
-  if (typeof localStorage === 'undefined') return;
   try {
-    localStorage.removeItem(MESSENGER_TOKEN_KEY);
-    localStorage.removeItem(MESSENGER_CONTEXT_KEY_KEY);
+    if (retireAgentAccessLegacySource(agentAccessProfileId())) unclaimedAgentAccessSource.delete(state.importedData);
   } catch {}
 }
 
 function agentAccessMigrationSignature(existing: AgentAccessRecord | null, enabled: boolean, token: string | null, legacyContextKey: string | null) {
-  const pid = state.currentProfile || (typeof localStorage !== 'undefined' && localStorage.getItem('labcharts-active-profile')) || 'default';
+  const pid = agentAccessProfileId();
   // Deliberately exclude importedData.agentAccessWearableSeriesDays: that split
   // preference scalar is mirrored by setAgentAccessWearableSeriesDays() and
   // refreshAgentAccessFromSyncedProfile(), so preference-only changes must not
@@ -206,6 +244,10 @@ function agentAccessMigrationSignature(existing: AgentAccessRecord | null, enabl
 
 export function migrateLocalAgentAccessToProfile() {
   const existing = currentAgentAccess();
+  if (!legacySourceBelongsToCurrentProfile()) return existing;
+  // A reload may already contain the committed record, but the source can only
+  // be retired after confirming persistence, never from a presentation refresh.
+  if (existing && hasBoundLegacyAgentAccessSource()) agentAccessMigrationDirty.add(state.importedData);
   const enabled = legacyLocalEnabled();
   const token = legacyLocalToken();
   const legacyContextKey = legacyLocalContextKey();
@@ -260,6 +302,11 @@ export function migrateLocalAgentAccessToProfile() {
     return null;
   }
   if (!state.importedData) ((state as { importedData: AgentAccessProfile | null })).importedData = { entries: [] };
+  if (!claimLegacyAgentAccessSource()) {
+    unclaimedAgentAccessSource.add(state.importedData);
+    return existing;
+  }
+  unclaimedAgentAccessSource.delete(state.importedData);
   ((state.importedData as AgentAccessProfile)).agentAccessWearableSeriesDays = seriesDays;
   const migrated = writeAgentAccess({
     enabled: !!(enabled && token && contextKey),
@@ -267,7 +314,7 @@ export function migrateLocalAgentAccessToProfile() {
     contextKey: contextKey || null,
     migratedFromLocalStorageAt: nowTs(),
   });
-  _agentAccessMigrationDirty = true;
+  agentAccessMigrationDirty.add(state.importedData);
   _lastAgentAccessMigrationSignature = agentAccessMigrationSignature(migrated, enabled, token, legacyContextKey);
   return migrated;
 }
@@ -275,13 +322,15 @@ export function migrateLocalAgentAccessToProfile() {
 function mirrorAgentAccessToLegacyLocalStorage(aa: AgentAccessRecord | null = currentAgentAccess()) {
   if (!aa || typeof localStorage === 'undefined') return;
   try {
-    if (aa.enabled) localStorage.setItem(MESSENGER_ENABLED_KEY, 'true');
-    else localStorage.setItem(MESSENGER_ENABLED_KEY, 'false');
-    // One-shot legacy migration source only: after Agent Access is represented
-    // inside encrypted profile data, never mirror raw bearer/decryption secrets
-    // back into same-origin localStorage. UI reads credentials from synced
-    // `state.importedData.agentAccess` instead.
-    clearLegacyAgentAccessSecrets();
+    // Keep an existing source intact until the migrated profile is durably
+    // saved. Another profile must neither consume nor retire that source.
+    if (isAgentAccessMigrationDirty() || hasBoundLegacyAgentAccessSource() || unclaimedAgentAccessSource.has(state.importedData)) return;
+    if (legacySourceBelongsToCurrentProfile()) {
+      localStorage.setItem(MESSENGER_ENABLED_KEY, aa.enabled ? 'true' : 'false');
+      clearLegacyAgentAccessSecrets();
+    }
+    // Never write bearer/decryption secrets back into localStorage. This mirror
+    // contains only the toggle and series preference after source retirement.
     const wearableSeriesDays = typeof aa?.wearableSeriesDays === 'number'
       ? normalizeAgentSeriesDays(aa.wearableSeriesDays)
       : currentAgentWearableSeriesDays(aa);
@@ -478,11 +527,38 @@ export function generateMessengerContextKey() {
   return key;
 }
 
-export function revokeMessengerTokenRemote(token: string | null | undefined) {
+/** An opaque operation scope retains signing material inside the service. */
+export interface AgentAccessOperationScope { isCurrent(): boolean }
+interface AgentAccessOperationOrigin {
+  owner: MessengerOwner | null; profileId: string; relay: string;
+}
+const operationOrigins = new WeakMap<AgentAccessOperationScope, AgentAccessOperationOrigin>();
+export function captureAgentAccessOperationScope(): AgentAccessOperationScope {
+  const activeProfile = state.currentProfile;
+  const profileId = activeProfile || (typeof localStorage !== 'undefined' && localStorage.getItem('labcharts-active-profile')) || 'default';
+  const data = state.importedData;
+  const current = currentAppOwner();
+  const ownerId = ownerIdString(current);
+  const writeKey = ownerWriteKeyBytes(current)?.slice() || null;
+  const relay = currentSyncRelay();
+  const scope = { isCurrent() {
+    const latest = currentAppOwner();
+    const latestKey = ownerWriteKeyBytes(latest);
+    const sameKey = writeKey === null ? latestKey === null
+      : latestKey?.length === writeKey.length && writeKey.every((byte, index) => latestKey[index] === byte);
+    return state.currentProfile === activeProfile && state.importedData === data
+      && ownerIdString(latest) === ownerId && sameKey && currentSyncRelay() === relay;
+  } };
+  operationOrigins.set(scope, { owner: ownerId && writeKey ? { id: ownerId, writeKey } : null,
+    profileId, relay: relay.replace(/^wss:\/\//, 'https://').replace(/^ws:\/\//, 'http://') });
+  return Object.freeze(scope);
+}
+
+export function revokeMessengerTokenRemote(token: string | null | undefined, scope?: AgentAccessOperationScope) {
   if (!token) return;
-  const owner = currentAppOwner();
-  const relay = currentSyncRelay().replace(/^wss:\/\//, 'https://').replace(/^ws:\/\//, 'http://');
-  const profileId = state.currentProfile || (typeof localStorage !== 'undefined' && localStorage.getItem('labcharts-active-profile')) || 'default';
+  const origin = operationOrigins.get(scope || captureAgentAccessOperationScope());
+  if (!origin) throw new Error('Agent Access operation scope is invalid');
+  const { owner, relay, profileId } = origin;
   const relayContext = '';
   const timestamp = Date.now();
   signAgentContextRequest({ owner, token, profileId, relayContext, timestamp })
@@ -559,6 +635,8 @@ export function pushContextToGateway() {
   }
   const contextKey = ensureMessengerContextKey();
   const profileId = state.currentProfile || 'default';
+  const scope = captureAgentAccessOperationScope();
+  const origin = operationOrigins.get(scope)!;
   // Demo profiles are intentionally local-only. Agent Access uses a separate
   // relay endpoint, so the Evolu push guard alone is not sufficient.
   if (isDemoProfileId(profileId, _getProfiles())) return;
@@ -569,17 +647,50 @@ export function pushContextToGateway() {
     _contextPushInFlight = true;
     try {
       const latest = getAgentAccessState();
-      if (state.currentProfile !== profileId
+      if (!scope.isCurrent() || state.currentProfile !== profileId
         || latest.enabled !== true
         || latest.token !== token
         || latest.contextKey !== contextKey) {
         dbg(`Skipped stale Agent Access context push (profile: ${profileId})`);
         return;
       }
+      const configured = {
+        getSyncRelay: _getSyncRelay, getAppOwner: _getAppOwner, debug: _debug,
+        buildLabContext: _buildLabContext, prepareContext: _prepareContext,
+        buildWearableSeriesSection: _buildWearableSeriesSection,
+        getAgentWearableSeriesDays: _getAgentWearableSeriesDays, getProfiles: _getProfiles,
+      };
+      const preparationOwnerCurrent = () => {
+        const access = getAgentAccessState();
+        return scope.isCurrent() && state.currentProfile === profileId
+          && access.enabled === true && access.token === token && access.contextKey === contextKey
+          && _blockedContextPushIdentity !== pushIdentity
+          && configured.getSyncRelay === _getSyncRelay && configured.getAppOwner === _getAppOwner
+          && configured.debug === _debug && configured.buildLabContext === _buildLabContext
+          && configured.prepareContext === _prepareContext
+          && configured.buildWearableSeriesSection === _buildWearableSeriesSection
+          && configured.getAgentWearableSeriesDays === _getAgentWearableSeriesDays
+          && configured.getProfiles === _getProfiles;
+      };
+      const preparationCurrent = () => {
+        if (!preparationOwnerCurrent()) return false;
+        const demo = isDemoProfileId(profileId, _getProfiles());
+        // Profile/tag callbacks can replace ownership while being read.
+        return !demo && preparationOwnerCurrent();
+      };
+      let preparedBuild: ((options?: LabContextOptions) => string) | null = null;
+      if (_buildLabContext === buildDefaultSyncMessengerContext && configured.prepareContext) {
+        if (!origin.owner) return;
+        preparedBuild = await configured.prepareContext();
+        if (!preparationCurrent()) {
+          dbg(`Skipped stale Agent Access context after preparation (profile: ${profileId})`);
+          return;
+        }
+      }
       // Manage Context remains the source-level gate for both in-app chat and
       // external Agent Access. Enabling Agent Access is transport consent; it
       // does not silently re-enable profile sources the user turned off.
-      const baseContext = buildLabContext();
+      const baseContext = preparedBuild ? preparedBuild() : buildLabContext();
       // Optional wearable daily-series section - user picks 0 (off) / 7 /
       // 30 / 90 days in Settings -> Agent Access. It also respects the
       // Wearables source toggle and reads L1 IDB on the
@@ -591,22 +702,32 @@ export function pushContextToGateway() {
       const seriesBlock = seriesDays > 0
         ? await buildWearableSeriesSection(seriesDays).catch(() => '')
         : '';
+      if (!preparationCurrent()) {
+        dbg(`Skipped stale Agent Access context after preparation (profile: ${profileId})`);
+        return;
+      }
       const context = seriesBlock ? `${baseContext}\n${seriesBlock}\n` : baseContext;
       const encryptedContext = await encryptAgentContextForRelay(context, contextKey, profileId);
       // The gateway only needs the active profileId - do not leak the full
       // profile-name list. Profile names can include real names; keep them
       // out of the relay envelope entirely.
-      const relay = currentSyncRelay().replace(/^wss:\/\//, 'https://').replace(/^ws:\/\//, 'http://');
+      const relay = origin.relay;
 
       const relayContext = JSON.stringify({ encryptedContext });
       const timestamp = Date.now();
       const ownerProof = await signAgentContextRequest({
-        owner: currentAppOwner(),
+        owner: origin.owner,
         token,
         profileId,
         relayContext,
         timestamp,
       });
+      const latestBeforeSend = getAgentAccessState();
+      if (!preparationCurrent() || !scope.isCurrent() || latestBeforeSend.enabled !== true
+        || latestBeforeSend.token !== token || latestBeforeSend.contextKey !== contextKey) {
+        dbg(`Skipped stale Agent Access context after preparation (profile: ${profileId})`);
+        return;
+      }
       const res = await fetch(`${relay}/api/context`, {
         method: 'POST',
         headers: {

@@ -2,17 +2,8 @@ import type { ActiveData } from './data-view-types.js';
 import type { NormalizedProfileData } from '../types/app-state.js';
 
 type ReviewData = Partial<ActiveData> | null | undefined;
-interface ContextSuggestion { flag: string; value?: boolean; confidence: string; reason?: string; evidence?: string[]; affects?: string[] }
-export interface BiologyContextReview {
-  summary?: string; suggestions?: ContextSuggestion[]; profileId?: string; updatedAt?: number; range?: string;
-  fingerprint?: string; fingerprintsByRange?: Record<string, string>; contextSignature?: string;
-  contextSignaturesByRange?: Record<string, string>; unlockedRanges?: string[]; dismissed?: string[];
-  generation?: { provider: string; modelId: string; generatedAt: number; usage?: unknown };
-}
-interface ContextAIDeps {
-  callClaudeAPI: typeof callAssistantFeatureAI; hasAIProvider: typeof hasAssistantFeatureProvider;
-  isAIPaused: typeof isAIPaused; navigate: ((route?: string) => void) | null;
-}
+import type { BiologyContextReview } from './biology-score-context-contract.js';
+export type { BiologyContextReview } from './biology-score-context-contract.js';
 interface GeneticContext { source?: unknown; apoe?: unknown; mtdna?: unknown; mtDNA?: unknown; mtdnaHaplogroup?: unknown; mtDnaHaplogroup?: unknown; snps?: Record<string, { effect?: unknown; valence?: unknown; category?: string } | null> }
 type WearableSummary = NonNullable<Parameters<typeof getSleepContextMismatch>[1]> & { metrics: Record<string, NonNullable<Parameters<typeof getSleepContextMismatch>[1]>['metrics'][string] & { baselineP25?: unknown; baselineP75?: unknown }> };
 type ContextProfile = Pick<Partial<NormalizedProfileData>, 'diagnoses' | 'exercise' | 'sleepRest' | 'stress' | 'diet' | 'loveLife' | 'environment' | 'lightCircadian' | 'supplements' | 'healthGoals' | 'contextNotes' | 'interpretiveLens' | 'menstrualCycle'> & {
@@ -35,40 +26,27 @@ import { filterDatesByRange, getActiveData, invalidateActiveDataCache, saveImpor
 import {
   isGeneticsPriorityInAIContext,
   isGeneticsSummaryInAIContext,
-  getSleepContextMismatch,
   isInsightContextCardsEnabled,
   isLabMarkersContextEnabled,
   isLightSunContextEnabled,
   isSupplementsMedsContextEnabled,
-  isWearableContextEnabled,
-} from './lab-context.js';
-import { isAIPaused } from './api.js';
-import { callAssistantFeatureAI, getAssistantFeatureIdentity, hasAssistantFeatureProvider } from './ai-feature-routing.js';
+} from './lab-context-settings.js';
+import { getSleepContextMismatch, isWearableContextEnabled } from './lab-context-wearables.js';
+import { getAssistantFeatureIdentity } from './ai-feature-routing.js';
 import { getProfiles } from './profile.js';
 import { state } from './state.js';
-import { escapeAttr, escapeHTML, hashString, showNotification } from './utils.js';
+import {projectBiologyContextReview} from './biology-context-presentation.js';
+import {renderHTML as renderContext} from './components/BiologyContextPresentation.svelte.html.js';
+import { hashString, showNotification } from './utils.js';
 import { sortHealthGoalsByPriority } from './health-goals-utils.js';
 import { getCurrentSupplements, getSupplementsOverlappingRange } from './supplement-medication-domain.js';
 import { resolveActiveMarkerPath } from './marker-placement.js';
 import { buildCompactSupplementContextRecords } from './supplement-context.js';
 
-const biologyScoreContextAIDeps: ContextAIDeps = {
-  callClaudeAPI: callAssistantFeatureAI,
-  hasAIProvider: hasAssistantFeatureProvider,
-  isAIPaused,
-  navigate: null,
-};
-
-export function configureBiologyScoreContextAIDeps(deps: Partial<ContextAIDeps> = {}) {
-  const previous = { ...biologyScoreContextAIDeps };
-  if (typeof deps.callClaudeAPI === 'function') biologyScoreContextAIDeps.callClaudeAPI = deps.callClaudeAPI;
-  if (typeof deps.hasAIProvider === 'function') biologyScoreContextAIDeps.hasAIProvider = deps.hasAIProvider;
-  if (typeof deps.isAIPaused === 'function') biologyScoreContextAIDeps.isAIPaused = deps.isAIPaused;
-  if (Object.hasOwn(deps, 'navigate') && (deps.navigate === null || typeof deps.navigate === 'function')) {
-    biologyScoreContextAIDeps.navigate = deps.navigate!;
-  }
-  return previous;
-}
+import { biologyScoreContextAIDeps } from './biology-score-context-runtime.js';
+export { configureBiologyScoreContextAIDeps } from './biology-score-context-runtime.js';
+import { CONTEXT_REVIEW_RANGES } from './biology-score-context-contract.js';
+export { CONTEXT_REVIEW_RANGES } from './biology-score-context-contract.js';
 
 const FLAG_LABELS: Record<string, string> = {
   lowMuscleMass: 'Low muscle / creatinine unreliable',
@@ -80,7 +58,6 @@ const FLAG_LABELS: Record<string, string> = {
 const FLAG_KEYS = Object.keys(FLAG_LABELS);
 const applicableFlagKeys = () => FLAG_KEYS.filter(flag => flag !== 'postmenopause' || state.profileSex === 'female');
 const flagLabel = (flag: string) => flag === 'hormoneTherapy' && state.profileSex !== 'female' ? 'Hormone therapy / TRT' : FLAG_LABELS[flag];
-export const CONTEXT_REVIEW_RANGES = ['all', '1y', '6m', '3m'];
 let installed = false;
 
 function safeContextText(value: unknown, max = 500) {
@@ -433,32 +410,23 @@ export async function dismissBiologyScoreContextFlag(flag: string) {
   }, 'biology-score-context-dismiss');
 }
 
-function renderSuggestion(s: ContextSuggestion) {
-  const active = !!((state.importedData as ContextProfile))?.diagnoses?.flags?.[s.flag];
-  return `<div class="biology-context-suggestion biology-context-${escapeAttr(s.confidence)}">
-    <div><strong>${escapeHTML(flagLabel(s.flag))}</strong><span>${escapeHTML(s.confidence)} confidence${active ? ' · active' : ''}</span></div>
-    <p>${escapeHTML(s!.reason || 'AI suggested this context modifier.')}</p>
-    ${s.evidence?.length ? `<ul>${s.evidence.map(e => `<li>${escapeHTML(e)}</li>`).join('')}</ul>` : ''}
-    ${s.affects?.length ? `<small>Affects: ${escapeHTML(s.affects.join(', '))}</small>` : ''}
-    ${active ? '' : `<div class="biology-context-actions"><button type="button" class="dashboard-action-btn dashboard-action-btn-secondary" data-biology-score-action="apply-context-ai" data-context-flag="${escapeAttr(s.flag)}">Apply flag</button><button type="button" class="dashboard-action-btn dashboard-action-btn-secondary" data-biology-score-action="dismiss-context-ai" data-context-flag="${escapeAttr(s.flag)}">Dismiss</button></div>`}
-  </div>`;
+/** Snapshot presentation inputs without transferring request or write ownership. */
+export function getBiologyContextReviewView(data: ReviewData = null) {
+  const review = ((state.importedData as ContextProfile))?.biologyScoreContextAI;
+  return projectBiologyContextReview({
+    review,
+    current: data ? hasCurrentBiologyScoreContextReview(data) : !!review?.updatedAt,
+    female: state.profileSex === 'female',
+    fields: applicableFlagKeys().map(flag => ({
+      id: flag,
+      label: flagLabel(flag) ?? '',
+      checked: !!((state.importedData as ContextProfile))?.diagnoses?.flags?.[flag],
+    })),
+  });
 }
 
 export function renderBiologyScoreContextAI(data: ReviewData = null) {
-  const review = ((state.importedData as ContextProfile))?.biologyScoreContextAI;
-  const suggestions = Array.isArray(review?.suggestions) ? review.suggestions!.filter(s => applicableFlagKeys().includes(s.flag)) : [];
-  const current = data ? hasCurrentBiologyScoreContextReview(data) : !!review?.updatedAt;
-  const hasReview = !!review?.updatedAt;
-  const buttonLabel = hasReview ? 'Refresh AI review' : 'Review context with AI';
-  const status = current ? 'Context is up to date.' : hasReview ? 'Context changed. Refresh recommended; your scores stay available.' : 'Optional AI review; scores already use your saved profile and collection context.';
-  return `<section class="biology-context-ai-panel${current ? '' : ' biology-context-ai-required'}">
-    <div class="biology-context-ai-head"><div><p>Add context not already captured in your profile or lab entries.</p></div><button type="button" class="dashboard-action-btn dashboard-action-btn-primary" data-biology-score-action="analyze-context-ai">${buttonLabel}</button></div>
-    <div class="biology-score-context-fields" role="group" aria-label="Manual score context">${applicableFlagKeys().map(flag => `<label><input type="checkbox" data-biology-context-flag="${escapeAttr(flag)}" ${((state.importedData as ContextProfile))?.diagnoses?.flags?.[flag] ? 'checked' : ''}>${escapeHTML(flagLabel(flag))}</label>`).join('')}</div>
-    <p class="biology-scores-note">Set applicable context above without AI. ${state.profileSex === 'female' ? 'Sample timing and cycle phase belong' : 'Sample timing belongs'} to each lab entry.</p>
-    <p class="biology-scores-note">${escapeHTML(status)}</p>
-    ${review?.summary ? `<p class="biology-context-ai-summary">${escapeHTML(review.summary)}</p>` : ''}
-    ${suggestions.length ? `<div class="biology-context-suggestions">${suggestions.map(renderSuggestion).join('')}</div>` : ''}
-  </section>`;
+  return renderContext({kind: 'panel', view: getBiologyContextReviewView(data)});
 }
 
 export function installBiologyScoreContextAIDelegates() {

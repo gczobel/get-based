@@ -40,12 +40,13 @@ test('provider panel renderers cover Venice and Local AI markup branches', async
 
       fixture.innerHTML = renderers.renderAIProviderPanel('venice');
       document.body.appendChild(fixture);
+      (await import('/js/provider-panels.js')).hydrateVeniceSettings();
       const veniceSelect = fixture.querySelector<HTMLSelectElement>('#venice-model-select');
       const veniceE2EERenders = fixture.querySelector<HTMLElement>('#venice-key-status')?.textContent.includes('Connected')
         && fixture.querySelector<HTMLInputElement>('#venice-key-input')?.value === 'venice-test-key'
         && veniceSelect?.value === 'e2ee-model'
         && fixture.querySelector<HTMLInputElement>('#venice-e2ee-toggle')?.checked === true
-        && fixture.querySelector<HTMLElement>('#venice-e2ee-indicator')?.style.display === ''
+        && fixture.querySelector<HTMLElement>('#venice-e2ee-indicator')?.hidden === false
         && fixture.querySelector<HTMLOptionElement>('#venice-model-select option[value="e2ee-model"]')?.textContent === 'Secure <Model>'
         && !!fixture.querySelector<HTMLElement>('[data-provider-panel-action="remove-venice-key"]');
 
@@ -53,8 +54,11 @@ test('provider panel renderers cover Venice and Local AI markup branches', async
       localStorage.setItem('labcharts-venice-model', 'regular-model');
       localStorage.setItem('labcharts-venice-e2ee-models', '[]');
       fixture.innerHTML = renderers.renderAIProviderPanel('venice');
-      const veniceMissingE2EEDisables = !fixture.querySelector<HTMLInputElement>('#venice-e2ee-toggle')
-        && fixture.querySelector<HTMLSelectElement>('#venice-model-select')?.value === 'regular-model';
+      (await import('/js/provider-panels.js')).hydrateVeniceSettings();
+      const veniceMissingE2EEPreservesPreference = fixture.querySelector<HTMLInputElement>('#venice-e2ee-toggle')?.checked === true
+        && localStorage.getItem('labcharts-venice-e2ee') === 'on'
+        && localStorage.getItem('labcharts-venice-model') === 'regular-model'
+        && fixture.textContent.includes('Encrypted mode remains enabled');
 
       const ollamaConfig = JSON.stringify({
         url: 'https://local.example/v1',
@@ -65,7 +69,9 @@ test('provider panel renderers cover Venice and Local AI markup branches', async
       localStorage.setItem('labcharts-ollama', ollamaConfig);
       crypto.updateKeyCache('labcharts-ollama', ollamaConfig);
       // Local AI has no named provider case, so it is rendered through the default fallback.
+      (await import('/js/venice-settings-component.js')).disposeVeniceSettings();
       fixture.innerHTML = renderers.renderAIProviderPanel('unknown-provider');
+      (await import('/js/provider-local-ai-controls.js')).hydrateLocalAiSettings(fixture.querySelector<HTMLElement>('[data-local-ai-settings-host]')!);
       const localAIRenders = fixture.querySelector<HTMLInputElement>('#local-ai-url-input')?.value === 'https://local.example'
         && fixture.querySelector<HTMLInputElement>('#local-ai-apikey-input')?.value === 'local-secret'
         && fixture.querySelector<HTMLElement>('#local-ai-status-text')?.textContent === 'Checking connection...'
@@ -75,7 +81,7 @@ test('provider panel renderers cover Venice and Local AI markup branches', async
 
       return {
         veniceE2EERenders,
-        veniceMissingE2EEDisables,
+        veniceMissingE2EEPreservesPreference,
         localAIRenders,
       };
     } finally {
@@ -87,6 +93,8 @@ test('provider panel renderers cover Venice and Local AI markup branches', async
       else crypto.updateKeyCache('labcharts-venice-key', oldCache.veniceKey);
       if (oldCache.ollama == null) crypto.updateKeyCache('labcharts-ollama', null);
       else crypto.updateKeyCache('labcharts-ollama', oldCache.ollama);
+      (await import('/js/venice-settings-component.js')).disposeVeniceSettings();
+      (await import('/js/local-ai-settings-component.js')).disposeLocalAiSettings();
       fixture.remove();
     }
   }, { renderersUrl: moduleUrl('/js/provider-panel-renderers.js') });
@@ -122,9 +130,14 @@ test('provider model controls cover dropdowns custom models and delegates', asyn
       'labcharts-routstr-model',
       'labcharts-routstr-models',
       'labcharts-routstr-pricing',
+      'labcharts-routstr-node',
+      'labcharts-routstr-model-regular',
+      'labcharts-routstr-private-models',
+      'labcharts-routstr-vision-models',
       'labcharts-ppq-model',
       'labcharts-ppq-models',
       'labcharts-ppq-pricing',
+      'labcharts-ai-provider',
       'labcharts-custom-model',
       'labcharts-custom-models',
     ];
@@ -146,12 +159,11 @@ test('provider model controls cover dropdowns custom models and delegates', asyn
       for (const key of storageKeys) localStorage.removeItem(key);
       document.body.insertAdjacentHTML('beforeend', `
         <section id="ai-provider-panel">
-          <div id="openrouter-model-area"></div>
-          <div id="venice-model-area"></div>
-          <div id="venice-e2ee-indicator" style="display:none"></div>
-          <div id="routstr-model-area"></div>
-          <div id="ppq-model-area"></div>
-          <div id="custom-model-area"></div>
+          <div id="openrouter-owned-fixture"></div>
+          <div id="venice-owned-fixture"></div>
+          <div id="routstr-owned-fixture"></div>
+          <div id="ppq-owned-fixture"></div>
+          <div id="custom-owned-fixture"></div>
         </section>
       `);
 
@@ -165,6 +177,8 @@ test('provider model controls cover dropdowns custom models and delegates', asyn
         'anthropic/claude-sonnet-4.6': { input: 3, output: 15 },
       }));
       localStorage.setItem('labcharts-openrouter-model', 'anthropic/claude-sonnet-4.6');
+      (await import('/js/openrouter-settings-component.js')).mountOpenRouterSettings(document.getElementById('openrouter-owned-fixture')!, (await import('/js/openrouter-settings-view.js')).buildOpenRouterSettingsSnapshot());
+      localStorage.setItem('labcharts-ai-provider', 'openrouter');
       controls.renderOpenRouterModelDropdown([
         { id: 'anthropic/claude-fable-5.1', name: 'Claude Fable 5.1' },
         { id: 'google/gemini-3.5-flash', name: 'Gemini 3.5 Flash' },
@@ -239,7 +253,7 @@ test('provider model controls cover dropdowns custom models and delegates', asyn
       });
       await controls.applyCustomOpenRouterModel('bad/model');
       const openRouterCustomFailure = (document.getElementById('openrouter-model-health') as HTMLElement|null)?.title === 'offline model'
-        && (document.getElementById('openrouter-custom-model') as HTMLInputElement|null)?.style.borderColor === 'var(--red)';
+        && (document.getElementById('openrouter-custom-model') as HTMLInputElement|null)?.dataset.modelCheck === 'error';
 
       controls.onOpenRouterDropdownChange('anthropic/claude-sonnet-4.6');
       const openRouterDropdownReset = !document.querySelector<HTMLOptionElement>('#openrouter-model-select option[value="__custom"]')
@@ -249,6 +263,7 @@ test('provider model controls cover dropdowns custom models and delegates', asyn
       localStorage.setItem('labcharts-venice-model', 'regular-a');
       localStorage.setItem('labcharts-venice-models', JSON.stringify([{ id: 'regular-a', name: 'Regular A' }]));
       localStorage.setItem('labcharts-venice-e2ee-models', JSON.stringify([{ id: 'e2ee-secure', name: 'Secure E2EE' }]));
+      (await import('/js/venice-settings-component.js')).mountVeniceSettings(document.getElementById('venice-owned-fixture')!, (await import('/js/venice-settings-view.js')).buildVeniceSettingsSnapshot());
       controls.renderVeniceModelDropdown([
         { id: 'regular-a', name: 'Regular A' },
         { id: 'claude-fable-5-1', name: 'Claude Fable 5.1' },
@@ -264,7 +279,7 @@ test('provider model controls cover dropdowns custom models and delegates', asyn
       controls.toggleVeniceE2EE(true);
       const veniceE2EEEnabled = localStorage.getItem('labcharts-venice-e2ee') === 'on'
         && localStorage.getItem('labcharts-venice-model') === 'e2ee-secure'
-        && (document.getElementById('venice-e2ee-indicator') as HTMLElement|null)?.style.display === ''
+        && (document.getElementById('venice-e2ee-indicator') as HTMLElement|null)?.hidden === false
         && headerRefreshes >= 1
         && searchRefreshes >= 1;
       controls.toggleVeniceE2EE(false);
@@ -273,12 +288,20 @@ test('provider model controls cover dropdowns custom models and delegates', asyn
         && clearCount >= 1;
 
       localStorage.setItem('labcharts-routstr-model', 'missing-model');
-      controls.renderRoutstrModelDropdown([
-        { id: 'routstr-a', name: 'Routstr A' },
-        { id: 'routstr-b', name: 'Routstr B' },
-      ]);
-      const routstrFallback = localStorage.getItem('labcharts-routstr-model') === 'routstr-a'
-        && (document.getElementById('routstr-model-select') as HTMLSelectElement|null)?.value === 'routstr-a';
+      localStorage.setItem('labcharts-routstr-node', 'https://routstr-catalog.example');
+      const catalogFetch = window.fetch;
+      window.fetch = async (url, options) => String(url) === 'https://routstr-catalog.example/v1/models'
+        ? jsonResponse({ data: [
+          { id: 'claude-synthetic-a', name: 'Routstr A', enabled: true },
+          { id: 'claude-synthetic-b', name: 'Routstr B', enabled: true },
+        ] })
+        : catalogFetch.call(window, url, options);
+      const routstrModels = await (await import('/js/api-routstr.js')).fetchRoutstrModels();
+      window.fetch = catalogFetch;
+      (await import('/js/routstr-model-settings-component.js')).mountRoutstrModelSettings(document.getElementById('routstr-owned-fixture')!, (await import('/js/routstr-model-settings-view.js')).buildRoutstrModelSettingsSnapshot());
+      controls.renderRoutstrModelDropdown(routstrModels);
+      const routstrFallback = localStorage.getItem('labcharts-routstr-model') === 'claude-synthetic-a'
+        && (document.getElementById('routstr-model-select') as HTMLSelectElement|null)?.value === 'claude-synthetic-a';
       controls.renderRoutstrModelDropdown([
         { id: 'anthropic/claude-fable-5.1', name: 'Claude Fable 5.1' },
         { id: 'google/gemini-3.7-flash', name: 'Gemini 3.7 Flash' },
@@ -310,6 +333,7 @@ test('provider model controls cover dropdowns custom models and delegates', asyn
 
       localStorage.setItem('labcharts-ppq-model', 'ppq-b');
       localStorage.setItem('labcharts-ppq-pricing', JSON.stringify({ 'ppq-b': { input: 0.5, output: 1.5 } }));
+      (await import('/js/ppq-settings-component.js')).mountPpqSettings(document.getElementById('ppq-owned-fixture')!, (await import('/js/ppq-settings-view.js')).buildPpqSettingsSnapshot());
       controls.renderPpqModelDropdown([
         { id: 'ppq-a', name: 'PPQ A' },
         { id: 'ppq-b', name: 'PPQ B' },
@@ -351,6 +375,9 @@ test('provider model controls cover dropdowns custom models and delegates', asyn
       const ppqModelPricing = (document.getElementById('ppq-model-select') as HTMLSelectElement|null)?.value === 'ppq-b'
         && ((document.getElementById('ppq-model-pricing') as HTMLElement|null)?.textContent || '').includes('$0.50/M in');
 
+      localStorage.setItem('labcharts-ai-provider', 'custom');
+      const customSettings = await import('/js/custom-settings-component.js');
+      customSettings.mountCustomSettings(document.getElementById('custom-owned-fixture')!, { connected: true, models: (await import('/js/custom-settings-view.js')).buildCustomModelState([], '') }, { save: () => {}, remove: () => {}, select: () => {}, apply: () => {} });
       localStorage.setItem('labcharts-custom-model', 'outside-model');
       controls.renderCustomApiModelDropdown([
         { id: 'model-a', name: 'Model A' },
@@ -452,6 +479,8 @@ test('provider model controls cover dropdowns custom models and delegates', asyn
         if (oldStorage[key] == null) localStorage.removeItem(key);
         else localStorage.setItem(key, oldStorage[key]);
       }
+      (await import('/js/custom-settings-component.js')).disposeCustomSettings();
+      (await import('/js/routstr-model-settings-component.js')).disposeRoutstrModelSettings();
       (document.getElementById('ai-provider-panel') as HTMLElement|null)?.remove();
       document.querySelectorAll<HTMLElement>('.notification-toast').forEach(el => el.remove());
     }
@@ -466,7 +495,7 @@ test('provider panels cover provider switching key saves balances custom API and
   await page.goto('/app', { waitUntil: 'load' });
 
   const results = await page.evaluate(async ({ panelsUrl }) => {
-    const panels = (await import(panelsUrl) as unknown) as Pick<typeof import('../../js/provider-panels.js'),"configureProviderPanelDeps"|"handleRemoveOpenRouterKey"|"switchAIProvider"|"toggleAIPause"|"handleSaveOpenRouterKey"|"refreshOpenRouterBalance"|"handleSaveVeniceKey"|"refreshVeniceBalance"|"handleRemoveVeniceKey"|"handleSaveRoutstrKey"|"handleRemoveRoutstrKey"|"handleSavePpqKey"|"refreshPpqBalance"|"handleSaveCustomApi"|"handleRemoveCustomApi"|"showInsufficientBalanceDialog">;
+    const panels = (await import(panelsUrl) as unknown) as Pick<typeof import('../../js/provider-panels.js'),"configureProviderPanelDeps"|"handleRemoveOpenRouterKey"|"switchAIProvider"|"toggleAIPause"|"handleSaveOpenRouterKey"|"refreshOpenRouterBalance"|"handleSaveVeniceKey"|"refreshVeniceBalance"|"handleRemoveVeniceKey"|"handleSaveRoutstrKey"|"handleRemoveRoutstrKey"|"handleSavePpqKey"|"refreshPpqBalance"|"handleSaveCustomApi"|"handleRemoveCustomApi"|"showInsufficientBalanceDialog"|"renderAIProviderPanel"|"hydrateOwnedProviderSettings">;
     const cloudConsent = await import('/js/cloud-ai-consent.js');
     const cryptoStore = await import('/js/crypto.js');
     const nodeSessions = await import('/js/routstr-session.js');
@@ -638,7 +667,8 @@ test('provider panels cover provider switching key saves balances custom API and
       const switchStoresPrevious = localStorage.getItem('labcharts-ai-provider') === 'openrouter';
       sessionStorage.setItem('or_previous_ai_provider', 'venice');
       panels.switchAIProvider('ppq');
-      const switchClearsOAuth = localStorage.getItem('labcharts-ai-provider') === 'ppq';
+      const switchClearsOAuth = localStorage.getItem('labcharts-ai-provider') === 'ppq'
+        && sessionStorage.getItem('or_previous_ai_provider') === null;
 
       panels.toggleAIPause(false);
       const pauseStoresDisabled = localStorage.getItem('labcharts-ai-paused') === 'true' && focusLoads >= 1;
@@ -646,13 +676,10 @@ test('provider panels cover provider switching key saves balances custom API and
       const pauseStoresEnabled = localStorage.getItem('labcharts-ai-paused') === 'false' && focusLoads >= 2;
 
       const panel = (document.getElementById('ai-provider-panel') as HTMLElement|null);
-      panel!.innerHTML = `
-        <input id="openrouter-key-input" value="sk-or-good">
-        <button id="save-openrouter-key-btn">Save</button>
-        <div id="openrouter-key-status"></div>
-        <div id="openrouter-model-area"></div>
-        <span id="or-balance"></span>
-      `;
+      localStorage.setItem('labcharts-ai-provider','openrouter');
+      panel!.innerHTML = (await import('/js/provider-panel-renderers.js')).renderAIProviderPanel('openrouter');
+      (await import('/js/provider-panels.js')).hydrateOpenRouterSettings();
+      (await import('/js/openrouter-settings-component.js')).getOpenRouterSettingsView()!.setStoredKey('sk-or-good');
       await panels.handleSaveOpenRouterKey();
       panels.refreshOpenRouterBalance();
       await wait(50);
@@ -660,13 +687,10 @@ test('provider panels cover provider switching key saves balances custom API and
         && (document.getElementById('openrouter-model-select') as HTMLSelectElement|null)?.value === 'openai/gpt-6-astra'
         && ((document.getElementById('or-balance') as HTMLElement|null)?.textContent || '').includes('$0.75');
 
-      panel!.innerHTML = `
-        <input id="venice-key-input" value="venice-good">
-        <button id="save-venice-key-btn">Save</button>
-        <div id="venice-key-status"></div>
-        <div id="venice-model-area"></div>
-        <span id="venice-balance"></span>
-      `;
+      localStorage.setItem('labcharts-ai-provider', 'venice');
+      panel!.innerHTML = (await import('/js/provider-panel-renderers.js')).renderAIProviderPanel('venice');
+      (await import('/js/provider-panels.js')).hydrateOwnedProviderSettings();
+      (await import('/js/venice-settings-component.js')).getVeniceSettingsView()!.setStoredKey('venice-good');
       await panels.handleSaveVeniceKey();
       panels.refreshVeniceBalance();
       await wait(50);
@@ -684,12 +708,10 @@ test('provider panels cover provider switching key saves balances custom API and
         && e2eeClears >= 1;
 
       localStorage.setItem('labcharts-routstr-node', 'https://routstr.example');
-      panel!.innerHTML = `
-        <input id="routstr-key-input" value="sk-routstr-good">
-        <button id="save-routstr-key-btn">Save</button>
-        <div id="routstr-key-status"></div>
-        <div id="routstr-model-area"></div>
-      `;
+      localStorage.setItem('labcharts-ai-provider', 'routstr');
+      panel!.innerHTML = panels.renderAIProviderPanel('routstr');
+      panels.hydrateOwnedProviderSettings();
+      (await import('/js/routstr-settings-component.js')).getRoutstrSettingsView()!.setCredential('sk-routstr-good');
       await panels.handleSaveRoutstrKey();
       await wait(0);
       const storedRoutstrKey = localStorage.getItem('labcharts-routstr-sessions');
@@ -711,13 +733,10 @@ test('provider panels cover provider switching key saves balances custom API and
         && localStorage.getItem('labcharts-routstr-pricing') === null
         && localStorage.getItem('labcharts-routstr-vision-models') === null;
 
-      panel!.innerHTML = `
-        <input id="ppq-key-input" value="sk-ppq-good">
-        <button id="save-ppq-key-btn">Save</button>
-        <div id="ppq-key-status"></div>
-        <div id="ppq-model-area"></div>
-        <span id="ppq-balance"></span>
-      `;
+      localStorage.setItem('labcharts-ai-provider', 'ppq');
+      panel!.innerHTML = panels.renderAIProviderPanel('ppq');
+      panels.hydrateOwnedProviderSettings();
+      (await import('/js/ppq-settings-component.js')).getPpqSettingsView()!.setStoredKey('sk-ppq-good');
       await panels.handleSavePpqKey();
       await panels.refreshPpqBalance();
       await wait(0);
@@ -725,16 +744,15 @@ test('provider panels cover provider switching key saves balances custom API and
         && (document.getElementById('ppq-model-select') as HTMLSelectElement|null)?.value === 'claude-sonnet-5'
         && ((document.getElementById('ppq-balance') as HTMLElement|null)?.textContent || '').includes('$0.08');
 
-      panel!.innerHTML = `
-        <input id="custom-url-input" value="https://custom.example/v1/">
-        <input id="custom-key-input" value="sk-custom">
-      `;
+      localStorage.setItem('labcharts-ai-provider', 'custom');
+      panel!.innerHTML = panels.renderAIProviderPanel('custom'); panels.hydrateOwnedProviderSettings();
+      (await import('/js/custom-settings-component.js')).getCustomSettingsView()!.setConnection({ url: 'https://custom.example/v1/', key: 'sk-custom' });
       await panels.handleSaveCustomApi();
       await wait(0);
       const customSaveRendersConnected = localStorage.getItem('labcharts-custom-url') === 'https://custom.example/v1'
         && (document.getElementById('custom-key-status') as HTMLElement|null)?.textContent.includes('Connected')
         && (document.getElementById('custom-model-select') as HTMLSelectElement|null)?.value === 'openai/gpt-5.5';
-      panels.handleRemoveCustomApi();
+      await panels.handleRemoveCustomApi();
       await wait(0);
       const customRemoveRendersDisconnected = !localStorage.getItem('labcharts-custom-url')
         && (document.getElementById('custom-key-status') as HTMLElement|null)?.textContent.includes('Not connected');
@@ -786,6 +804,7 @@ test('provider panels cover provider switching key saves balances custom API and
       if (oldSessionPrevious == null) sessionStorage.removeItem('or_previous_ai_provider');
       else sessionStorage.setItem('or_previous_ai_provider', oldSessionPrevious);
       (document.getElementById('settings-modal') as HTMLElement|null)?.remove();
+      (await import('/js/custom-settings-component.js')).disposeCustomSettings();
       (document.getElementById('ai-provider-panel') as HTMLElement|null)?.remove();
       (document.getElementById('or-no-balance-overlay') as HTMLElement|null)?.remove();
       document.querySelectorAll<HTMLElement>('.notification-toast').forEach(el => el.remove());
@@ -801,7 +820,7 @@ test('ppq panels cover account reveal topup picker invoice states and cleanup', 
   await page.goto('/app', { waitUntil: 'load' });
 
   const results = await page.evaluate(async ({ ppqUrl }) => {
-    const ppq = (await import(ppqUrl) as unknown) as Pick<typeof import('../../js/provider-ppq-panels.js'),"copyPpqKeyReveal"|"dismissPpqKeyReveal"|"handleSelectPpqMethod"|"handlePpqTopupPreset"|"ppqShowCustomInput"|"copyPpqPayment"|"cancelPpqTopup"|"handleSavePpqKey"|"handleRemovePpqKey"|"configurePpqPanels"|"handleCreatePpqAccount"|"refreshPpqBalance"|"doPpqTopupCustom"|"doPpqTopup"|"clearPpqTopupTimers">;
+    const ppq = (await import(ppqUrl) as unknown) as Pick<typeof import('../../js/provider-ppq-panels.js'),"copyPpqKeyReveal"|"dismissPpqKeyReveal"|"handleSelectPpqMethod"|"handlePpqTopupPreset"|"ppqShowCustomInput"|"copyPpqPayment"|"cancelPpqTopup"|"handleSavePpqKey"|"handleRemovePpqKey"|"configurePpqPanels"|"handleCreatePpqAccount"|"refreshPpqBalance"|"doPpqTopupCustom"|"doPpqTopup"|"clearPpqTopupTimers"|"hydratePpqSettings">;
     const delegates = await import('/js/provider-panel-delegates.js');
     const cryptoStore = await import('/js/crypto.js');
     const settingsBridge = await import('/js/settings-runtime-bridge.js');
@@ -812,6 +831,12 @@ test('ppq panels cover account reveal topup picker invoice states and cleanup', 
     });
 
     const storageKeys = [
+      'labcharts-ai-provider',
+      'labcharts-ppq-private-models',
+      'labcharts-ppq-private-mode',
+      'labcharts-ppq-model-regular',
+      'labcharts-ppq-model-private',
+      'labcharts-ppq-private-vision-models',
       'labcharts-ppq-key',
       'labcharts-ppq-credit-id',
       'labcharts-ppq-model',
@@ -840,6 +865,7 @@ test('ppq panels cover account reveal topup picker invoice states and cleanup', 
     try {
       for (const key of storageKeys) localStorage.removeItem(key);
       cryptoStore.updateKeyCache('labcharts-ppq-key', '');
+      localStorage.setItem('labcharts-ai-provider', 'ppq');
       (window as unknown as {setInterval:unknown}).setInterval = (fn:()=>unknown, ms:number) => {
         const id = nextIntervalId++;
         intervals.push({ id, fn, ms, cleared: false });
@@ -891,24 +917,18 @@ test('ppq panels cover account reveal topup picker invoice states and cleanup', 
         cancelPpqTopup: ppq.cancelPpqTopup,
       });
 
-      document.body.insertAdjacentHTML('beforeend', `
-        <div id="ai-provider-panel">
-          <button data-provider-panel-action="create-ppq-account">Create Account (instant, no signup)</button>
-          <div id="ppq-key-status"></div>
-        </div>
-      `);
-      const panel = (document.getElementById('ai-provider-panel') as HTMLElement|null);
-      panel!.innerHTML = `
-        <input id="ppq-key-input" value="sk-ppq-default">
-        <button id="save-ppq-key-btn">Save</button>
-        <div id="ppq-key-status"></div>
-        <div id="ppq-model-area"></div>
-      `;
+      document.getElementById('ai-provider-panel')?.remove();
+      document.body.insertAdjacentHTML('beforeend', '<section id="ai-provider-panel"></section>');
+      const panel = document.getElementById('ai-provider-panel')!;
+      panel.innerHTML = (await import('/js/provider-panel-renderers.js')).renderAIProviderPanel('ppq');
+      ppq.hydratePpqSettings();
+      (await import('/js/ppq-settings-component.js')).getPpqSettingsView()!.setStoredKey('sk-ppq-default');
       await ppq.handleSavePpqKey();
       const defaultSaveUsesNoopReturnCallback = (document.getElementById('ppq-key-status') as HTMLElement|null)?.textContent.includes('Connected')
         && (document.getElementById('ppq-model-select') as HTMLSelectElement|null)?.value === 'claude-sonnet-4.6';
 
       localStorage.setItem('labcharts-ppq-key', 'sk-ppq-remove');
+      cryptoStore.updateKeyCache('labcharts-ppq-key', 'sk-ppq-remove');
       localStorage.setItem('labcharts-ppq-credit-id', 'credit-remove');
       localStorage.setItem('labcharts-ppq-model', 'claude-sonnet-4.6');
       localStorage.setItem('labcharts-ppq-models', JSON.stringify([{ id: 'claude-sonnet-4.6', name: 'Claude' }]));
@@ -934,11 +954,9 @@ test('ppq panels cover account reveal topup picker invoice states and cleanup', 
         returnToChatIfOnboarding: () => { returnToChatCount += 1; },
       });
 
-      panel!.innerHTML = `
-        <button data-provider-panel-action="create-ppq-account">Create Account (instant, no signup)</button>
-        <div id="ppq-key-status"></div>
-      `;
-
+      (await import('/js/ppq-settings-component.js')).disposePpqSettings();
+      panel.innerHTML = (await import('/js/provider-panel-renderers.js')).renderAIProviderPanel('ppq');
+      ppq.hydratePpqSettings();
       await ppq.handleCreatePpqAccount();
       const revealPanel = (document.getElementById('ai-provider-panel') as HTMLElement|null);
       const accountReveal = revealPanel?.textContent.includes('Save your account details')
@@ -954,7 +972,7 @@ test('ppq panels cover account reveal topup picker invoice states and cleanup', 
       await wait(0);
       await ppq.refreshPpqBalance();
       await wait(0);
-      const dismissRerendersTopup = (document.getElementById('ppq-topup-area') as HTMLElement|null)?.style.display === 'block'
+      const dismissRerendersTopup = (document.getElementById('ppq-topup-area') as HTMLElement|null)?.hidden === false
         && (document.getElementById('ppq-topup-toggle') as HTMLElement|null)?.textContent === 'Close'
         && (document.getElementById('ppq-balance') as HTMLElement|null)?.textContent.includes('$1.25');
 
@@ -990,23 +1008,23 @@ test('ppq panels cover account reveal topup picker invoice states and cleanup', 
         && (document.getElementById('ppq-balance') as HTMLElement|null)?.textContent.includes('$1.25');
 
       createMode = 'expired';
-      await ppq.doPpqTopup(2);
+      await ppq.doPpqTopup(6);
       const expiredPoll = [...intervals].reverse().find(item => item.ms === 3000 && !item.cleared);
       const expiredPollIntervalScheduled = !!expiredPoll;
       if (expiredPoll) await expiredPoll.fn();
       const expiredInvoice = ((document.getElementById('ppq-topup-status') as HTMLElement|null)?.textContent || '').includes('Invoice expired');
 
       createMode = 'error';
-      await ppq.doPpqTopup(2);
-      const topupError = ((document.getElementById('ppq-topup-area') as HTMLElement|null)?.textContent || '').includes('bad topup');
+      await ppq.doPpqTopup(6);
+      const topupError = ((document.getElementById('ppq-topup-area') as HTMLElement|null)?.textContent || '').includes('Could not create this invoice. Please retry.') && !document.getElementById('ppq-topup-area')?.textContent.includes('bad topup');
 
       createMode = 'paid';
-      await ppq.doPpqTopup(2);
+      await ppq.doPpqTopup(6);
       const cancelPoll = [...intervals].reverse().find(item => item.ms === 3000 && !item.cleared);
       const cancelPollIntervalScheduled = !!cancelPoll;
       document.querySelector<HTMLElement>('#ppq-topup-area [data-provider-panel-action="cancel-ppq-topup"]')?.click();
       await wait(0);
-      const cancelHidesArea = (document.getElementById('ppq-topup-area') as HTMLElement|null)?.style.display === 'none'
+      const cancelHidesArea = (document.getElementById('ppq-topup-area') as HTMLElement|null)?.hidden === true
         && !!cancelPoll
         && intervals.find(item => item.id === cancelPoll.id)?.cleared === true;
 
@@ -1033,6 +1051,7 @@ test('ppq panels cover account reveal topup picker invoice states and cleanup', 
       };
     } finally {
       ppq.clearPpqTopupTimers();
+      (await import('/js/ppq-settings-component.js')).disposePpqSettings();
       window.fetch = oldGlobals.fetch;
       window.setInterval = oldGlobals.setInterval;
       window.clearInterval = oldGlobals.clearInterval;
@@ -1045,6 +1064,7 @@ test('ppq panels cover account reveal topup picker invoice states and cleanup', 
         else localStorage.setItem(key, oldStorage[key]);
       }
       cryptoStore.updateKeyCache('labcharts-ppq-key', oldStorage['labcharts-ppq-key'] || '');
+      (await import('/js/custom-settings-component.js')).disposeCustomSettings();
       (document.getElementById('ai-provider-panel') as HTMLElement|null)?.remove();
       (document.getElementById('ppq-topup-toggle') as HTMLElement|null)?.remove();
       (document.getElementById('ppq-topup-area') as HTMLElement|null)?.remove();

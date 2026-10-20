@@ -1,12 +1,20 @@
 import { beforeEach, afterEach, expect, it, vi } from 'vitest';
 import { state } from '../js/state.js';
 import { mergeProfileMutation, rememberProfileData, adoptProfileData } from '../js/profile-data-writes.js';
-import { saveImportedData, saveImportedDataForProfile } from '../js/data.js';
-import { profileStorageKey } from '../js/profile.js';
+import { saveImportedData, saveImportedDataForProfile, notifyProfileDataContextChanged, configureDataContextDependencies } from '../js/data.js';
+import { profileStorageKey, loadProfile, configureProfileRuntimeDeps } from '../js/profile.js';
 import * as crypto from '../js/crypto.js';
 import * as sync from '../js/sync.js';
 import { mergePulledImportedData, persistPulledImportedData } from '../js/sync-pull-merge.js';
 import { refreshActiveProfileAfterPull } from '../js/sync-pull-active-refresh.js';
+import { configureSyncPull, onSyncReceived, isSyncPulling } from '../js/sync-pull.js';
+import { configureSyncActions, pushDirtyProfiles } from '../js/sync-actions.js';
+import { configureSyncSaveHooks, clearSyncSaveTimers } from '../js/sync-save-hooks.js';
+import { configureSyncTombstones } from '../js/sync-tombstones.js';
+import { getSyncDirtyToken } from '../js/sync-dirty-state.js';
+import * as syncPayload from '../js/sync-payload.js';
+import { configureSyncPush, pushProfile } from '../js/sync-push.js';
+import { configureSyncDelta } from '../js/sync-delta.js';
 
 const profileId = 'profile-write-concurrency';
 const key = profileStorageKey(profileId, 'imported');
@@ -364,4 +372,724 @@ it('does not mistake nested object key order after adoption for a concurrent per
   const peer = structuredClone(persisted);
   peer.supplements[0]!.periods[0]!.dose.text = '90 mg/day';
   expect(() => mergeProfileMutation(live, intent, peer)).toThrow(/Concurrent edits/);
+});
+
+it('refreshes scoped committed context for its current profile without scheduling duplicate sync writes', () => {
+  const invalidate = vi.fn(), saved = vi.spyOn(sync, 'onDataSaved').mockImplementation(() => {});
+  const previous = configureDataContextDependencies({ invalidateLabContextCache: invalidate });
+  try {
+    expect(notifyProfileDataContextChanged(profileId)).toBe(true);
+    expect(invalidate).toHaveBeenCalledTimes(1);
+    expect(saved).toHaveBeenCalledExactlyOnceWith({ skipSync: true });
+    state.currentProfile = 'replacement-profile';
+    expect(notifyProfileDataContextChanged(profileId)).toBe(false);
+    expect(invalidate).toHaveBeenCalledTimes(1); expect(saved).toHaveBeenCalledTimes(1);
+  } finally { configureDataContextDependencies(previous); state.currentProfile = profileId; }
+});
+it('does not turn a committed save into a failure when the context-refresh hook throws', () => {
+  vi.spyOn(sync, 'onDataSaved').mockImplementation(() => { throw new Error('Synthetic gateway failure'); });
+  expect(notifyProfileDataContextChanged(profileId)).toBe(false);
+});
+
+
+it('rejects a scoped notes edit if the observed saved text changed, without touching newer data', async () => {
+  const base = structuredClone(state.importedData), draft = structuredClone(base);
+  draft.contextNotes = 'Local pending draft';
+  const peer = structuredClone(base); peer.contextNotes = 'Newer saved note'; peer.notes.push({ date: '2026-10-07', text: 'Unrelated peer addition' });
+  await crypto.encryptedSetItem(key, JSON.stringify(peer));
+  const write = vi.spyOn(crypto, 'encryptedSetItem'), conflict = vi.fn();
+  expect(await saveImportedDataForProfile(profileId, draft, { forceProfileScope: true, baseData: base, expectedContextNotes: 'original', onContextNotesConflict: conflict })).toBe(false);
+  expect(conflict).toHaveBeenCalledWith('Newer saved note');
+  expect(write).not.toHaveBeenCalled(); expect((await read()).contextNotes).toBe('Newer saved note'); expect((await read()).notes).toEqual(peer.notes);
+  expect(state.importedData.contextNotes).toBe('original');
+});
+
+it('allows a guarded notes edit while merging unrelated saved additions', async () => {
+  const base = structuredClone(state.importedData), draft = structuredClone(base); draft.contextNotes = 'Local guarded note';
+  const peer = structuredClone(base); peer.notes.push({ date: '2026-10-07', text: 'Independent saved note' }); await crypto.encryptedSetItem(key, JSON.stringify(peer));
+  expect(await saveImportedDataForProfile(profileId, draft, { forceProfileScope: true, baseData: base, expectedContextNotes: 'original' })).toBe(true);
+  expect((await read()).contextNotes).toBe('Local guarded note'); expect((await read()).notes).toEqual(peer.notes);
+});
+
+it('compares guarded notes inside the write queue after an earlier commit', async () => {
+  const base = structuredClone(state.importedData), first = structuredClone(base), stale = structuredClone(base);
+  first.contextNotes = 'Earlier queued note'; stale.contextNotes = 'Stale queued note';
+  const options = { forceProfileScope: true, baseData: base, expectedContextNotes: 'original' };
+  const one = saveImportedDataForProfile(profileId, first, options), two = saveImportedDataForProfile(profileId, stale, options);
+  expect(await one).toBe(true); expect(await two).toBe(false); expect((await read()).contextNotes).toBe('Earlier queued note');
+});
+
+it('keeps the atomic notes guard effective if a conflict observer throws', async () => {
+  const base = structuredClone(state.importedData), draft = structuredClone(base); draft.contextNotes = 'Local draft';
+  await crypto.encryptedSetItem(key, JSON.stringify({ ...base, contextNotes: 'Saved elsewhere' }));
+  expect(await saveImportedDataForProfile(profileId, draft, { baseData: base, forceProfileScope: true, expectedContextNotes: 'original', onContextNotesConflict: () => { throw new Error('observer failed'); } })).toBe(false);
+  expect((await read()).contextNotes).toBe('Saved elsewhere');
+});
+
+for (const field of ['sleepRest', 'exercise', 'stress', 'loveLife', 'diet', 'environment', 'lightCircadian'] as const) it(`guards stale ${field} form writes inside the locked storage transaction`, async () => {
+  const base = structuredClone(state.importedData), draft = structuredClone(base);
+  draft[field] = { note: 'Stale local draft' };
+  const peer = structuredClone(base); peer[field] = { note: 'Saved by another tab' };
+  await crypto.encryptedSetItem(key, JSON.stringify(peer));
+  const conflict = vi.fn();
+  expect(await saveImportedDataForProfile(profileId, draft, { forceProfileScope: true, baseData: base, expectedContextField: { key: field, value: base[field] ?? null }, onContextFieldConflict: conflict })).toBe(false);
+  expect(conflict).toHaveBeenCalledOnce(); expect(JSON.parse((await crypto.encryptedGetItem(key))!)[field]).toEqual(peer[field]);
+});
+it('accepts equal reordered context objects and merges unrelated peer data', async () => {
+  state.importedData.stress = { level: 'moderate', duration: 'weeks', note: 'Existing' }; expect(await saveImportedData()).toBe(true);
+  const base = structuredClone(state.importedData), draft = structuredClone(base); draft.stress = { ...draft.stress as object, note: 'Changed' };
+  const peer = structuredClone(base); peer.stress = { note: 'Existing', duration: 'weeks', level: 'moderate' }; peer.contextNotes = 'Other tab notes';
+  await crypto.encryptedSetItem(key, JSON.stringify(peer));
+  expect(await saveImportedDataForProfile(profileId, draft, { forceProfileScope: true, baseData: base, expectedContextField: { key: 'stress', value: base.stress } })).toBe(true);
+  const stored = JSON.parse((await crypto.encryptedGetItem(key))!); expect(stored.contextNotes).toBe('Other tab notes'); expect(stored.stress.note).toBe('Changed');
+});
+it('snapshots the expected context field before a queued read and rejects changes even if the observer throws', async () => {
+  const base = structuredClone(state.importedData), draft = structuredClone(base); draft.stress = { note: 'Local' };
+  const peer = structuredClone(base); peer.stress = { note: 'Peer' }; await crypto.encryptedSetItem(key, JSON.stringify(peer));
+  const expected = { key: 'stress' as const, value: null as unknown };
+  const saving = saveImportedDataForProfile(profileId, draft, { forceProfileScope: true, baseData: base, expectedContextField: expected, onContextFieldConflict: () => { throw new Error('Observer failed'); } });
+  expected.value = peer.stress;
+  expect(await saving).toBe(false); expect(JSON.parse((await crypto.encryptedGetItem(key))!).stress).toEqual(peer.stress);
+});
+
+it('guards observed goal arrays atomically and retains peer goals without publishing stale removals', async () => {
+  state.importedData.healthGoals = [{ text: 'Original', severity: 'mild' }]; expect(await saveImportedData()).toBe(true);
+  const base = structuredClone(state.importedData), draft = structuredClone(base); draft.healthGoals = [];
+  const peer = structuredClone(base); peer.healthGoals.push({ text: 'Peer goal', severity: 'major' }); await crypto.encryptedSetItem(key, JSON.stringify(peer));
+  const conflict = vi.fn();
+  expect(await saveImportedDataForProfile(profileId, draft, { forceProfileScope: true, baseData: base, expectedContextField: { key: 'healthGoals', value: base.healthGoals }, onContextFieldConflict: conflict })).toBe(false);
+  expect(conflict).toHaveBeenCalledOnce(); expect(JSON.parse((await crypto.encryptedGetItem(key))!).healthGoals).toEqual(peer.healthGoals);
+});
+
+it('guards an observed lens inside the storage transaction and preserves a peer lens on conflict', async () => {
+  state.importedData.interpretiveLens = 'Original lens'; expect(await saveImportedData()).toBe(true);
+  const base = structuredClone(state.importedData), draft = structuredClone(base); draft.interpretiveLens = 'Stale lens';
+  const peer = structuredClone(base); peer.interpretiveLens = 'Peer lens'; await crypto.encryptedSetItem(key, JSON.stringify(peer));
+  const conflict = vi.fn();
+  expect(await saveImportedDataForProfile(profileId, draft, { forceProfileScope: true, baseData: base, expectedContextField: { key: 'interpretiveLens', value: base.interpretiveLens }, onContextFieldConflict: conflict })).toBe(false);
+  expect(conflict).toHaveBeenCalledOnce(); expect(JSON.parse((await crypto.encryptedGetItem(key))!).interpretiveLens).toBe('Peer lens');
+});
+
+it('accepts the first lens edit when a legacy stored profile has no lens property', async () => {
+  expect(await saveImportedData()).toBe(true); const base = structuredClone(state.importedData), draft = structuredClone(base); draft.interpretiveLens = 'First lens';
+  const legacy = JSON.parse((await crypto.encryptedGetItem(key))!); delete legacy.interpretiveLens; await crypto.encryptedSetItem(key, JSON.stringify(legacy));
+  expect(await saveImportedDataForProfile(profileId, draft, { forceProfileScope: true, baseData: base, expectedContextField: { key: 'interpretiveLens', value: base.interpretiveLens } })).toBe(true);
+  expect(JSON.parse((await crypto.encryptedGetItem(key))!).interpretiveLens).toBe('First lens');
+});
+
+it('snapshots and checks every expected setup field in the same queued transaction', async () => {
+  const base = structuredClone(state.importedData), draft = structuredClone(base);
+  draft.sunDefaults = { fitzpatrick: 'IV' }; draft.lightCircadian = { skinType: 'IV — olive' };
+  const peer = structuredClone(base); peer.lightCircadian = { skinType: 'V — brown' };
+  await crypto.encryptedSetItem(key, JSON.stringify(peer));
+  const expected = [{ key: 'sunDefaults' as const, value: base.sunDefaults ?? null }, { key: 'lightCircadian' as const, value: base.lightCircadian ?? null }];
+  const conflict = vi.fn(() => { throw new Error('Observer failed'); });
+  const pending = saveImportedDataForProfile(profileId, draft, { forceProfileScope: true, baseData: base, expectedContextFields: expected, onContextFieldConflict: conflict });
+  expected[1]!.value = peer.lightCircadian;
+  expect(await pending).toBe(false); expect(conflict).toHaveBeenCalledOnce();
+  expect(JSON.parse((await crypto.encryptedGetItem(key))!)).toEqual(peer);
+});
+
+
+it('keeps a local scalar and note saved after pull preflight but before its decoded payload is adopted', async () => {
+  const remote = structuredClone(state.importedData);
+  const dataJson = JSON.stringify({ _v: 3, importedData: remote, profile: null });
+  const row = { id: 'late-save-row', profileId, syncedAt: '2026-09-01T00:00:00.000Z', dataJson };
+  const profiles = () => [{ id: profileId }];
+  const sent: unknown[] = [];
+  const transport = vi.fn(async (_profileId: unknown, data: unknown) => {
+    sent.push(structuredClone(data));
+    return { ok: true };
+  });
+  const preflight = vi.fn(async () => pushDirtyProfiles({ force: true }));
+  const previousSaveHooks = configureSyncSaveHooks({});
+  const previousTombstones = configureSyncTombstones({});
+  const dirtyKey = `labcharts-${profileId}-sync-dirty`;
+  const previousDirty = localStorage.getItem(dirtyKey);
+  let releaseDecode!: () => void;
+  let signalDecode!: () => void;
+  const decoding = new Promise<void>(resolve => { signalDecode = resolve; });
+  const decoded = new Promise<void>(resolve => { releaseDecode = resolve; });
+  const actualDecode = syncPayload.parseSyncPayload;
+  let gated = false;
+  let pendingPull: Promise<void> | undefined;
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+  try {
+    // Keep real saving, locking, merging and dirty-generation handling. Only
+    // the network endpoint and the decoder's asynchronous completion are owned
+    // test seams; the wrapper still runs the original payload decoder.
+    localStorage.removeItem(dirtyKey);
+    configureSyncActions({ pushProfile: transport, getProfiles: profiles });
+    configureSyncSaveHooks({ isSyncConfigured: () => true, isSyncEnabled: () => false, getProfiles: profiles });
+    configureSyncTombstones({ isSyncEnabled: () => false });
+    configureSyncPull({
+      getEvolu: () => ({ getQueryRows: () => [row] }), getProfileQuery: () => ({}),
+      isSyncEnabled: () => true, getProfiles: profiles, pushDirtyProfiles: preflight,
+      pushProfile: transport, reconcilePulledManualWearables: async () => {},
+    });
+    vi.spyOn(syncPayload, 'parseSyncPayload').mockImplementation(async value => {
+      const payload = await actualDecode(value);
+      if (value === dataJson && !gated) {
+        gated = true;
+        signalDecode();
+        await decoded;
+      }
+      return payload;
+    });
+    pendingPull = onSyncReceived();
+    await Promise.race([
+      decoding,
+      pendingPull.then(() => { throw new Error('Pull completed before the payload-decoder barrier'); }),
+    ]);
+    expect(preflight).toHaveBeenCalledWith({ force: true });
+    expect(transport).not.toHaveBeenCalled();
+    expect(getSyncDirtyToken(profileId)).toBeNull();
+
+    state.importedData.contextNotes = 'saved while the old payload was decoding';
+    state.importedData.notes!.push({ date: '2026-09-17', text: 'saved during decoding' });
+    expect(await saveImportedData()).toBe(true);
+    expect(getSyncDirtyToken(profileId)).toEqual(expect.any(String));
+    expect((await read()).contextNotes).toBe('saved while the old payload was decoding');
+    expect((await read()).notes).toEqual([{ date: '2026-09-17', text: 'saved during decoding' }]);
+
+    releaseDecode();
+    await pendingPull;
+    expect(state.importedData.contextNotes).toBe('saved while the old payload was decoding');
+    expect(state.importedData.notes).toEqual([{ date: '2026-09-17', text: 'saved during decoding' }]);
+    expect((await read()).contextNotes).toBe('saved while the old payload was decoding');
+    expect((await read()).notes).toEqual([{ date: '2026-09-17', text: 'saved during decoding' }]);
+    expect(await pushDirtyProfiles()).toEqual({ total: 1, succeeded: 1, failed: 0, skipped: 0 });
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatchObject({
+      contextNotes: 'saved while the old payload was decoding',
+      notes: [{ date: '2026-09-17', text: 'saved during decoding' }],
+    });
+  } finally {
+    try {
+      releaseDecode();
+      await pendingPull;
+    } finally {
+      clearSyncSaveTimers();
+      vi.clearAllTimers();
+      vi.useRealTimers();
+      configureSyncPull({
+        getEvolu: () => null, getProfileQuery: () => null, isSyncEnabled: () => true,
+        getProfiles: () => [], pushDirtyProfiles: async () => ({ total: 0, succeeded: 0, failed: 0, skipped: 0 }),
+        pushProfile: async () => {}, reconcilePulledManualWearables: async () => {},
+      });
+      configureSyncActions({ pushProfile: async () => {}, getProfiles: () => [] });
+      configureSyncSaveHooks(previousSaveHooks);
+      configureSyncTombstones(previousTombstones);
+      if (previousDirty === null) localStorage.removeItem(dirtyKey); else localStorage.setItem(dirtyKey, previousDirty);
+    }
+  }
+});
+
+for (const scenario of [
+  { name: 'active pending save', inactive: false, fastPush: false, failSave: false },
+  { name: 'active acknowledged save', inactive: false, fastPush: true, failSave: false },
+  { name: 'inactive pending save', inactive: true, fastPush: false, failSave: false },
+  { name: 'inactive acknowledged save', inactive: true, fastPush: true, failSave: false },
+  { name: 'failed write followed by retry', inactive: false, fastPush: false, failSave: true },
+]) it(`retains late local edits and unrelated remote changes: ${scenario.name}`, async () => {
+  const originalData = state.importedData;
+  const baseline = structuredClone(originalData);
+  const localNote = { date: '2026-09-17', text: 'local during decoding' };
+  const remoteNote = { date: '2026-09-18', text: 'remote before decoding' };
+  const localText = 'late local scalar';
+  const remote = structuredClone(baseline);
+  remote.interpretiveLens = 'independent remote lens';
+  remote.notes!.push(remoteNote);
+  const dataJson = JSON.stringify({ _v: 3, importedData: remote, profile: null });
+  const row = { id: 'early-baseline-row', profileId, syncedAt: '2026-09-01T00:00:00.000Z', dataJson };
+  const otherId = `${profileId}-inactive-control`;
+  const otherKey = profileStorageKey(otherId, 'imported');
+  const previousOther = await crypto.encryptedGetItem(otherKey);
+  const profiles = () => scenario.inactive ? [{ id: profileId }, { id: otherId }] : [{ id: profileId }];
+  const previousHooks = configureSyncSaveHooks({});
+  const previousTombstones = configureSyncTombstones({});
+  const ownedPrefix = `labcharts-${profileId}-`;
+  const previousKeys = new Map<string, string>();
+  for (let index = 0; index < localStorage.length; index++) {
+    const name = localStorage.key(index);
+    if (name?.startsWith(ownedPrefix)) previousKeys.set(name, localStorage.getItem(name)!);
+  }
+  const wire: string[] = [];
+  const itemRows: unknown[] = [];
+  const write = (table: 'profileData' | 'itemRow', args: unknown, options?: { onComplete?: () => void }) => {
+    if (table === 'profileData') {
+      if (!args || typeof args !== 'object' || !('dataJson' in args) || typeof args.dataJson !== 'string') throw new Error('Expected a complete profile wire payload');
+      wire.push(args.dataJson);
+    } else itemRows.push(structuredClone(args));
+    options?.onComplete?.();
+    return { id: 'acknowledged-test-row' };
+  };
+  const endpoint = { getQueryRows: () => [row], insert: write, update: write };
+  let release!: () => void, entered!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const decoding = new Promise<void>(resolve => { entered = resolve; });
+  const actualDecode = syncPayload.parseSyncPayload;
+  let gated = false, pending: Promise<void> | undefined;
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+  try {
+    localStorage.removeItem(`${ownedPrefix}sync-dirty`);
+    if (scenario.inactive) {
+      state.currentProfile = otherId;
+      (state as { importedData: unknown }).importedData = { entries: [], notes: [], contextNotes: 'other profile stays unchanged' };
+      expect(await saveImportedData()).toBe(true);
+    }
+    configureSyncPush({ getEvolu: () => endpoint, getProfileQuery: () => ({}), isSyncEnabled: () => true, getProfiles: profiles });
+    configureSyncDelta({ getEvolu: () => ({ getQueryRows: () => [], insert: write, update: write }), getItemRowQuery: () => ({}) });
+    configureSyncActions({ pushProfile, getProfiles: profiles });
+    configureSyncSaveHooks({ isSyncConfigured: () => true, isSyncEnabled: () => false, getProfiles: profiles });
+    configureSyncTombstones({ getEvolu: () => null });
+    configureSyncPull({
+      getEvolu: () => endpoint, getProfileQuery: () => ({}), isSyncEnabled: () => true,
+      getProfiles: profiles, pushDirtyProfiles, pushProfile, reconcilePulledManualWearables: async () => {},
+    });
+    vi.spyOn(syncPayload, 'parseSyncPayload').mockImplementation(async value => {
+      const parsed = await actualDecode(value);
+      if (value === dataJson && !gated) { gated = true; entered(); await gate; }
+      return parsed;
+    });
+    pending = onSyncReceived();
+    await Promise.race([decoding, pending.then(() => { throw new Error('Pull never reached the decoder barrier'); })]);
+    expect(wire).toEqual([]);
+    expect(getSyncDirtyToken(profileId)).toBeNull();
+    const edit = scenario.inactive ? structuredClone(baseline) : state.importedData;
+    edit.contextNotes = localText;
+    edit.notes!.push(localNote);
+    const save = () => scenario.inactive
+      ? saveImportedDataForProfile(profileId, edit, { forceProfileScope: true, baseData: baseline })
+      : saveImportedData();
+    if (scenario.failSave) {
+      vi.spyOn(crypto, 'encryptedSetItem').mockRejectedValueOnce(new Error('owned save fault'));
+      expect(await save()).toBe(false);
+      expect((await read()).contextNotes).toBe(baseline.contextNotes);
+      expect(getSyncDirtyToken(profileId)).toBeNull();
+    }
+    expect(await save()).toBe(true);
+    expect((await read()).contextNotes).toBe(localText);
+    expect(getSyncDirtyToken(profileId)).toEqual(expect.any(String));
+    if (scenario.fastPush) {
+      expect(await pushDirtyProfiles()).toEqual({ total: 1, succeeded: 1, failed: 0, skipped: 0 });
+      expect(wire).toHaveLength(1);
+      expect(getSyncDirtyToken(profileId)).toBeNull();
+      expect((await actualDecode(wire[0])).importedData).toMatchObject({ contextNotes: localText });
+    }
+    release();
+    await pending;
+    const committed = await read();
+    expect(committed.contextNotes).toBe(localText);
+    expect(committed).toMatchObject({ interpretiveLens: 'independent remote lens' });
+    expect(committed.notes).toHaveLength(2);
+    expect(committed.notes).toEqual(expect.arrayContaining([localNote, remoteNote]));
+    if (scenario.inactive) {
+      expect(state.currentProfile).toBe(otherId);
+      expect(state.importedData.contextNotes).toBe('other profile stays unchanged');
+      expect(state.importedData.notes).toEqual([]);
+    } else {
+      expect(state.importedData.contextNotes).toBe(localText);
+      expect(state.importedData).toMatchObject({ interpretiveLens: 'independent remote lens' });
+      expect(state.importedData.notes).toHaveLength(2);
+      expect(state.importedData.notes).toEqual(expect.arrayContaining([localNote, remoteNote]));
+    }
+    expect(await pushProfile(profileId, committed)).toMatchObject({ ok: true });
+    expect(wire.length).toBeGreaterThan(0);
+    expect((await actualDecode(wire.at(-1))).importedData).toMatchObject({ contextNotes: localText, interpretiveLens: 'independent remote lens' });
+    expect(itemRows).toEqual(expect.arrayContaining([expect.objectContaining({ arrayName: 'contextNotes', itemId: 'contextNotes', payload: JSON.stringify({ v: localText }) })]));
+    expect(isSyncPulling()).toBe(false);
+  } finally {
+    try { release(); await pending; } finally {
+      clearSyncSaveTimers(); vi.clearAllTimers(); vi.useRealTimers();
+      configureSyncPull({ getEvolu: () => null, getProfileQuery: () => null, isSyncEnabled: () => true, getProfiles: () => [], pushDirtyProfiles: async () => ({ total: 0, succeeded: 0, failed: 0, skipped: 0 }), pushProfile: async () => {}, reconcilePulledManualWearables: async () => {} });
+      configureSyncActions({ pushProfile: async () => {}, getProfiles: () => [] });
+      configureSyncPush({ getEvolu: () => null, getProfileQuery: () => null, isSyncEnabled: () => false, getProfiles: () => [] });
+      configureSyncDelta({ getEvolu: () => null, getItemRowQuery: () => null });
+      configureSyncSaveHooks(previousHooks); configureSyncTombstones(previousTombstones);
+      for (let index = localStorage.length - 1; index >= 0; index--) { const name = localStorage.key(index); if (name?.startsWith(ownedPrefix)) localStorage.removeItem(name); }
+      for (const [name, value] of previousKeys) localStorage.setItem(name, value);
+      state.currentProfile = profileId; state.importedData = originalData;
+      if (previousOther === null) await crypto.encryptedRemoveItem(otherKey); else await crypto.encryptedSetItem(otherKey, previousOther);
+    }
+  }
+});
+
+it('releases pull ownership after a decoder exception and accepts the next valid payload', async () => {
+  const remote = structuredClone(state.importedData);
+  remote.interpretiveLens = 'valid after decoder failure';
+  const dataJson = JSON.stringify({ _v: 3, importedData: remote, profile: null });
+  const row = { id: 'decoder-error-row', profileId, syncedAt: '2026-09-01T00:00:00.000Z', dataJson };
+  const previousTombstones = configureSyncTombstones({ getEvolu: () => null });
+  const fault = new Error('owned decoder fault');
+  const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+  const actualDecode = syncPayload.parseSyncPayload;
+  let pending: Promise<void> | undefined;
+  try {
+    configureSyncPull({ getEvolu: () => ({ getQueryRows: () => [row] }), getProfileQuery: () => ({}), isSyncEnabled: () => true, getProfiles: () => [{ id: profileId }], pushDirtyProfiles: async () => ({ total: 0, succeeded: 0, failed: 0, skipped: 0 }), reconcilePulledManualWearables: async () => {} });
+    vi.spyOn(syncPayload, 'parseSyncPayload').mockRejectedValueOnce(fault).mockImplementation(actualDecode);
+    pending = onSyncReceived(); await pending;
+    expect(errors).toHaveBeenCalledWith('[sync] Pull failed for row:', fault);
+    expect(isSyncPulling()).toBe(false);
+    expect((await read()).contextNotes).toBe('original');
+    expect((await read())).not.toMatchObject({ interpretiveLens: 'valid after decoder failure' });
+    pending = onSyncReceived(); await pending;
+    expect(isSyncPulling()).toBe(false);
+    expect((await read())).toMatchObject({ interpretiveLens: 'valid after decoder failure' });
+    expect(errors).toHaveBeenCalledTimes(1);
+  } finally {
+    try { await pending; } finally {
+      configureSyncPull({ getEvolu: () => null, getProfileQuery: () => null, isSyncEnabled: () => true, getProfiles: () => [], pushDirtyProfiles: async () => ({ total: 0, succeeded: 0, failed: 0, skipped: 0 }), reconcilePulledManualWearables: async () => {} });
+      configureSyncTombstones(previousTombstones);
+    }
+  }
+});
+
+it('isolates an unreadable profile while a healthy profile accepts its remote update', async () => {
+  const healthyId = `${profileId}-healthy-read-control`;
+  const healthyKey = profileStorageKey(healthyId, 'imported');
+  const previousHealthy = await crypto.encryptedGetItem(healthyKey);
+  const actualRead = crypto.encryptedGetItem;
+  const beforeBad = await actualRead(key);
+  const beforeLive = structuredClone(state.importedData);
+  const healthy = structuredClone(state.importedData);
+  healthy.contextNotes = 'healthy before pull';
+  await crypto.encryptedSetItem(healthyKey, JSON.stringify(healthy));
+  const nextHealthy = structuredClone(healthy); nextHealthy.contextNotes = 'healthy remote update';
+  const rows = [
+    { id: 'unreadable-row', profileId, syncedAt: '2026-09-01T00:00:00.000Z', dataJson: JSON.stringify({ _v: 3, importedData: beforeLive, profile: null }) },
+    { id: 'healthy-row', profileId: healthyId, syncedAt: '2026-09-02T00:00:00.000Z', dataJson: JSON.stringify({ _v: 3, importedData: nextHealthy, profile: null }) },
+  ];
+  const fault = new Error('owned unreadable profile');
+  const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+  const previousTombstones = configureSyncTombstones({ getEvolu: () => null });
+  let pending: Promise<void> | undefined;
+  try {
+    vi.spyOn(crypto, 'encryptedGetItem').mockImplementation((name, options) => name === key ? Promise.reject(fault) : actualRead(name, options));
+    configureSyncPull({ getEvolu: () => ({ getQueryRows: () => rows }), getProfileQuery: () => ({}), isSyncEnabled: () => true, getProfiles: () => [{ id: profileId }, { id: healthyId }], pushDirtyProfiles: async () => ({ total: 0, succeeded: 0, failed: 0, skipped: 0 }), reconcilePulledManualWearables: async () => {} });
+    pending = onSyncReceived(); await pending;
+    expect(errors).toHaveBeenCalledWith('[sync] Pull failed for row:', fault);
+    expect(errors).toHaveBeenCalledTimes(1);
+    expect(state.importedData).toEqual(beforeLive);
+    expect(await actualRead(key)).toBe(beforeBad);
+    expect(JSON.parse((await actualRead(healthyKey))!)).toMatchObject({ contextNotes: 'healthy remote update' });
+    expect(isSyncPulling()).toBe(false);
+  } finally {
+    try { await pending; } finally {
+      configureSyncPull({ getEvolu: () => null, getProfileQuery: () => null, isSyncEnabled: () => true, getProfiles: () => [], pushDirtyProfiles: async () => ({ total: 0, succeeded: 0, failed: 0, skipped: 0 }), reconcilePulledManualWearables: async () => {} });
+      configureSyncTombstones(previousTombstones);
+      if (previousHealthy === null) await crypto.encryptedRemoveItem(healthyKey); else await crypto.encryptedSetItem(healthyKey, previousHealthy);
+    }
+  }
+});
+
+for (const failSave of [true, false]) it(`retains edits after switching into a formerly inactive pull profile: ${failSave ? 'failed save' : 'committed save'}`, async () => {
+  const previousState = { ...state };
+  const originalA = state.importedData;
+  const storedA = await crypto.encryptedGetItem(key);
+  const otherId = `${profileId}-switched-live-${failSave ? 'failed' : 'saved'}`;
+  const otherKey = profileStorageKey(otherId, 'imported');
+  const previousOther = await crypto.encryptedGetItem(otherKey);
+  const previousActive = localStorage.getItem('labcharts-active-profile');
+  const prefix = `labcharts-${otherId}-`;
+  const previousKeys = new Map<string, string>();
+  for (let index = 0; index < localStorage.length; index++) {
+    const name = localStorage.key(index);
+    if (name?.startsWith(prefix)) previousKeys.set(name, localStorage.getItem(name)!);
+  }
+  const baselineB = structuredClone(originalA);
+  baselineB.contextNotes = 'B before pull';
+  baselineB.lightEnvironment = { rooms: [
+    { id: 'shared-room', name: 'Original room', updatedAt: 1 },
+    { id: 'deleted-room', name: 'Remove locally', updatedAt: 1 },
+  ] };
+  await crypto.encryptedSetItem(otherKey, JSON.stringify(baselineB));
+  const remote = structuredClone(baselineB);
+  remote.contextNotes = 'conflicting remote scalar';
+  remote.interpretiveLens = 'independent remote lens';
+  remote.lightEnvironment = { rooms: [
+    { id: 'shared-room', name: 'Conflicting remote room', updatedAt: 3 },
+    { id: 'deleted-room', name: 'Remove locally', updatedAt: 1 },
+    { id: 'remote-room', name: 'Independent remote room', updatedAt: 3 },
+  ] };
+  const remoteNote = { date: '2026-09-18', text: 'independent remote note' };
+  remote.notes!.push(remoteNote);
+  const dataJson = JSON.stringify({ _v: 3, importedData: remote, profile: null });
+  const row = { id: 'switched-live-row', profileId: otherId, syncedAt: '2026-09-01T00:00:00.000Z', dataJson };
+  const profiles = () => [{ id: profileId }, { id: otherId }];
+  const previousHooks = configureSyncSaveHooks({});
+  const previousTombstones = configureSyncTombstones({ getEvolu: () => null });
+  const previousRuntime = configureProfileRuntimeDeps({ invalidateProfileContextCache: null,
+    reloadProfileRuntimeShell: null, refreshProfileWearables: null });
+  const actualDecode = syncPayload.parseSyncPayload;
+  let release!: () => void, entered!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const decoding = new Promise<void>(resolve => { entered = resolve; });
+  let gated = false, pending: Promise<void> | undefined;
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+  try {
+    localStorage.removeItem(`${prefix}sync-dirty`);
+    configureSyncSaveHooks({ isSyncConfigured: () => true, isSyncEnabled: () => false, getProfiles: profiles });
+    configureSyncPull({ getEvolu: () => ({ getQueryRows: () => [row] }), getProfileQuery: () => ({}),
+      isSyncEnabled: () => true, getProfiles: profiles,
+      pushDirtyProfiles: async () => ({ total: 0, succeeded: 0, failed: 0, skipped: 0 }),
+      pushProfile: async () => {}, reconcilePulledManualWearables: async () => {},
+    });
+    vi.spyOn(syncPayload, 'parseSyncPayload').mockImplementation(async value => {
+      const parsed = await actualDecode(value);
+      if (value === dataJson && !gated) { gated = true; entered(); await gate; }
+      return parsed;
+    });
+    pending = onSyncReceived();
+    await Promise.race([decoding, pending.then(() => { throw new Error('Pull never reached the decoder barrier'); })]);
+    expect(state.currentProfile).toBe(profileId);
+    // Genuine profile loading remembers B's own persisted origin; A owned the
+    // earlier receive snapshot. The failed write must leave this edit live.
+    await loadProfile(otherId);
+    expect(state.currentProfile).toBe(otherId);
+    expect(state.importedData.contextNotes).toBe('B before pull');
+    state.importedData.contextNotes = 'local edit after switching';
+    state.importedData.lightEnvironment = { rooms: [{ id: 'shared-room', name: 'Local edited room', updatedAt: 2 }] };
+    const localNote = { date: '2026-09-17', text: 'local after switching' };
+    state.importedData.notes!.push(localNote);
+    if (failSave) vi.spyOn(crypto, 'encryptedSetItem').mockRejectedValueOnce(new Error('owned switched-profile save fault'));
+    expect(await saveImportedData()).toBe(!failSave);
+    const beforeResume = JSON.parse((await crypto.encryptedGetItem(otherKey))!) as typeof baselineB;
+    expect(beforeResume.contextNotes).toBe(failSave ? 'B before pull' : 'local edit after switching');
+    expect(state.importedData.contextNotes).toBe('local edit after switching');
+    expect(state.importedData.lightEnvironment!.rooms).toEqual([{ id: 'shared-room', name: 'Local edited room', updatedAt: 2 }]);
+    expect(getSyncDirtyToken(otherId)).toEqual(failSave ? null : expect.any(String));
+    release(); await pending;
+    const committed = JSON.parse((await crypto.encryptedGetItem(otherKey))!) as typeof baselineB;
+    for (const data of [state.importedData, committed]) {
+      expect(data.contextNotes).toBe('local edit after switching');
+      expect(data.interpretiveLens).toBe('independent remote lens');
+      expect(data.lightEnvironment!.rooms).toHaveLength(2);
+      expect(data.lightEnvironment!.rooms).toEqual(expect.arrayContaining([
+        { id: 'shared-room', name: 'Local edited room', updatedAt: 2 },
+        { id: 'remote-room', name: 'Independent remote room', updatedAt: 3 },
+      ]));
+      expect(data.notes).toHaveLength(2);
+      expect(data.notes).toEqual(expect.arrayContaining([localNote, remoteNote]));
+    }
+    expect(state.currentProfile).toBe(otherId);
+    expect(await crypto.encryptedGetItem(key)).toBe(storedA);
+    expect(originalA.contextNotes).toBe('original');
+    expect(originalA.notes).toEqual([]);
+    expect(isSyncPulling()).toBe(false);
+    expect(await saveImportedData()).toBe(true);
+  } finally {
+    try { release(); await pending; } finally {
+      clearSyncSaveTimers(); vi.clearAllTimers(); vi.useRealTimers();
+      configureSyncPull({ getEvolu: () => null, getProfileQuery: () => null, isSyncEnabled: () => true, getProfiles: () => [], pushDirtyProfiles: async () => ({ total: 0, succeeded: 0, failed: 0, skipped: 0 }), pushProfile: async () => {}, reconcilePulledManualWearables: async () => {} });
+      configureSyncSaveHooks(previousHooks); configureSyncTombstones(previousTombstones);
+      configureProfileRuntimeDeps(previousRuntime);
+      Object.assign(state, previousState);
+      if (previousActive === null) localStorage.removeItem('labcharts-active-profile'); else localStorage.setItem('labcharts-active-profile', previousActive);
+      for (let index = localStorage.length - 1; index >= 0; index--) { const name = localStorage.key(index); if (name?.startsWith(prefix)) localStorage.removeItem(name); }
+      for (const [name, value] of previousKeys) localStorage.setItem(name, value);
+      if (previousOther === null) await crypto.encryptedRemoveItem(otherKey); else await crypto.encryptedSetItem(otherKey, previousOther);
+    }
+  }
+});
+
+it('retains live edits when an inactive pull profile is activated during the queued persistence read', async () => {
+  const previousState = { ...state };
+  const originalA = state.importedData;
+  const storedA = await crypto.encryptedGetItem(key);
+  const otherId = `${profileId}-switched-during-persist`;
+  const otherKey = profileStorageKey(otherId, 'imported');
+  const previousOther = await crypto.encryptedGetItem(otherKey);
+  const previousActive = localStorage.getItem('labcharts-active-profile');
+  const previousTimestamp = localStorage.getItem(`labcharts-${otherId}-sync-ts`);
+  const baselineB = structuredClone(originalA);
+  baselineB.contextNotes = 'B before persistence';
+  await crypto.encryptedSetItem(otherKey, JSON.stringify(baselineB));
+  const remote = structuredClone(baselineB);
+  remote.contextNotes = 'conflicting remote value';
+  remote.interpretiveLens = 'independent queued remote lens';
+  const actualRead = crypto.encryptedGetItem;
+  const previousRuntime = configureProfileRuntimeDeps({ invalidateProfileContextCache: null,
+    reloadProfileRuntimeShell: null, refreshProfileWearables: null });
+  let release!: () => void, entered!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const reading = new Promise<void>(resolve => { entered = resolve; });
+  let gated = false, pending: ReturnType<typeof persistPulledImportedData> | undefined;
+  try {
+    // The public merge captures B while A remains active. Then the actual
+    // locked persistence read yields before B is loaded and edited in memory.
+    const pull = await mergePulledImportedData(otherId, remote);
+    expect(state.currentProfile).toBe(profileId);
+    vi.spyOn(crypto, 'encryptedGetItem').mockImplementation(async (...args) => {
+      const raw = await actualRead(...args);
+      if (args[0] === otherKey && !gated) { gated = true; entered(); await gate; }
+      return raw;
+    });
+    pending = persistPulledImportedData(pull.localKey, otherId, pull.merged, Date.now());
+    await Promise.race([reading, pending.then(() => { throw new Error('Persistence never reached the encrypted-read barrier'); })]);
+    await loadProfile(otherId);
+    expect(state.importedData.contextNotes).toBe('B before persistence');
+    state.importedData.contextNotes = 'local edit during queued persistence';
+    expect(JSON.parse((await actualRead(otherKey))!).contextNotes).toBe('B before persistence');
+    release(); await pending;
+    expect(state.currentProfile).toBe(otherId);
+    expect(state.importedData.contextNotes).toBe('local edit during queued persistence');
+    expect(state.importedData.interpretiveLens).toBe('independent queued remote lens');
+    expect(JSON.parse((await actualRead(otherKey))!)).toMatchObject({
+      contextNotes: 'local edit during queued persistence', interpretiveLens: 'independent queued remote lens',
+    });
+    expect(await actualRead(key)).toBe(storedA);
+    expect(originalA.contextNotes).toBe('original');
+  } finally {
+    try { release(); await pending; } finally {
+      configureProfileRuntimeDeps(previousRuntime);
+      Object.assign(state, previousState);
+      if (previousActive === null) localStorage.removeItem('labcharts-active-profile'); else localStorage.setItem('labcharts-active-profile', previousActive);
+      if (previousTimestamp === null) localStorage.removeItem(`labcharts-${otherId}-sync-ts`); else localStorage.setItem(`labcharts-${otherId}-sync-ts`, previousTimestamp);
+      if (previousOther === null) await crypto.encryptedRemoveItem(otherKey); else await crypto.encryptedSetItem(otherKey, previousOther);
+    }
+  }
+});
+
+for (const rejectInvalidation of [false, true]) it(`avoids cross-profile adoption during a profile-data handoff: ${rejectInvalidation ? 'rejected invalidation' : 'pending invalidation'}`, async () => {
+  const previousState = { ...state };
+  const originalA = state.importedData;
+  const pristineA = structuredClone(originalA);
+  const storedA = await crypto.encryptedGetItem(key);
+  const otherId = `${profileId}-handoff-${rejectInvalidation ? 'rejected' : 'pending'}`;
+  const otherKey = profileStorageKey(otherId, 'imported');
+  const previousOther = await crypto.encryptedGetItem(otherKey);
+  const previousActive = localStorage.getItem('labcharts-active-profile');
+  const previousTimestamp = localStorage.getItem(`labcharts-${otherId}-sync-ts`);
+  const baselineB = structuredClone(originalA);
+  baselineB.contextNotes = 'B before handoff';
+  baselineB.wearableConnections = { oura: { token: 'synthetic-B-owned-credential' } };
+  await crypto.encryptedSetItem(otherKey, JSON.stringify(baselineB));
+  const remote = structuredClone(baselineB);
+  remote.contextNotes = 'B remote value';
+  remote.interpretiveLens = 'independent B remote lens';
+  originalA.contextNotes = 'A unsaved value must stay with A';
+  originalA.wearableConnections = { oura: { token: 'synthetic-A-private-credential' } };
+  const beforeLiveA = structuredClone(originalA);
+  let release!: () => void, reject!: (reason: unknown) => void, entered!: () => void;
+  const gate = new Promise<void>((resolve, fail) => { release = resolve; reject = fail; });
+  const invalidating = new Promise<void>(resolve => { entered = resolve; });
+  const fault = new Error('owned profile context invalidation fault');
+  const previousRuntime = configureProfileRuntimeDeps({ invalidateProfileContextCache: async () => { entered(); await gate; },
+    reloadProfileRuntimeShell: null, refreshProfileWearables: null });
+  let loading: ReturnType<typeof loadProfile> | undefined;
+  try {
+    loading = loadProfile(otherId);
+    const rejection = rejectInvalidation ? expect(loading).rejects.toBe(fault) : undefined;
+    await Promise.race([invalidating, loading.then(() => { throw new Error('Profile load never reached the context handoff barrier'); })]);
+    expect(state.currentProfile).toBe(otherId);
+    expect(state.importedData).toBe(originalA);
+    if (rejectInvalidation) { reject(fault); await rejection; }
+    // Both public baseline capture and device-local credential selection run
+    // while the selected B ID still references the unowned A object.
+    const pull = await mergePulledImportedData(otherId, remote);
+    await persistPulledImportedData(pull.localKey, otherId, pull.merged, Date.now());
+    const committedB = JSON.parse((await crypto.encryptedGetItem(otherKey))!) as typeof baselineB;
+    expect(committedB).toMatchObject({ contextNotes: 'B remote value', interpretiveLens: 'independent B remote lens' });
+    expect(committedB.wearableConnections).toEqual(baselineB.wearableConnections);
+    expect(originalA).toEqual(beforeLiveA);
+    expect(await crypto.encryptedGetItem(key)).toBe(storedA);
+    if (!rejectInvalidation) {
+      release(); await loading;
+      expect(state.currentProfile).toBe(otherId);
+      expect(state.importedData).not.toBe(originalA);
+      // This first load owns the B snapshot read before the invalidation gate.
+      expect(state.importedData.contextNotes).toBe('B before handoff');
+      await loadProfile(otherId);
+      expect(state.importedData.contextNotes).toBe('B remote value');
+      expect(state.importedData.interpretiveLens).toBe('independent B remote lens');
+      expect(state.importedData.wearableConnections).toEqual(baselineB.wearableConnections);
+      expect(originalA).toEqual(beforeLiveA);
+    }
+  } finally {
+    try { release(); await loading?.catch(() => {}); } finally {
+      // Complete a genuine data installation after either handoff outcome so
+      // the deliberately rejected transition cannot leak into later cases.
+      configureProfileRuntimeDeps({ invalidateProfileContextCache: null, reloadProfileRuntimeShell: null, refreshProfileWearables: null });
+      try { await loadProfile(profileId); } finally {
+        configureProfileRuntimeDeps(previousRuntime);
+        adoptProfileData(originalA, pristineA);
+        Object.assign(state, previousState);
+        if (previousActive === null) localStorage.removeItem('labcharts-active-profile'); else localStorage.setItem('labcharts-active-profile', previousActive);
+        if (previousTimestamp === null) localStorage.removeItem(`labcharts-${otherId}-sync-ts`); else localStorage.setItem(`labcharts-${otherId}-sync-ts`, previousTimestamp);
+        if (previousOther === null) await crypto.encryptedRemoveItem(otherKey); else await crypto.encryptedSetItem(otherKey, previousOther);
+      }
+    }
+  }
+});
+
+it('rebases an installed profile object during a pending shell hook after the pull write began', async () => {
+  const previousState = { ...state };
+  const originalA = state.importedData;
+  const storedA = await crypto.encryptedGetItem(key);
+  const otherId = `${profileId}-installed-during-write`;
+  const otherKey = profileStorageKey(otherId, 'imported');
+  const previousOther = await crypto.encryptedGetItem(otherKey);
+  const previousActive = localStorage.getItem('labcharts-active-profile');
+  const prefix = `labcharts-${otherId}-`;
+  const previousKeys = new Map<string, string>();
+  for (let index = 0; index < localStorage.length; index++) {
+    const name = localStorage.key(index);
+    if (name?.startsWith(prefix)) previousKeys.set(name, localStorage.getItem(name)!);
+  }
+  const baselineB = structuredClone(originalA);
+  baselineB.contextNotes = 'B read before write';
+  await crypto.encryptedSetItem(otherKey, JSON.stringify(baselineB));
+  const remote = structuredClone(baselineB);
+  remote.contextNotes = 'B remote committed value';
+  remote.interpretiveLens = 'independent remote lens during write';
+  const previousHooks = configureSyncSaveHooks({ isSyncConfigured: () => true, isSyncEnabled: () => false,
+    getProfiles: () => [{ id: profileId }, { id: otherId }] });
+  let releaseWrite!: () => void, writeEntered!: () => void, releaseShell!: () => void, shellEntered!: () => void;
+  const writeGate = new Promise<void>(resolve => { releaseWrite = resolve; });
+  const writing = new Promise<void>(resolve => { writeEntered = resolve; });
+  const shellGate = new Promise<void>(resolve => { releaseShell = resolve; });
+  const installed = new Promise<void>(resolve => { shellEntered = resolve; });
+  const previousRuntime = configureProfileRuntimeDeps({ invalidateProfileContextCache: null,
+    reloadProfileRuntimeShell: async () => { shellEntered(); await shellGate; }, refreshProfileWearables: null });
+  const actualWrite = crypto.encryptedSetItem;
+  let gated = false, pending: ReturnType<typeof persistPulledImportedData> | undefined, loading: ReturnType<typeof loadProfile> | undefined;
+  try {
+    const pull = await mergePulledImportedData(otherId, remote);
+    vi.spyOn(crypto, 'encryptedSetItem').mockImplementation(async (...args) => {
+      if (args[0] === otherKey && !gated) { gated = true; writeEntered(); await writeGate; }
+      return actualWrite(...args);
+    });
+    pending = persistPulledImportedData(pull.localKey, otherId, pull.merged, Date.now());
+    await Promise.race([writing, pending.then(() => { throw new Error('Pull never reached the encrypted-write barrier'); })]);
+    loading = loadProfile(otherId);
+    await Promise.race([installed, loading.then(() => { throw new Error('Profile load never reached the shell barrier'); })]);
+    expect(state.currentProfile).toBe(otherId);
+    expect(state.importedData).not.toBe(originalA);
+    expect(state.importedData.contextNotes).toBe('B read before write');
+    state.importedData.contextNotes = 'local edit after B object installation';
+    releaseWrite(); await pending;
+    expect(state.importedData.contextNotes).toBe('local edit after B object installation');
+    expect(state.importedData.interpretiveLens).toBe('independent remote lens during write');
+    expect(JSON.parse((await crypto.encryptedGetItem(otherKey))!)).toMatchObject({
+      contextNotes: 'B remote committed value', interpretiveLens: 'independent remote lens during write',
+    });
+    releaseShell(); await loading;
+    expect(await saveImportedData()).toBe(true);
+    expect(JSON.parse((await crypto.encryptedGetItem(otherKey))!)).toMatchObject({
+      contextNotes: 'local edit after B object installation', interpretiveLens: 'independent remote lens during write',
+    });
+    expect(await crypto.encryptedGetItem(key)).toBe(storedA);
+    expect(originalA.contextNotes).toBe('original');
+  } finally {
+    try { releaseWrite(); releaseShell(); await pending; await loading; } finally {
+      clearSyncSaveTimers(); configureSyncSaveHooks(previousHooks);
+      configureProfileRuntimeDeps(previousRuntime);
+      Object.assign(state, previousState);
+      if (previousActive === null) localStorage.removeItem('labcharts-active-profile'); else localStorage.setItem('labcharts-active-profile', previousActive);
+      for (let index = localStorage.length - 1; index >= 0; index--) { const name = localStorage.key(index); if (name?.startsWith(prefix)) localStorage.removeItem(name); }
+      for (const [name, value] of previousKeys) localStorage.setItem(name, value);
+      if (previousOther === null) await crypto.encryptedRemoveItem(otherKey); else await crypto.encryptedSetItem(otherKey, previousOther);
+    }
+  }
 });

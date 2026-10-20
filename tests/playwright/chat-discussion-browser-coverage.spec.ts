@@ -1,11 +1,15 @@
+import { installDiscussionFixture, openDiscussionFixturePanel } from '../helpers/chat-discussion-fixture.js';
 import { createModuleUrl } from '../helpers/browser-module-url.js';
 import { expect, test } from './coverage-fixture.js';
 
 const moduleUrl = createModuleUrl('chatDiscussionCoverage');
 
+test.beforeEach(async ({ context }) => { await installDiscussionFixture(context); });
+
 test('chat discussion state reopens ended current thread in browser', async ({ page }) => {
   await page.goto('/app', { waitUntil: 'load' });
-  await page.waitForSelector('#chat-input');
+  await openDiscussionFixturePanel(page);
+  await expect(page.locator('#chat-input')).toBeVisible();
 
   const results = await page.evaluate(async ({ discussionStateUrl }) => {
     const [{ state }, discussionState, chatThreads] = await Promise.all([
@@ -78,7 +82,8 @@ test('chat discussion state reopens ended current thread in browser', async ({ p
 
 test('chat prompt context attestation and discussion prompt helpers cover browser branches', async ({ page }) => {
   await page.goto('/app', { waitUntil: 'load' });
-  await page.waitForSelector('#chat-input');
+  await openDiscussionFixturePanel(page);
+  await expect(page.locator('#chat-input')).toBeVisible();
 
   const results = await page.evaluate(async ({ promptContextUrl, attestationUrl, promptsUrl, dcapUrl }) => {
     const [promptContext, attestation, prompts, dcap] = await Promise.all([
@@ -198,7 +203,7 @@ test('chat prompt context attestation and discussion prompt helpers cover browse
 
 test('E2EE attestation badge reveals verification details on hover and focus', async ({ page }) => {
   await page.goto('/app', { waitUntil: 'load' });
-  await page.waitForSelector('#chat-input');
+  await page.waitForSelector('#chat-input', { state: 'attached' });
 
   await page.evaluate(async ({ attestationUrl }) => {
     const attestation = (await import(attestationUrl) as unknown) as Pick<typeof import('../../js/chat-attestation.js'), "attestationTooltip" | "e2eeLockHTML" | "e2eeLockFootnote">;
@@ -239,7 +244,8 @@ test('E2EE attestation badge reveals verification details on hover and focus', a
 
 test('discussion round state persists active and inactive thread histories', async ({ page }) => {
   await page.goto('/app', { waitUntil: 'load' });
-  await page.waitForSelector('#chat-input');
+  await openDiscussionFixturePanel(page);
+  await expect(page.locator('#chat-input')).toBeVisible();
 
   const results = await page.evaluate(async ({ roundStateUrl }) => {
     const [roundState, chatThreads, { state }] = await Promise.all([
@@ -329,7 +335,8 @@ test('discussion round state persists active and inactive thread histories', asy
 
 test('chat discussion request builder covers personality model assistant and usage metadata', async ({ page }) => {
   await page.goto('/app', { waitUntil: 'load' });
-  await page.waitForSelector('#chat-input');
+  await openDiscussionFixturePanel(page);
+  await expect(page.locator('#chat-input')).toBeVisible();
 
   const results = await page.evaluate(async ({ requestUrl }) => {
     const [{ state }, data, labContext, roundRequest] = await Promise.all([
@@ -470,7 +477,8 @@ test('chat discussion request builder covers personality model assistant and usa
 
 test('chat discussion flow guards and empty rounds cover no-network browser controls', async ({ page }) => {
   await page.goto('/app', { waitUntil: 'load' });
-  await page.waitForSelector('#chat-input');
+  await openDiscussionFixturePanel(page);
+  await expect(page.locator('#chat-input')).toBeVisible();
 
   const results = await page.evaluate(async ({ flowUrl, turnsUrl }) => {
     const [{ state }, callbacks, flow, turns] = await Promise.all([
@@ -600,7 +608,8 @@ test('chat discussion flow guards and empty rounds cover no-network browser cont
 
 test('chat marker and correlation prompt handoffs prefill chat threads from browser state', async ({ page }) => {
   await page.goto('/app', { waitUntil: 'load' });
-  await page.waitForSelector('#chat-input');
+  await openDiscussionFixturePanel(page);
+  await expect(page.locator('#chat-input')).toBeVisible();
 
   const results = await page.evaluate(async ({ markerPromptsUrl }) => {
     const [{ state }, data, markerPrompts, chatRuntime] = await Promise.all([

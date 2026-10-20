@@ -2,9 +2,18 @@ import type { ProfileData as ImportedDataRecord } from '../types/app-state.js';
 import type { ActiveData } from './data-view-types.js';
 export type ProfileConversion = ReturnType<typeof import('./unit-profiles.js').resolveMarkerUnitProfile>['conversion'];
 export interface DataContextDependencies { invalidateLabContextCache: (() => void) | null | undefined }
+export interface ProfileFieldExpectation {
+  key: 'diagnoses' | 'sleepRest' | 'exercise' | 'stress' | 'loveLife' | 'diet' | 'environment' | 'lightCircadian' | 'healthGoals' | 'interpretiveLens' | 'nutritionTargets' | 'sunDefaults';
+  value: unknown;
+}
 export interface ProfileSaveOptions {
   baseData?: Partial<ImportedDataRecord> | undefined;
   expectedData?: string | null | undefined;
+  expectedContextNotes?: string;
+  expectedContextField?: ProfileFieldExpectation;
+  expectedContextFields?: readonly ProfileFieldExpectation[];
+  onContextFieldConflict?: () => void;
+  onContextNotesConflict?: (saved: string) => void;
   activeSave?: boolean;
   forceProfileScope?: boolean;
   skipSync?: boolean;
@@ -30,6 +39,7 @@ export interface DrawPhase { cycleDay: number | null; phase: string; phaseName: 
 export type Guidance = {min?: number | null | undefined; max?: number | null | undefined; label: string} | null;
 
 export interface DataCorePorts {
+  readonly profileDataValuesEqual: typeof import('./profile-data-writes.js').profileDataValuesEqual;
   readonly queueProfileDataWrite: typeof import('./profile-data-writes.js').queueProfileDataWrite;
   readonly profileDataBaseline: typeof import('./profile-data-writes.js').profileDataBaseline;
   readonly rememberProfileData: typeof import('./profile-data-writes.js').rememberProfileData;

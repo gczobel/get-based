@@ -1,11 +1,12 @@
+import {waitForAsyncCondition} from '../helpers/awaited-condition.js';
 import { expect, test } from './coverage-fixture.js';
 
 test('chat thread rail and delegated thread actions work in the live DOM', async ({ page }) => {
   await page.goto('/app', { waitUntil: 'load' });
-  await page.waitForFunction(async () => {
+  await waitForAsyncCondition(() => page.evaluate(async () => {
     const { state } = await import('/js/state.js');
     return !!state;
-  });
+  }), 0);
 
   const results = await page.evaluate(async () => {
     const chatThreads = await import('/js/chat-threads.js');
@@ -275,21 +276,35 @@ test('desktop conversations move into projects with drag and drop', async ({ pag
   await page.addInitScript(() => {
     localStorage.setItem('labcharts-default-emptyTour', 'completed');
     localStorage.setItem('labcharts-default-tour', 'completed');
+    localStorage.setItem('labcharts-analytics-consent-seen', '1');
   });
   await page.goto('/app', { waitUntil: 'load' });
+  // Complete the real startup conversation before installing the drag fixture.
+  await expect(page.locator('html[data-app-ready]')).toBeAttached();
+  await expect(page.locator('body')).not.toHaveClass(/\bchat-autostart-reserved\b/);
+  await expect.poll(() => page.evaluate(async () => {
+    const { state } = await import('/js/state.js');
+    const thread = state.chatThreads.find(item => item.id === state.currentThreadId);
+    const active = document.querySelector('#chat-thread-list .chat-thread-item.active');
+    return thread?.name === 'New Conversation'
+      && active !== null
+      && active.getAttribute('data-thread-id') === thread.id
+      && active.querySelector('.chat-thread-item-name')?.textContent === thread.name;
+  })).toBe(true);
   const original = await page.evaluate(async () => {
-    const [{ state }, threads, panelModule] = await Promise.all([import('/js/state.js'), import('/js/chat-threads.js'), import('/js/chat-panel.js')]);
-    await panelModule.loadChatPresentationStylesheets();
-    const panel = document.getElementById('chat-panel');
-    panel?.classList.add('open');
-    panel?.removeAttribute('inert');
-    document.getElementById('chat-thread-rail')?.classList.add('open');
+    const [{ state }, threads] = await Promise.all([import('/js/state.js'), import('/js/chat-threads.js')]);
+    // The lazy composition installs actions and synchronizes the Svelte layout,
+    // including the conversation rail's inert state.
+    if (await (await import('/js/chat-loader.js')).openChatPanel() !== true) throw new Error('The settled Chat owner could not open');
+    if (!document.getElementById('chat-thread-rail')?.classList.contains('open')) threads.toggleThreadRail();
     document.getElementById('tour-overlay')?.remove();
     const snapshot = { chatThreads: state.chatThreads, currentThreadId: state.currentThreadId };
     const now = new Date().toISOString();
     (state as {chatThreads:unknown}).chatThreads = [
       { id: 'drag-me', name: 'Move me', createdAt: now, updatedAt: now, messageCount: 1, personality: 'default' },
       { id: 'project-home', name: 'Metabolic overview', createdAt: now, updatedAt: now, messageCount: 2, personality: 'default', projectName: 'Metabolic' },
+      // Keep the removal target usable even when the conversation list scrolls.
+      ...Array.from({ length: 20 }, (_, index) => ({ id: `extra-${index}`, name: `Other conversation ${index}`, createdAt: now, updatedAt: now, messageCount: 1, personality: 'default' })),
     ];
     state.currentThreadId = 'drag-me';
     threads.renderThreadList();
@@ -303,8 +318,11 @@ test('desktop conversations move into projects with drag and drop', async ({ pag
     document.getElementById('tour-overlay')?.remove();
     document.getElementById('tour-popup')?.remove();
   });
+  await expect(page.locator('#chat-thread-rail')).not.toHaveAttribute('inert');
   const source = page.locator('.chat-thread-item[data-thread-id="drag-me"] .chat-thread-item-main');
   const projectTarget = page.locator('[data-chat-project-drop="Metabolic"] .chat-thread-group-title');
+  await source.scrollIntoViewIfNeeded();
+  await projectTarget.scrollIntoViewIfNeeded();
   const sourceBox = await source.boundingBox();
   const projectBox = await projectTarget.boundingBox();
   expect(sourceBox).not.toBeNull();
@@ -327,6 +345,7 @@ test('desktop conversations move into projects with drag and drop', async ({ pag
   await page.mouse.down();
   await page.mouse.move(movedSourceBox!.x + movedSourceBox!.width / 2 + 12, movedSourceBox!.y + movedSourceBox!.height / 2 + 4, { steps: 4 });
   await expect(page.locator('.chat-thread-unfiled-drop')).toBeVisible();
+  await expect(page.locator('.chat-thread-unfiled-drop')).toBeInViewport();
   const unfiledBox = await page.locator('.chat-thread-unfiled-drop').boundingBox();
   expect(unfiledBox).not.toBeNull();
   await page.mouse.move(unfiledBox!.x + unfiledBox!.width / 2, unfiledBox!.y + unfiledBox!.height / 2, { steps: 10 });

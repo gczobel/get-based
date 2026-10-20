@@ -1,0 +1,27 @@
+/* Lazy context presentation retains the existing stylesheet URL and order. */
+@import "tailwindcss/theme.css" layer(gb-theme) prefix(gb);
+@import "tailwindcss/utilities.css" prefix(gb) source(none);
+@import "./ui-tokens.tailwind.css";
+@source "../js/components/ContextCardTips.svelte";
+@custom-variant context-tips (&:is([data-context-tips-view], [data-context-tips-view] *));
+
+@source "../js/components/LifestyleContextForm.svelte";
+@source "../js/components/ContextLightSetupMirror.svelte";
+@source "../js/context-form-dialog.ts";
+@source "../js/components/ContextHealthGoals.svelte";
+@custom-variant context-form (&:is([data-context-form-modal], [data-context-form-modal] *));
+
+@source "../js/components/ContextEMFLauncher.svelte";
+@custom-variant context-emf (&:is([data-context-emf-launcher], [data-context-emf-launcher] *));
+
+@source "../js/components/ContextFoodContaminants.svelte";
+
+@source "../js/components/ContextHub.svelte";
+@custom-variant context-hub (&:is([data-context-hub-view], [data-context-hub-view] *));
+
+@source "../js/components/DataProtectionPicker.svelte";
+@custom-variant protection-picker (&:is([data-data-protection-view], [data-data-protection-view] *));
+
+@source "../js/context-form-classes.ts";
+@source "../js/components/ContextMedicalHistory.svelte";
+@source "../js/components/ContextConditionInput.svelte";

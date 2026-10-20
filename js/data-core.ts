@@ -166,6 +166,19 @@ export function createDataCore(ports: DataCorePorts) {
     } catch { return failedProfileSave(); }
   }
 
+  /** Scoped commits already schedule profile sync. Refresh current AI context after the caller publishes saved data. */
+  function notifyProfileDataContextChanged(profileId: string): boolean {
+    if (ports.state.currentProfile !== profileId) return false;
+    try {
+      dataContextDeps.invalidateLabContextCache?.();
+      (0, ports.onDataSaved)({ skipSync: true });
+      return true;
+    } catch (error) {
+      if ((0, ports.isDebugMode)()) console.warn('Post-save context refresh failed:', error);
+      return false;
+    }
+  }
+
   // A supplied baseData describes a field mutation against a version read earlier.
   // Without it, scoped callers retain explicit whole-profile restore semantics.
   async function saveImportedDataForProfile(profileId: string | null | undefined, importedData: Partial<ImportedDataRecord> | null | undefined, options: ProfileSaveOptions = {}) {
@@ -189,6 +202,7 @@ export function createDataCore(ports: DataCorePorts) {
 
   function persistProfileSnapshot(profileId: string, source: ImportedDataRecord, options: ProfileSaveOptions) {
     const intent = structuredClone(source);
+    const expectedFields = structuredClone([...(options.expectedContextFields || []), ...(options.expectedContextField ? [options.expectedContextField] : [])]);
     const previousSave = options.activeSave && pendingProfileSaves.get(source);
     const snapshot: ProfileSaveSnapshot = { baseline: options.baseData, base: options.baseData ? structuredClone(options.baseData) : null, intent, committed: false, profileId };
     if (options.activeSave) pendingProfileSaves.set(source, snapshot);
@@ -207,7 +221,23 @@ export function createDataCore(ports: DataCorePorts) {
         const previous = await (0, ports.encryptedGetItem)(key, { throwOnDecryptError: true });
         // Explicit restores must retry if their reviewed snapshot changed.
         if (options.expectedData !== undefined && previous !== options.expectedData) throw new ports.ProfileWriteConflict('Stale import');
-        const latest = base && previous != null ? JSON.parse(previous) : {};
+        const stored = previous != null && (base || options.expectedContextNotes !== undefined || expectedFields.length > 0) ? JSON.parse(previous) : {};
+        // Notes drafts can outlive a view/profile load. Check their observed
+        // value inside the same locked read/merge/write that commits the edit.
+        if (options.expectedContextNotes !== undefined && String(stored.contextNotes || '') !== options.expectedContextNotes) {
+          try { options.onContextNotesConflict?.(String(stored.contextNotes || '')); } catch { /* Observation cannot bypass the conflict guard. */ }
+          throw new ports.ProfileWriteConflict('Context notes changed since this edit');
+        }
+        // Legacy profiles omit an empty Lens; it has the same string contract as ''.
+        for (const expectedField of expectedFields) {
+          const contextValue = expectedField.key === 'interpretiveLens' ? stored.interpretiveLens ?? '' : stored[expectedField.key] ?? null;
+          const observedContextValue = expectedField.key === 'interpretiveLens' ? expectedField.value ?? '' : expectedField.value;
+          if (!ports.profileDataValuesEqual(contextValue, observedContextValue)) {
+            try { options.onContextFieldConflict?.(); } catch { /* Observation cannot bypass the guard. */ }
+            throw new ports.ProfileWriteConflict('Context field changed since this edit');
+          }
+        }
+        const latest = base ? stored : {};
         persisted = base ? (0, ports.mergeProfileMutation)(base, intent, latest) : intent;
         // Concurrent assessments of the same score may cover different views.
         // Merge their records rather than replacing a newly saved variant.
@@ -702,5 +732,5 @@ export function createDataCore(ports: DataCorePorts) {
 
   (0, ports.configureDataViewCoreDependencies)({ getActiveData, invalidateActiveDataCache });
 
-  return { configureDataContextDependencies, registerRefreshCallback, _runRegisteredRefreshCallback, invalidateActiveDataCache, saveImportedData, saveImportedDataForProfile, getFocusCardFingerprint, getActiveData, convertDisplayToSI, applyUnitConversion, filterDatesByRange, recalculateHOMAIR, getAllFlaggedMarkers };
+  return { configureDataContextDependencies, registerRefreshCallback, _runRegisteredRefreshCallback, invalidateActiveDataCache, saveImportedData, saveImportedDataForProfile, notifyProfileDataContextChanged, getFocusCardFingerprint, getActiveData, convertDisplayToSI, applyUnitConversion, filterDatesByRange, recalculateHOMAIR, getAllFlaggedMarkers };
 }

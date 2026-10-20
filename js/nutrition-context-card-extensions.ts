@@ -3,9 +3,11 @@
 import { state } from './state.js';
 import { getNutritionContextDays, isNutritionContextEnabled } from './lab-context-settings.js';
 import { doesNutritionContextOverrideTypicalMeals } from './context-card-summaries.js';
-import { escapeHTML } from './utils.js';
+import { renderHTML } from './components/ContextNutritionLink.svelte.html.js';
+import {captureNutritionContextActionAttributes} from './nutrition-context-card-view.js';
+import type {NutritionContextLinkView, NutritionContextActionFactory} from './nutrition-context-card-view.js';
 
-type NutritionActionAttributes = (action: 'open-nutrition', options: { surface: 'meals' | 'timing' }) => string;
+type NutritionActionAttributes = NutritionContextActionFactory;
 interface NutritionCardWindow {
   loggedDays?: unknown;
   foodMeals?: unknown;
@@ -25,8 +27,7 @@ interface NutritionCardSummary {
   windows?: { d7?: NutritionCardWindow | null } | null;
 }
 
-
-export function renderNutritionDietExtension(actionAttributes: NutritionActionAttributes) {
+export function projectNutritionDietExtension(actionAttributes: NutritionActionAttributes): NutritionContextLinkView {
   const summary = state.nutritionSummary as NutritionCardSummary | null;
   const period = summary?.windows?.d7;
   const logged = period?.loggedDays || 0;
@@ -44,13 +45,14 @@ export function renderNutritionDietExtension(actionAttributes: NutritionActionAt
   } else if (overridesTypicalMeals) {
     detail = 'Replaces Typical meals · no entries in 7 days';
   }
-  return `<button type="button" class="diet-nutrition-extension" ${actionAttributes('open-nutrition', { surface: 'meals' })}><span class="diet-nutrition-extension-title">${title}</span><span>${escapeHTML(detail)}</span><span aria-hidden="true">→</span></button>`;
+  const attributes = captureNutritionContextActionAttributes(actionAttributes('open-nutrition', {surface: 'meals'}));
+  return {title, detail, surface: 'meals', attributes};
 }
 
-export function renderNutritionCircadianExtension(actionAttributes: NutritionActionAttributes) {
+export function projectNutritionCircadianExtension(actionAttributes: NutritionActionAttributes): NutritionContextLinkView | null {
   const period = (state.nutritionSummary as NutritionCardSummary | null)?.windows?.d7;
   const timing = period?.timing;
-  if (!period?.meals || !timing?.mealsWithTiming) return '';
+  if (!period?.meals || !timing?.mealsWithTiming) return null;
   const first = timing.averageFirstMealLocalTime || '';
   const last = timing.averageLastMealLocalTime || '';
   const beforeSleep = timing.sleepRelative?.averageLastMealToSleepMinutes;
@@ -61,6 +63,16 @@ export function renderNutritionCircadianExtension(actionAttributes: NutritionAct
     return `${Math.floor(value / 60)}h ${Math.round(value % 60)}m`;
   };
   const detail = [first && `first ${first}`, last && `last ${last}`, beforeSleep !== null && beforeSleep !== undefined && Number.isFinite(Number(beforeSleep)) && `${duration(beforeSleep)} before sleep`, afterWake !== null && afterWake !== undefined && Number.isFinite(Number(afterWake)) && `${duration(afterWake)} after wake`].filter(Boolean).join(' · ');
-  if (!detail) return '';
-  return `<button type="button" class="diet-nutrition-extension" ${actionAttributes('open-nutrition', { surface: 'timing' })}><span class="diet-nutrition-extension-title">Logged meal timing</span><span>7-day average · ${escapeHTML(detail)}</span><span aria-hidden="true">→</span></button>`;
+  if (!detail) return null;
+  const attributes = captureNutritionContextActionAttributes(actionAttributes('open-nutrition', {surface: 'timing'}));
+  return {title: 'Logged meal timing', detail: `7-day average · ${detail}`, surface: 'timing', attributes};
+}
+
+/** Stable synchronous HTML URL; the catalog composes the same genuine child. */
+export function renderNutritionDietExtension(actionAttributes: NutritionActionAttributes): string {
+  return renderHTML({view: projectNutritionDietExtension(actionAttributes)});
+}
+export function renderNutritionCircadianExtension(actionAttributes: NutritionActionAttributes): string {
+  const view = projectNutritionCircadianExtension(actionAttributes);
+  return view === null ? '' : renderHTML({view});
 }

@@ -1,14 +1,21 @@
+import { contextCardStatusTicket, publishContextCardStatus } from './context-card-status.js';
+import { ensureContextCardStatus } from './context-card-status-view.js';
+import { ensureContextNotes } from './context-notes-view.js';
+import { contextNotesPresentation } from './context-notes-session.js';
+export { debounceContextNotes } from './context-notes-view.js';
 import { configureRuntimeFunctions } from './runtime-callbacks.js';
+import { renderHTML as renderContextCatalogHTML } from './components/ContextCardCatalog.svelte.html.js';
+import { projectContextDemoBar } from './context-card-catalog-presentation.js';
 // context-cards.js - dashboard context card module surface and shared lifecycle
 
 import { state } from './state.js';
-import { escapeAttr, escapeHTML, showConfirmDialog, showNotification } from './utils.js';
-import { camelCaseActionAttributes } from './action-attributes.js';
+import { showConfirmDialog, showNotification } from './utils.js';
 import { saveImportedData, getActiveData } from './data.js';
 import { hasAssistantFeatureProvider } from './ai-feature-routing.js';
 import { openModalOverlay } from './modal-lifecycle.js';
 import { openEMFAssessmentEditor } from './emf-runtime.js';
-import { renderNutritionCircadianExtension, renderNutritionDietExtension } from './nutrition-context-card-extensions.js';
+import { projectNutritionCircadianExtension, projectNutritionDietExtension } from './nutrition-context-card-extensions.js';
+import {projectDietContaminantsBadge} from './context-food-contaminants-badge.js';
 import { getRecommendationModuleFunction } from './recommendations-runtime.js';
 import {
   closeContextCardModalRuntime,
@@ -31,6 +38,7 @@ import {
   getCardFingerprint as getContextCardFingerprint,
   getDemoContextAIMode,
   loadContextHealthDots as loadContextHealthDotsImpl,
+  prepareContextHealthPresentation,
   refreshAllHealthDots as refreshAllHealthDotsImpl,
 } from './context-card-health-dots.js';
 import {
@@ -47,7 +55,6 @@ import {
 } from './context-card-medical-history-editor.js';
 import {
   configureLifestyleContextEditors,
-  renderDietContaminantsBadge,
   openDietEditor,
   openSleepRestEditor,
   openLightCircadianEditor,
@@ -82,7 +89,7 @@ function closeContextCardModal() {
   closeContextCardModalRuntime();
 }
 function navigateContextCardView(category: Parameters<typeof navigateContextCardViewRuntime>[0]) {
-  navigateContextCardViewRuntime(category);
+  return navigateContextCardViewRuntime(category);
 }
 function refreshCurrentContextCardView() {
   const activeNav = (document.querySelector<HTMLElement>('.nav-item.active'));
@@ -106,8 +113,9 @@ export function configureContextCardRuntimeDeps(deps: unknown = {}) {
   return (configureRuntimeFunctions as (current: typeof contextCardRuntimeDeps, updates: unknown, fields: readonly (keyof typeof contextCardRuntimeDeps)[]) => typeof contextCardRuntimeDeps)(contextCardRuntimeDeps, deps, ["openEMFAssessmentEditor"]);
 }
 
-function contextCardActionAttrs(action: unknown, attrs: Record<string, unknown> = {}) {
-  return camelCaseActionAttributes(CONTEXT_CARD_ACTION_ATTR, "context-card", action, attrs);
+/** The nutrition child receives delegated data rather than prepared markup. */
+function contextNutritionActionAttributes(action: 'open-nutrition', options: {surface: 'meals' | 'timing'}) {
+  return {'data-context-card-action': String(action), 'data-context-card-surface': String(options.surface)};
 }
 
 function closestContextCardAction(target: ContextCardTarget | null | undefined) {
@@ -163,6 +171,9 @@ function handleContextCardClick(event: Event) {
     void enableLiveAIForDemo();
   } else if (action === 'disable-demo-live-ai') {
     disableLiveAIForDemo();
+  } else if (action === 'open-card-tips') {
+    if (actionEl.dataset.contextStatusTicket !== contextCardStatusTicket()) return;
+    void openCardTipsModal(actionEl.dataset.contextCardKey || '', actionEl.dataset.contextStatusTicket, actionEl);
   } else if (action === 'open-editor') {
     const editor = actionEl.dataset.contextCardEditor || '';
     const runEditor = contextCardEditorActions[editor];
@@ -198,19 +209,10 @@ function handleContextCardClick(event: Event) {
   event.stopPropagation();
 }
 
-function handleContextCardInput(event: Event) {
-  const actionEl = closestContextCardAction(event.target as ContextCardTarget | null) as HTMLElement | null;
-  if (!actionEl || !(event.currentTarget as ContextCardEventRoot | null)?.contains?.(actionEl)) return;
-  if (actionEl.getAttribute(CONTEXT_CARD_ACTION_ATTR) === 'context-notes-input') {
-    debounceContextNotes();
-  }
-}
-
 export function installContextCardActionDelegates(root: ContextCardDelegateRoot | null = typeof document !== 'undefined' ? document : null) {
   if (!root || contextCardActionDelegateRoots.has(root)) return;
   contextCardActionDelegateRoots.add(root);
   root.addEventListener('click', handleContextCardClick);
-  root.addEventListener('input', handleContextCardInput);
 }
 
 if (typeof document !== 'undefined') installContextCardActionDelegates();
@@ -305,12 +307,11 @@ export {
 
 let contextCardRenderSequence = 0;
 
-export function renderProfileContextCards({ embedded = false }: { embedded?: unknown } = {}) {
+export function projectProfileContextCards({ embedded = false }: { embedded?: unknown } = {}) {
   contextCardRenderSequence += 1;
   const renderId = `ctx-${contextCardRenderSequence}`;
-  const sectionTitleId = `${renderId}-section-title`;
+  const notes = contextNotesPresentation();
   const cardDefs = getContextCardDefs();
-  const addedCount = cardDefs.filter(c => isContextFilled(c.key)).length;
   const _ccData = getActiveData();
   const _ccHasLabs = _ccData.dates.length > 0 || Object.values(_ccData.categories).some(c => c.singleDate);
   const _ccMissingDemo = (!state.profileSex || !state.profileDob);
@@ -319,94 +320,35 @@ export function renderProfileContextCards({ embedded = false }: { embedded?: unk
     : 'Add only what is relevant, then use Chat to plan which labs may be useful for you.';
   if (_ccMissingDemo) _ccSubtitle += ' Age and sex in Settings also shape interpretation.';
   const _demoAIMode = getDemoContextAIMode();
-  const _refreshBtn = hasAssistantFeatureProvider() && (!_demoAIMode.demo || _demoAIMode.live) ? `<button type="button" class="ctx-refresh-all-btn" ${contextCardActionAttrs('refresh-all-health-dots')} aria-label="Refresh AI context insights"><span class="ctx-refresh-all-icon" aria-hidden="true">&#x21bb;</span><span class="ctx-refresh-all-label">Refresh insights</span></button>` : '';
-  let html = `<section class="profile-context-section" ${embedded ? 'aria-label="Your health context"' : `aria-labelledby="${sectionTitleId}"`}>
-    <div class="context-section-header">
-      <div class="context-section-intro">
-        ${embedded ? '' : `<div class="context-section-title" id="${sectionTitleId}">Your health context</div>`}
-        <div class="context-section-subtitle">${escapeHTML(_ccSubtitle)}</div>
-      </div>
-      <div class="context-section-tools">
-        <span class="context-progress-text" aria-label="${addedCount} of ${cardDefs.length} context areas added">${addedCount} of ${cardDefs.length} added</span>
-        ${_refreshBtn}
-      </div>
-    </div>`;
-  if (_demoAIMode.demo) {
-    if (_demoAIMode.mode === 'local-live') {
-      html += `<div class="demo-context-ai-bar demo-context-ai-local" role="group" aria-label="Demo AI status"><div class="demo-context-ai-copy"><span class="demo-context-ai-title">Local AI active</span>Edited cards update automatically with ${escapeHTML(_demoAIMode.modelLabel)}. No paid-provider token charges.</div></div>`;
-    } else if (_demoAIMode.mode === 'paid-live') {
-      html += `<div class="demo-context-ai-bar demo-context-ai-paid-live" role="group" aria-label="Demo AI status"><div class="demo-context-ai-copy"><span class="demo-context-ai-title">Live AI enabled</span>${escapeHTML(_demoAIMode.providerLabel)} · ${escapeHTML(_demoAIMode.modelLabel)}. Context edits may use paid tokens.</div><button type="button" class="demo-context-ai-action" ${contextCardActionAttrs('disable-demo-live-ai')}>Turn off</button></div>`;
-    } else if (_demoAIMode.mode === 'paid-off') {
-      html += `<div class="demo-context-ai-bar demo-context-ai-paid-off" role="group" aria-label="Demo AI status"><div class="demo-context-ai-copy"><span class="demo-context-ai-title">Precomputed demo insights</span>Live AI is off to prevent unexpected ${escapeHTML(_demoAIMode.providerLabel)} charges.</div><button type="button" class="demo-context-ai-action" ${contextCardActionAttrs('enable-demo-live-ai')}>Enable live AI</button></div>`;
-    } else if (_demoAIMode.mode === 'paused') {
-      html += `<div class="demo-context-ai-bar demo-context-ai-precomputed" role="group" aria-label="Demo AI status"><div class="demo-context-ai-copy"><span class="demo-context-ai-title">Precomputed demo insights</span>AI is paused. Browsing and editing use no inference.</div></div>`;
-    } else {
-      html += `<div class="demo-context-ai-bar demo-context-ai-precomputed" role="group" aria-label="Demo AI status"><div class="demo-context-ai-copy"><span class="demo-context-ai-title">Precomputed demo insights</span>Browsing and editing use no AI inference. Connect a provider to recalculate changed cards.</div></div>`;
-    }
-  }
-  html += `<div class="profile-context-cards">`;
-  for (const c of cardDefs) {
-    const filled = isContextFilled(c.key);
-    const summary = c.summaryFn();
-    const explanationId = `${renderId}-explanation-${c.key}`;
-    html += `<article class="context-card${filled ? ' context-card-added' : ' context-card-empty'}" data-context-card-key="${escapeAttr(c.key)}">
-      <button type="button" class="context-card-open" aria-label="${filled ? 'Edit' : 'Add'} ${escapeHTML(c.label)}" ${contextCardActionAttrs('open-editor', { editor: c.editor })}></button>
-      <div class="context-card-header">
-        <span class="context-card-icon" aria-hidden="true">${c.icon}</span>
-        <span class="context-card-title">
-          <span class="context-card-label">${escapeHTML(c.label)}</span>
-          <span class="ctx-health-indicator" id="ctx-health-${c.key}" hidden><span class="ctx-health-dot ctx-health-dot-gray" id="ctx-dot-${c.key}"></span><span class="ctx-health-label" id="ctx-health-label-${c.key}">Not assessed</span></span>
-        </span>
-        <span class="context-card-tips-host" id="ctx-tips-${c.key}"></span>
-        <button type="button" class="context-info-icon" aria-label="Why ${escapeHTML(c.label)} matters" aria-expanded="false" aria-controls="${explanationId}" ${contextCardActionAttrs('toggle-explanation', { explanation: explanationId })}>i</button>
-      </div>
-      ${summary
-        ? `<div class="context-card-body" id="ctx-summary-${c.key}" data-summary-source="local" data-local-summary="${escapeAttr(summary)}">${escapeHTML(summary)}</div>`
-        : `<div class="context-card-placeholder">${escapeHTML(c.placeholder)}</div>`}
-      <div class="context-card-explanation" id="${explanationId}" hidden>${escapeHTML(c.tooltip)}</div>
-      ${c.key === 'diet' ? renderDietContaminantsBadge() : ''}
-      ${c.key === 'diet' ? renderNutritionDietExtension(contextCardActionAttrs) : ''}
-      ${c.key === 'lightCircadian' ? renderNutritionCircadianExtension(contextCardActionAttrs) : ''}
-      <div class="ctx-ai-summary-slot"><div class="ctx-ai-summary" id="ctx-ai-${c.key}"></div></div>
-    </article>`;
-  }
-  html += `</div>`;
-  // Additional Notes textarea
-  const notes: unknown = state.importedData.contextNotes || '';
-  html += `<div class="ctx-notes-section">
-    <div class="ctx-notes-head"><label class="ctx-notes-label" for="ctx-notes-textarea">Additional context</label><span class="ctx-notes-status" id="ctx-notes-status" role="status" aria-live="polite">Saved as you type</span></div>
-    <div class="ctx-notes-hint" id="ctx-notes-hint">Anything else that may affect your labs or health patterns.</div>
-    <textarea class="ctx-notes-textarea" id="ctx-notes-textarea" aria-describedby="ctx-notes-hint" placeholder="For example: shift work, a recent illness, or an upcoming treatment change" ${contextCardActionAttrs('context-notes-input')}>${escapeHTML(notes)}</textarea>
-  </div>`;
-  return html + `</section>`;
+  const cards = cardDefs.map(({ summaryFn, ...card }) => ({ ...card, filled: isContextFilled(card.key), summary: summaryFn(),
+    contaminants: card.key === 'diet' ? projectDietContaminantsBadge() : null,
+    nutrition: card.key === 'diet' ? projectNutritionDietExtension(contextNutritionActionAttributes)
+      : card.key === 'lightCircadian' ? projectNutritionCircadianExtension(contextNutritionActionAttributes) : null,
+  }));
+  prepareContextHealthPresentation();
+  const statusTicket = contextCardStatusTicket();
+  queueMicrotask(() => { ensureContextNotes(); ensureContextCardStatus(); });
+  return {
+    renderId, statusTicket, embedded: Boolean(embedded), subtitle: _ccSubtitle, cards, addedCount: cards.filter(card => card.filled).length,
+    refresh: hasAssistantFeatureProvider() && (!_demoAIMode.demo || _demoAIMode.live),
+    demo: projectContextDemoBar(_demoAIMode), notes: notes.notes, notesTicket: notes.ticket, notesStatus: notes.status, notesSaved: notes.saved,
+  };
 }
 
-let _ctxNotesTimer: ReturnType<typeof setTimeout> | null = null;
-function setContextNotesStatus(text: string) {
-  const status = document.getElementById('ctx-notes-status');
-  if (status) status.textContent = text;
-}
-export function debounceContextNotes() {
-  clearTimeout(_ctxNotesTimer as ReturnType<typeof setTimeout>);
-  setContextNotesStatus('Saving\u2026');
-  _ctxNotesTimer = setTimeout(() => {
-    const ta = (document.getElementById('ctx-notes-textarea') as HTMLTextAreaElement | null);
-    if (ta) {
-      state.importedData.contextNotes = ta.value;
-      recordChange('contextNotes');
-      saveImportedData();
-      setContextNotesStatus('Saved');
-    }
-  }, 500);
+
+export function renderProfileContextCards(options: {embedded?: unknown} = {}) {
+  return renderContextCatalogHTML({view: projectProfileContextCards(options)});
 }
 
 // ── AI Health Status Dots ──
 
 export function applyDotColor(key: Parameters<typeof applyContextHealthDotColor>[0], color: Parameters<typeof applyContextHealthDotColor>[1]) {
+  ensureContextCardStatus();
   applyContextHealthDotColor(key, color);
 }
 
 export function applyAISummary(key: Parameters<typeof applyContextAISummary>[0], text: Parameters<typeof applyContextAISummary>[1], color: Parameters<typeof applyContextAISummary>[2]) {
+  ensureContextCardStatus();
   applyContextAISummary(key, text, color);
 }
 
@@ -431,6 +373,10 @@ export function recordChange(field: Parameters<typeof recordContextCardChange>[0
 export function saveAndRefresh(msg: string, field?: string) {
   if (field) recordChange(field);
   saveImportedData();
+  refreshAfterContextCommit(msg);
+}
+
+function refreshAfterContextCommit(msg: string) {
   // Preserve details open state across the re-render below
   const details = (document.querySelector<HTMLDetailsElement>('.welcome-context-details'));
   if (details?.open) sessionStorage.setItem('welcome-details-open', '1');
@@ -453,34 +399,37 @@ configureMedicalHistoryEditor({
   close: closeContextCardModal,
   recordChange,
   saveAndRefresh,
+  afterCommit: refreshAfterContextCommit,
 });
-configureLifestyleContextEditors({ recordChange, saveAndRefresh });
+configureLifestyleContextEditors({ recordChange, saveAndRefresh, afterCommit: refreshAfterContextCommit });
 
 // ── Card tips badges (async — waits for catalog) ──
 export async function loadContextCardTips() {
   const isProductRecsEnabled = getRecommendationModuleFunction('isProductRecsEnabled');
   const loadCatalog = getRecommendationModuleFunction('loadCatalog');
   const getCardSlotKeys = getRecommendationModuleFunction('getCardSlotKeys');
-  if (!isProductRecsEnabled?.() || !loadCatalog || !getCardSlotKeys) return;
-  await loadCatalog();
   const cardKeys = ['sleepRest', 'lightCircadian', 'environment', 'exercise', 'diet', 'stress'];
-  for (const key of cardKeys) {
-    const el = document.getElementById(`ctx-tips-${key}`);
-    if (!el || el.children.length > 0) continue;
-    if (getCardSlotKeys(key).length === 0) continue;
-    const badge = document.createElement('span');
-    badge.className = 'ctx-tips-badge';
-    badge.textContent = 'Tips';
-    badge.title = 'Lifestyle tips for this area';
-    badge.onclick = (e) => { e.stopPropagation(); openCardTipsModal(key); };
-    el.appendChild(badge);
+  if (!isProductRecsEnabled?.() || !loadCatalog || !getCardSlotKeys) {
+    ensureContextCardStatus();
+    for (const key of cardKeys) publishContextCardStatus(key, { tips: false });
+    return;
   }
+  const ticket = contextCardStatusTicket();
+  try { await loadCatalog(); } catch { return; }
+  if (ticket !== contextCardStatusTicket() || !isProductRecsEnabled()
+    || isProductRecsEnabled !== getRecommendationModuleFunction('isProductRecsEnabled')
+    || loadCatalog !== getRecommendationModuleFunction('loadCatalog')
+    || getCardSlotKeys !== getRecommendationModuleFunction('getCardSlotKeys')) return;
+  ensureContextCardStatus();
+  for (const key of cardKeys) publishContextCardStatus(key, { tips: getCardSlotKeys(key).length > 0 }, ticket);
 }
 
 // ── Card tips modal ──
-export function openCardTipsModal(cardKey: string): void | Promise<unknown> | boolean {
+export function openCardTipsModal(cardKey: string, ticket = contextCardStatusTicket(), owner?: HTMLElement): void | Promise<unknown> | boolean {
+  if (ticket !== contextCardStatusTicket() || (owner && (!owner.isConnected
+    || owner.dataset.contextStatusTicket !== ticket || !getRecommendationModuleFunction('isProductRecsEnabled')?.()))) return;
   if (!isContextEditorStylesheetLoaded()) {
-    return runWithContextEditorStylesheet(() => openCardTipsModal(cardKey));
+    return runWithContextEditorStylesheet(() => openCardTipsModal(cardKey, ticket, owner));
   }
   const renderCardTipsModal = getRecommendationModuleFunction('renderCardTipsModal');
   if (!renderCardTipsModal) return;
@@ -490,7 +439,10 @@ export function openCardTipsModal(cardKey: string): void | Promise<unknown> | bo
   const overlay = document.getElementById('modal-overlay');
   const modal = document.getElementById('detail-modal');
   if (!overlay || !modal) return;
+  modal.className = 'modal';
   modal.innerHTML = html;
+  modal.removeAttribute('aria-labelledby');
+  modal.setAttribute('aria-label', modal.querySelector('[data-context-tips-view] h2')?.textContent?.trim() || 'Context tips');
   openModalOverlay(overlay);
 }
 

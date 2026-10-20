@@ -28,10 +28,8 @@ body.chat-autostart-reserved.chat-fullscreen .main {
 .range-toggle-btn.active,
 .range-btn.active,
 .settings-theme-btn.active,
-.ai-provider-btn.active,
 .emf-room-tab.active,
 .cl-tag-chip.active,
-.welcome-sex-btn.active,
 .onboarding-sex-btn.active {
   background: var(--accent);
   border-color: var(--accent);
@@ -50,7 +48,8 @@ body.chat-autostart-reserved.chat-fullscreen .main {
   .chat-panel {
     left: 0;
     right: 0;
-    width: 100%;
+    /* Fill the viewport rather than the document scrollbar gutter. */
+    width: 100vw;
     max-width: none;
     border-left: 0;
   }

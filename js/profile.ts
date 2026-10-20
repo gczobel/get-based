@@ -1,3 +1,4 @@
+import {tsStateStyles} from './ts-state-ui-inline-style-map.generated.js';
 import { rememberProfileData } from './profile-data-writes.js';
 import { readProfileForLoad } from './profile-load-safety.js';
 import { state, resetCorrelationSelection } from './state.js';
@@ -236,6 +237,13 @@ function queueProfileSync(profileId: string, importedData: ProfileData | null = 
 
 let profileLoadGeneration = 0;
 let profileLoadPending = false;
+// A selected ID does not own the preceding profile's object while the context
+// handoff yields. Only installing the new object establishes ownership again.
+let profileDataTransition: number | null = null;
+export function isActiveProfileDataOwner(profileId: string, data: unknown): boolean {
+  return profileDataTransition === null && data !== null && typeof data === 'object'
+    && profileId === state.currentProfile && data === state.importedData;
+}
 
 export async function loadProfile(profileId: string) {
   const generation = ++profileLoadGeneration;
@@ -246,12 +254,14 @@ export async function loadProfile(profileId: string) {
       if (isCurrent()) profileDeps.showNotification(message, severity, duration);
     });
     if (!isCurrent()) return;
+    profileDataTransition = generation;
     state.currentProfile = profileId;
     setActiveProfileId(profileId);
     await invalidateProfileContextCache();
     if (!isCurrent()) return;
     const defaultData = createDefaultProfileData();
     state.importedData = defaultData;
+    profileDataTransition = null;
     rememberProfileData(defaultData);
     if (savedImported) {
       try {
@@ -316,6 +326,8 @@ export async function loadProfile(profileId: string) {
     if (!isCurrent()) return;
     refreshProfileWearables(profileId, state.importedData?.biometrics);
   } finally {
+    // An interrupted handoff remains unowned until a successful installation;
+    // a stale or failed load must not certify the old object under a new ID.
     if (isCurrent()) profileLoadPending = false;
   }
 }
@@ -583,7 +595,7 @@ export async function detectLatitudeWithAI(country: string, zip: string) {
       var el = document.getElementById('loc-lat-display');
       if (el) {
         var band = latitudeToBand(lat);
-        el.style.color = 'var(--green)';
+        el.style.color = tsStateStyles.successColor;
         el.textContent = '\u2713 ' + Math.abs(Math.round(lat)) + '\u00b0' + (lat >= 0 ? 'N' : 'S') + ' \u2014 ' + LATITUDE_BANDS[band]!;
       }
     }

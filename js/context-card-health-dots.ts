@@ -1,3 +1,5 @@
+import { publishContextCardStatus, contextCardStatus, emptyContextCardStatus } from './context-card-status.js';
+import type { ContextCardStatus } from './context-card-status.js';
 import { configureRuntimeFunctions } from './runtime-callbacks.js';
 // context-card-health-dots.js - AI health-dot scoring for dashboard context cards
 
@@ -5,7 +7,8 @@ import { state } from './state.js';
 import { isAIPaused } from './api.js';
 import { callAssistantFeatureAI, getAssistantFeatureIdentity, hasAssistantFeatureProvider } from './ai-feature-routing.js';
 import { CONTEXT_CARD_KEYS } from './context-card-summaries.js';
-import { buildLabContext } from './lab-context.js';
+import { getLoadedLabContextBuilder, loadLabContextBuilder } from './lab-context-loader.js';
+import type { LabContextBuilder } from './lab-context-loader.js';
 import { isCloudModel } from './local-ai-provider-shared.js';
 import { getProfiles, profileStorageKey } from './profile.js';
 import { trackUsage } from './schema.js';
@@ -13,7 +16,7 @@ import { hashString, hasCardContent, showNotification } from './utils.js';
 
 
 interface ContextHealthDotDependencies {
-  buildLabContext: (...args: Parameters<typeof buildLabContext>) => unknown;
+  buildLabContext: (...args: Parameters<LabContextBuilder>) => unknown;
   isActiveDemoProfile: () => boolean;
 }
 export interface ContextFingerprintData {
@@ -64,8 +67,12 @@ const PROVIDER_LABELS: Record<string, unknown> = {
 };
 const demoLiveAIConsents = new Map<string, { provider: string; modelId: string; enabledAt: number }>();
 
+function buildDefaultLabContext(...args: Parameters<LabContextBuilder>) {
+  return getLoadedLabContextBuilder()?.(...args) ?? '';
+}
+
 const contextHealthDotDeps: ContextHealthDotDependencies = {
-  buildLabContext,
+  buildLabContext: buildDefaultLabContext,
   isActiveDemoProfile: () => {
     const active = getProfiles().find(profile => profile.id === state.currentProfile);
     return Array.isArray(active?.tags) && active.tags.includes('demo');
@@ -94,10 +101,15 @@ function clearDemoLiveAIConsent() {
 
 function clearAllDemoLiveAIConsent() {
   demoLiveAIConsents.clear();
+  contextHealthLoads.clear();
 }
 
 if (typeof globalThis.addEventListener === 'function') {
   globalThis.addEventListener('labcharts-ai-settings-local-changed', clearAllDemoLiveAIConsent);
+  for (const event of ['labcharts-profile-switched', 'labcharts-ai-settings-synced',
+    'getbased:chat-backend-changed', 'getbased:agent-host-settings-changed', 'getbased:chat-model-selection-changed']) {
+    globalThis.addEventListener(event, () => contextHealthLoads.clear());
+  }
 }
 
 export function getDemoContextAIMode(): DemoContextAIMode {
@@ -150,67 +162,39 @@ export function enableDemoContextLiveAI() {
 
 export function disableDemoContextLiveAI() {
   clearDemoLiveAIConsent();
+  contextHealthLoads.delete(state.currentProfile);
   return getDemoContextAIMode();
 }
 
-// DOM setters retain their original coercion of raw cache values, including inherited labels.
+// Domain services publish typed snapshots; authored slots own DOM and styling.
+function assessmentIdentity(): string { return JSON.stringify([getAssistantFeatureIdentity(), isAIPaused()]); }
+function assessmentFingerprint(key: string): string | null { try { return getCardFingerprint(key); } catch { return null; } }
+function publishAssessment(key: string, update: Partial<ContextCardStatus>): void {
+  publishContextCardStatus(key, { ...update, assessmentFingerprint: assessmentFingerprint(key), assessmentIdentity: assessmentIdentity() });
+}
+/** A rebuilt view must not revive an assessment of older facts or demographics. */
+export function prepareContextHealthPresentation(): void {
+  const identity = assessmentIdentity();
+  for (const key of CONTEXT_CARD_KEYS) {
+    const current = contextCardStatus(key);
+    if (current.assessmentIdentity !== null && (current.assessmentFingerprint !== assessmentFingerprint(key) || current.assessmentIdentity !== identity)) {
+      publishContextCardStatus(key, { ...emptyContextCardStatus(), tips: current.tips });
+    }
+  }
+}
+const DOT_LABELS: Record<string, unknown> = { green: 'Good', yellow: 'Caution', red: 'Concern', gray: 'Not rated' };
 export function applyDotColor(key: string, color: unknown) {
-  const dot = document.getElementById('ctx-dot-' + key);
-  if (!dot) return;
-  dot.className = 'ctx-health-dot ctx-health-dot-' + color;
-  const dotLabels: Record<string, unknown> = { green: 'Good', yellow: 'Caution', red: 'Concern', gray: 'Not rated' };
-  const label = dotLabels[color as string] || 'Not rated';
-  dot.title = label as string;
-  const indicator = document.getElementById('ctx-health-' + key);
-  const text = document.getElementById('ctx-health-label-' + key);
-  if (indicator) {
-    indicator.hidden = false;
-    indicator.setAttribute('aria-label', `AI assessment: ${label}`);
-    dot.setAttribute('aria-hidden', 'true');
-    dot.removeAttribute('aria-label');
-  } else {
-    dot.removeAttribute('aria-hidden');
-    dot.setAttribute('aria-label', label as string);
-  }
-  if (text) text.textContent = label as string;
+  publishAssessment(key, { color: String(color), label: String(DOT_LABELS[color as string] || 'Not rated'), visible: true, loading: false });
 }
-
 export function applyAISummary(key: string, text: unknown, color: unknown, source: unknown = 'ai') {
-  const el = document.getElementById('ctx-ai-' + key);
-  if (!el) return;
-  el.classList.remove('ctx-ai-summary-green', 'ctx-ai-summary-yellow', 'ctx-ai-summary-red');
-  if (text) {
-    const severityLabels: Record<string, unknown> = { green: 'Good', yellow: 'Caution', red: 'Concern', gray: 'Not rated' };
-    const severity = severityLabels[color as string] || 'Insight';
-    el.textContent = text as string;
-    el.dataset.severity = severity as string;
-    el.dataset.insightLabel = source === 'demo' ? 'Demo insight' : 'AI insight';
-    el.classList.add('ctx-ai-summary-visible');
-    el.setAttribute('aria-label', `${source === 'demo' ? 'Demo insight' : 'AI insight'}, ${severity}: ${text}`);
-    if (color && color !== 'gray') el.classList.add('ctx-ai-summary-' + color);
-  } else {
-    el.textContent = '';
-    delete el.dataset.severity;
-    delete el.dataset.insightLabel;
-    el.classList.remove('ctx-ai-summary-visible');
-    el.removeAttribute('aria-label');
-  }
-  // Recommendations are shown in detail modal and chat, not on dashboard cards.
+  const insight = text ? String(text) : '', severity = String(DOT_LABELS[color as string] || 'Insight');
+  const insightLabel = source === 'demo' ? 'Demo insight' : 'AI insight';
+  publishAssessment(key, { insight, severity, insightLabel, insightColor: color && color !== 'gray' ? String(color) : '',
+    insightAria: `${insightLabel}, ${severity}: ${insight}` });
 }
-
 export function applyAIProfileSummary(key: string, text: unknown, source: unknown = 'ai') {
-  const el = document.getElementById('ctx-summary-' + key);
-  if (!el) return;
   const normalized = typeof text === 'string' ? text.trim() : '';
-  if (normalized) {
-    el.textContent = normalized;
-    el.dataset.summarySource = source as string;
-    return;
-  }
-  if (el.dataset.localSummary !== undefined) {
-    el.textContent = el.dataset.localSummary;
-    el.dataset.summarySource = 'local';
-  }
+  publishAssessment(key, { summary: normalized || null, summarySource: normalized ? String(source) : 'local' });
 }
 
 // Optional ctx allows callers to compute the fingerprint against an explicit
@@ -275,29 +259,13 @@ function markDemoCardsStale(keys: string[]) {
     applyDotColor(key, 'gray');
     applyAIProfileSummary(key, '');
     applyAISummary(key, 'Demo insight not recalculated for current context', 'gray', 'demo');
-    const el = document.getElementById('ctx-ai-' + key);
-    if (el) {
-      el.dataset.severity = 'Not recalculated';
-      el.setAttribute('aria-label', 'Demo insight, not recalculated after context changes');
-    }
+    publishAssessment(key, { severity: 'Not recalculated', insightAria: 'Demo insight, not recalculated after context changes' });
   }
 }
 
 function showStaleCardsLoading(staleKeys: string[]) {
-  for (const k of staleKeys) {
-    const dot = document.getElementById('ctx-dot-' + k);
-    if (dot) dot.classList.add('ctx-health-dot-shimmer');
-    const indicator = document.getElementById('ctx-health-' + k);
-    const label = document.getElementById('ctx-health-label-' + k);
-    if (indicator) indicator.hidden = false;
-    if (label) label.textContent = 'Assessing';
-    applyAIProfileSummary(k, '');
-    const aiEl = document.getElementById('ctx-ai-' + k);
-    if (aiEl) {
-      aiEl.textContent = '';
-      aiEl.classList.remove('ctx-ai-summary-visible');
-    }
-  }
+  for (const key of staleKeys) publishAssessment(key, { visible: true, loading: true, label: 'Assessing',
+    summary: null, summarySource: 'local', insight: '', insightAria: '', severity: '', insightLabel: '', insightColor: '' });
 }
 
 function staleCardsHaveAssessableData(staleKeys: string[]) {
@@ -313,8 +281,8 @@ function applyGrayDots(keys: string[]) {
   for (const k of keys) applyDotColor(k, 'gray');
 }
 
-function buildContextForStaleKeys(keys: string[], staleKeys: string[]) {
-  let ctx = contextHealthDotDeps.buildLabContext();
+function buildContextForStaleKeys(keys: string[], staleKeys: string[], build = contextHealthDotDeps.buildLabContext) {
+  let ctx = build();
   if (typeof ctx !== 'string') return '';
   if (staleKeys.length >= keys.length) return ctx;
 
@@ -375,9 +343,65 @@ function parseHealthDotsResponse(text: string): Record<string, unknown> | null {
   try { return JSON.parse(jsonMatch[0]!) as Record<string, unknown> | null; } catch(e) { return null; }
 }
 
-async function loadContextHealthDotsOnce() {
+interface HealthRequest {
+  profileId: string;
+  data: typeof state.importedData;
+  sex: typeof state.profileSex;
+  dob: typeof state.profileDob;
+  identity: ReturnType<typeof getAssistantFeatureIdentity>;
+  fingerprints: Record<string, string | null>;
+  build: ContextHealthDotDependencies['buildLabContext'];
+  isActiveDemoProfile: ContextHealthDotDependencies['isActiveDemoProfile'];
+  context?: { keys: string[]; text: string; build: ContextHealthDotDependencies['buildLabContext'] };
+}
+interface HealthLoad { request: HealthRequest; pending?: Promise<void> }
+const contextHealthLoads = new Map<string, HealthLoad>();
+
+function safeFingerprint(key: string): string | null {
+  try { return getCardFingerprint(key); } catch { return null; }
+}
+function captureHealthRequest(): HealthRequest {
+  return {
+    profileId: state.currentProfile, data: state.importedData, sex: state.profileSex, dob: state.profileDob,
+    identity: getAssistantFeatureIdentity(),
+    build: contextHealthDotDeps.buildLabContext,
+    isActiveDemoProfile: contextHealthDotDeps.isActiveDemoProfile,
+    fingerprints: Object.fromEntries(CONTEXT_CARD_KEYS.map(key => [key, safeFingerprint(key)])),
+  };
+}
+// A request belongs to its inputs and profile session, not to whichever card
+// happens to be in the DOM when the provider responds. Compare the projected
+// context too: source settings and wearable/nutrition inputs exceed card fields.
+function healthRequestOwnerCurrent(request: HealthRequest): boolean {
+  return contextHealthLoads.get(request.profileId)?.request === request
+    && state.currentProfile === request.profileId && state.importedData === request.data
+    && state.profileSex === request.sex && state.profileDob === request.dob
+    && contextHealthDotDeps.buildLabContext === request.build
+    && contextHealthDotDeps.isActiveDemoProfile === request.isActiveDemoProfile
+    && JSON.stringify(getAssistantFeatureIdentity()) === JSON.stringify(request.identity)
+    && hasAssistantFeatureProvider();
+}
+function healthRequestInputsCurrent(request: HealthRequest): boolean {
+  if (!healthRequestOwnerCurrent(request)) return false;
+  const mode = getDemoContextAIMode();
+  if (mode.demo && !mode.live) return false;
+  if (CONTEXT_CARD_KEYS.some(key => request.fingerprints[key] === null || safeFingerprint(key) !== request.fingerprints[key])) return false;
+  // Fingerprint getters can replace ownership or revoke live demo eligibility.
+  const currentMode = getDemoContextAIMode();
+  return (!currentMode.demo || currentMode.live) && healthRequestOwnerCurrent(request);
+}
+function isHealthRequestCurrent(request: HealthRequest): boolean {
+  if (!healthRequestInputsCurrent(request)) return false;
+  try {
+    const sameContext = !request.context
+      || buildContextForStaleKeys(CONTEXT_CARD_KEYS, request.context.keys, request.context.build) === request.context.text;
+    return sameContext && healthRequestOwnerCurrent(request);
+  } catch { return false; }
+}
+
+async function loadContextHealthDotsOnce(request: HealthRequest) {
   const keys = CONTEXT_CARD_KEYS;
-  const cacheKey = profileStorageKey(state.currentProfile, 'contextHealth');
+  const cacheKey = profileStorageKey(request.profileId, 'contextHealth');
   const cached = readHealthCache(cacheKey);
   const demoMode = getDemoContextAIMode();
   const staleKeys = findStaleKeys(keys, cached, demoMode.demo ? 'demo' : 'ai');
@@ -397,12 +421,31 @@ async function loadContextHealthDotsOnce() {
     return;
   }
 
-  const ctx = buildContextForStaleKeys(keys, staleKeys);
-  if (!ctx) {
+  let build = request.build;
+  if (build === buildDefaultLabContext) {
+    let loaded = getLoadedLabContextBuilder();
+    if (!loaded) {
+      try {
+        loaded = await loadLabContextBuilder();
+      } catch {
+        if (isHealthRequestCurrent(request)) applyGrayDots(staleKeys);
+        return;
+      }
+    }
+    if (!isHealthRequestCurrent(request)) return;
+    build = loaded;
+  }
+
+  const ctx = buildContextForStaleKeys(keys, staleKeys, build);
+  // Builders/getters can change facts or consent without replacing the data.
+  // Revalidate inputs before publishing a gray state or dispatching context.
+  if (!healthRequestInputsCurrent(request)) return;
+  if (typeof ctx !== 'string' || !ctx) {
     applyGrayDots(staleKeys);
     return;
   }
   const prompt = buildHealthDotsPrompt(staleKeys);
+  request.context = { keys: staleKeys, text: ctx, build };
 
   try {
     const result = await callAssistantFeatureAI({
@@ -414,11 +457,12 @@ async function loadContextHealthDotsOnce() {
     const text = (result && typeof result === 'object')
       ? (result.text || '')
       : (typeof result === 'string' ? result : '');
-    if (result && typeof result === 'object' && result.usage && !getAssistantFeatureIdentity().subscription) {
-      const identity = getAssistantFeatureIdentity();
-      trackUsage(identity.provider, identity.modelId, (result.usage.inputTokens || 0) as Parameters<typeof trackUsage>[2], (result.usage.outputTokens || 0) as Parameters<typeof trackUsage>[3]);
+    if (result && typeof result === 'object' && result.usage && !request.identity.subscription) {
+      const identity = request.identity;
+      trackUsage(identity.provider, identity.modelId, (result.usage.inputTokens || 0) as Parameters<typeof trackUsage>[2], (result.usage.outputTokens || 0) as Parameters<typeof trackUsage>[3], request.profileId);
     }
 
+    if (!isHealthRequestCurrent(request)) return;
     const parsed = parseHealthDotsResponse(text as string);
     if (!parsed) {
       applyGrayDots(staleKeys);
@@ -436,25 +480,25 @@ async function loadContextHealthDotsOnce() {
       cached.dots[k] = color;
       cached.summaries[k] = tip;
       cached.cardSummaries[k] = profileSummary;
-      cached.fingerprints[k] = getCardFingerprint(k);
+      cached.fingerprints[k] = request.fingerprints[k];
       cached.sources[k] = 'ai';
     }
     writeHealthCache(cacheKey, cached);
   } catch(e) {
-    applyGrayDots(staleKeys);
+    if (isHealthRequestCurrent(request)) applyGrayDots(staleKeys);
   }
 }
-
-const contextHealthLoads = new Map<string, Promise<void>>();
 
 export function loadContextHealthDots() {
   const profileId = state.currentProfile;
   const inFlight = contextHealthLoads.get(profileId);
-  if (inFlight) return inFlight;
-  const pending = loadContextHealthDotsOnce().finally(() => {
-    if (contextHealthLoads.get(profileId) === pending) contextHealthLoads.delete(profileId);
+  if (inFlight?.pending && isHealthRequestCurrent(inFlight.request)) return inFlight.pending;
+  const load: HealthLoad = { request: captureHealthRequest() };
+  contextHealthLoads.set(profileId, load);
+  const pending = loadContextHealthDotsOnce(load.request).finally(() => {
+    if (contextHealthLoads.get(profileId) === load) contextHealthLoads.delete(profileId);
   });
-  contextHealthLoads.set(profileId, pending);
+  load.pending = pending;
   return pending;
 }
 
@@ -470,6 +514,7 @@ export function refreshAllHealthDots() {
     return;
   }
   try { localStorage.removeItem(cacheKey); } catch(e) {}
+  contextHealthLoads.delete(state.currentProfile);
   loadContextHealthDots();
   showNotification('Refreshing all insights...', 'info');
 }

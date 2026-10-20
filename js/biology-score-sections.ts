@@ -44,11 +44,10 @@ import { queueBiologyScoreWrite, biologyAIRecords, mergeBiologyScoreAIRecords } 
 import { saveImportedDataForProfile } from './data.js';
 import { BIOLOGY_SCORE_VERSION } from './biology-score-contract.js';
 import { getEncryptionEnabled } from './crypto.js';
-import { resolveScoreTone } from './biology-score-engine.js';
 import { canonicalRange } from './biology-score-inputs.js';
 import { state } from './state.js';
-import { renderMarkdown } from './markdown.js';
-import { escapeAttr, escapeHTML } from './utils.js';
+import {renderHTML as renderBiologyAI} from './components/BiologyAIPresentation.svelte.html.js';
+import {projectBiologyQuestion, projectBiologyAISummary, projectBiologyAIAnswer} from './biology-ai-presentation.js';
 import { getProfiles } from './profile.js';
 import { buildDemoBiologyInsight } from './demo-biology-insights.js';
 
@@ -63,22 +62,92 @@ export function setScoreExplanationError(keys: Iterable<string>, message = '') {
 }
 export function getScoreAIRequestKey(score: BiologySectionScore, profileId = state.currentProfile) { return `${profileId}:${getScoreAIMaterialKey(score)}`; }
 export function isScoreAIProcessing(score: BiologySectionScore) { return pendingScoreExplanations.has(getScoreAIRequestKey(score)); }
-function processingDot() { return '<span class="biology-score-ai-dot ctx-health-dot-shimmer" aria-hidden="true"></span>'; }
-function loadingSkeleton() { return '<span class="biology-score-ai-skeleton" aria-hidden="true"><span></span><span></span><span></span></span>'; }
-
-function renderInlineList(items: readonly unknown[] | null | undefined) {
-  return (items || []).map(item => `<span>${escapeHTML(item)}</span>`).join('');
+export function renderScoreQuestion(score: BiologySectionScore) {
+  return renderBiologyAI({kind: 'question', view: projectBiologyQuestion(score)});
 }
 
-export function renderScoreQuestion(score: BiologySectionScore) {
-  const question = score.question || `What does ${score.title} say about this biology pattern?`;
-  return `<section class="biology-score-question">
-    <p>${escapeHTML(question)}</p>
-    <div class="biology-score-panel-levels" role="group" aria-label="Labs used for this score">
-      <div><span>Core markers</span><strong>${renderInlineList(score.basicInputs || [])}</strong></div>
-      <div><span>Additional context</span><strong>${renderInlineList(score.extendedInputs || [])}</strong></div>
-    </div>
-  </section>`;
+/** Snapshot domain-owned AI state at the existing synchronous render boundary. */
+export function getBiologyAIState(score: BiologySectionScore) {
+  return {record: readScoreAIAnswer(score), processing: isScoreAIProcessing(score),
+    refreshReason: getScoreAIRefreshReason(score), retry: hasUnsavedScoreAIAnswers(),
+    error: scoreExplanationErrors.get(getScoreAIRequestKey(score)) || '', encryption: getEncryptionEnabled()};
+}
+
+
+/** One material snapshot for a fresh first-party computed score; no state survives this call. */
+export function getBiologyAIRenderState(score: BiologySectionScore) {
+  if (!plainRenderMaterialInputs(score)) return getBiologyAIState(score);
+  let material: string | undefined;
+  const key = () => material ??= getScoreAIMaterialKey(score);
+  const read = () => {
+    const profileAnswer = state.importedData?.biologyScoreAI?.[score.id] as BiologySectionAnswer | undefined;
+    return scoreAIAnswerForMaterial(score, profileAnswer, key());
+  };
+  const refresh = () => {
+    const record = read();
+    return record?.text ? scoreAIRefreshReasonForMaterial(record, key()) : '';
+  };
+  // Keep both saved-record reads and each profile/pending/error/encryption read
+  // at their original positions. Only the immutable material derivation is shared.
+  return {record: read(), processing: pendingScoreExplanations.has(`${state.currentProfile}:${key()}`),
+    refreshReason: refresh(), retry: hasUnsavedScoreAIAnswers(),
+    error: scoreExplanationErrors.get(`${state.currentProfile}:${key()}`) || '', encryption: getEncryptionEnabled()};
+}
+
+/** Descriptor-only eligibility, scoped to evidence and metadata actually read by this render. */
+function plainRenderMaterialInputs(score: BiologySectionScore): boolean {
+  const rejected = Symbol();
+  const value = (object: unknown, key: string): unknown => {
+    if (object == null) return undefined;
+    if (typeof object !== 'object' || ![null, Object.prototype, Array.prototype].includes(Object.getPrototypeOf(object))) return rejected;
+    const descriptor = Object.getOwnPropertyDescriptor(object, key);
+    return descriptor && !('value' in descriptor) ? rejected : descriptor?.value;
+  };
+  try {
+    const id = value(score, 'id'), range = value(score, 'aiRangeMode');
+    if (typeof id !== 'string' || !['reference', 'optimal', 'both'].includes(range as string)) return false;
+    const historical = value(score, 'historicalSnapshot');
+    // Demo copy also reads presentation fields. Reject every own root accessor
+    // without traversing unrelated root values such as genetic context Sets.
+    for (const root of [score, historical]) {
+      if (root == null) continue;
+      if (typeof root !== 'object' || ![null, Object.prototype].includes(Object.getPrototypeOf(root))) return false;
+      const keys = Reflect.ownKeys(root);
+      if (keys.length > 5000) return false;
+      for (const key of keys) {
+        const descriptor = Object.getOwnPropertyDescriptor(root, key);
+        if (!descriptor || !('value' in descriptor)) return false;
+      }
+    }
+    const fields = ['id', 'panelRoute', 'score', 'rawScore', 'presentationDates', 'aiRangeMode', 'scoreConfidence', 'recencyStatus',
+      'flags', 'available', 'missing', 'boundary', 'attention', 'anchorWarning', 'scoreConfidenceLabel'];
+    const roots = fields.map(field => value(score, field));
+    roots.push(...fields.map(field => value(historical, field)));
+    const profile = value(score, 'profileContext');
+    roots.push(...['sex', 'ageYears', 'cycleStatus', 'menopauseStatus', 'hormoneTherapy', 'lowMuscleMass', 'recentHardTraining', 'acuteInflammationContext'].map(field => value(profile, field)));
+    const imported = value(state, 'importedData'), profiles = value(state, 'profiles');
+    const currentProfile = value(state, 'currentProfile');
+    if (typeof currentProfile !== 'string' || !Array.isArray(profiles)) return false;
+    roots.push(profiles, value(value(imported, 'biologyScoreAI'), id));
+    const pending = [...roots], seen = new WeakSet<object>();
+    let properties = 0;
+    while (pending.length) {
+      const item = pending.pop();
+      if (item === rejected || typeof item === 'function') return false;
+      if (item === null || typeof item !== 'object' || seen.has(item)) continue;
+      if (![null, Object.prototype, Array.prototype].includes(Object.getPrototypeOf(item))) return false;
+      seen.add(item);
+      const keys = Reflect.ownKeys(item);
+      properties += keys.length;
+      if (properties > 5000) return false;
+      for (const key of keys) {
+        const descriptor = Object.getOwnPropertyDescriptor(item, key);
+        if (!descriptor || !('value' in descriptor)) return false;
+        pending.push(descriptor.value);
+      }
+    }
+    return true;
+  } catch { return false; }
 }
 
 function stable(value: unknown): unknown {
@@ -141,6 +210,10 @@ export function getScoreAIRefreshReason(score: BiologySectionScore) {
   const record = readScoreAIAnswer(score);
   if (!record?.text) return '';
   const current = getScoreAIMaterialKey(score);
+  return scoreAIRefreshReasonForMaterial(record, current);
+}
+
+function scoreAIRefreshReasonForMaterial(record: BiologySectionAnswer, current: string) {
   if (answerMatches(record, current)) return '';
   try {
     const after = normalizeMaterial(JSON.parse(current as string) as MaterialSnapshot);
@@ -174,6 +247,10 @@ export function getScoreAIMaterialKey(score: BiologySectionScore) {
 export function readScoreAIAnswer(score: BiologySectionScore): BiologySectionAnswer | null {
   const profileAnswer = state.importedData?.biologyScoreAI?.[score.id] as BiologySectionAnswer | undefined;
   const material = getScoreAIMaterialKey(score);
+  return scoreAIAnswerForMaterial(score, profileAnswer, material);
+}
+
+function scoreAIAnswerForMaterial(score: BiologySectionScore, profileAnswer: BiologySectionAnswer | undefined, material: string): BiologySectionAnswer | null {
   const matching = biologyAIRecords(profileAnswer).find(record => answerMatches(record, material));
   // Keep the last answer visible, explicitly stale, if this evidence is new.
   if (matching || profileAnswer?.text) return matching || profileAnswer!;
@@ -192,27 +269,7 @@ export function hasCurrentScoreAIAssessment(score: BiologySectionScore) {
 }
 
 export function renderScoreAISummary(score: BiologySectionScore) {
-  const record = readScoreAIAnswer(score);
-  const demo = record?.source === 'demo';
-  const processing = isScoreAIProcessing(score);
-  const refreshReason = getScoreAIRefreshReason(score);
-  const stale = !!refreshReason;
-  const summary = typeof record?.summary === 'string' ? record.summary : '';
-  const presented = score.historicalSnapshot || score;
-  const value = Number.isFinite(presented.score) ? presented.score : ['stale', 'mixed-dates'].includes(presented.recencyStatus!) ? presented.rawScore : null;
-  const tone = presented.tone || resolveScoreTone(value!);
-  const color = !record?.text || !Number.isFinite(value) ? 'var(--text-muted)' : ['excellent', 'good'].includes(tone!) ? 'var(--green)' : tone === 'strained' ? 'var(--yellow)' : 'var(--red)';
-  const overview = score.id === 'biologicalCoherence';
-  const retry = overview && hasUnsavedScoreAIAnswers();
-  const action = retry ? 'retry-save-score-insights' : overview ? 'update-score-insights' : 'interpret-score-ai';
-  const label = demo ? 'Use AI' : retry ? 'Retry saving' : overview ? 'Update missing insights' : record?.text ? 'Refresh' : 'Explain score';
-  return `<span class="biology-score-ai-teaser" data-biology-score-ai-summary="${escapeAttr(score.id)}" aria-busy="${processing}">
-    <span class="biology-score-ai-teaser-label" role="status" aria-live="polite" aria-atomic="true" aria-label="${processing ? 'Assessing markers' : stale ? 'refresh needed' : demo ? 'Demo insight, generated locally without AI' : record?.text ? 'Saved interpretation' : 'Interpretation not generated'}">${processing ? processingDot() : `<span class="biology-score-ai-dot" style="background:${color}" aria-hidden="true"></span>`}${processing ? 'Assessing' : stale ? 'refresh needed' : demo ? 'Demo insight' : ''}</span>
-    <span class="biology-score-ai-teaser-text">${processing && !summary ? loadingSkeleton() : escapeHTML(summary || (record?.text ? 'Refresh to add a short, complete insight. Your full explanation is saved.' : ''))}</span>
-    <button type="button" class="biology-score-ai-teaser-action" ${processing ? 'disabled' : ''} data-biology-score-action="${action}" data-biology-score-id="${escapeAttr(score.id)}" aria-label="${label} — ${escapeAttr(overview ? 'Biology Scores' : score.title)}">${label}</button>
-    ${stale ? `<span class="biology-score-ai-refresh-reason">${escapeHTML(refreshReason)}</span>` : ''}
-    <span class="biology-score-ai-error" role="status">${escapeHTML(scoreExplanationErrors.get(getScoreAIRequestKey(score)) || '')}</span>
-  </span>`;
+  return renderBiologyAI({kind: 'summary', view: projectBiologyAISummary(score, getBiologyAIState(score))});
 }
 
 // Failed durable saves remain retryable without another provider request. This
@@ -275,28 +332,13 @@ export function scoreAIAnswerNeedsRefresh(score: BiologySectionScore) {
 }
 
 export function renderScoreAIAnswer(score: BiologySectionScore) {
-  const processing = isScoreAIProcessing(score);
-  const cachedRecord = readScoreAIAnswer(score);
-  const demo = cachedRecord?.source === 'demo';
-  const cached = cachedRecord?.text || '';
-  const refreshReason = getScoreAIRefreshReason(score);
-  const stale = !!refreshReason;
-  return `<section class="biology-score-ai" tabindex="-1" data-biology-score-ai-panel="${escapeAttr(score.id)}" aria-busy="${processing}">
-    <div class="biology-score-ai-head">
-      <div>
-        ${demo ? '<h4>Demo explanation</h4>' : score.id === 'biologicalCoherence' ? '' : '<h4>AI interpretation</h4>'}
-        ${processing ? `<span class="biology-score-ai-processing" role="status">${processingDot()}Assessing markers</span>` : ''}
-      </div>
-      <button type="button" class="dashboard-action-btn dashboard-action-btn-secondary" ${processing ? 'disabled' : ''} data-biology-score-action="interpret-score-ai" data-biology-score-id="${escapeAttr(score.id)}">${demo ? 'Explain with AI' : cached ? 'Refresh explanation' : 'Explain score'}</button>
-    </div>
-    ${stale ? `<p class="biology-score-ai-stale">${escapeHTML(refreshReason)} Refresh to use the latest inputs.</p>` : ''}
-    ${recordProvenance(cachedRecord)}
-    <div class="biology-score-ai-answer" data-biology-score-ai-answer="${escapeAttr(score.id)}">${cached ? renderMarkdown(cached) : processing ? loadingSkeleton() : 'Explain the main signal, the context that matters, and what to check next.'}</div>
-  </section>`;
+  return renderBiologyAI({kind: 'answer', view: projectBiologyAIAnswer(score, getBiologyAIState(score))});
 }
 
-function recordProvenance(record: BiologySectionAnswer | null) {
-  if (!record?.updatedAt || record.source === 'demo') return '';
-  const source = (record.generation as Partial<Awaited<ReturnType<typeof generateBiologyScoreAIAnswer>>['generation']> | null | undefined)?.modelId;
-  return `<p class="biology-scores-note">Saved ${escapeHTML(new Date(record.updatedAt as string | number).toLocaleString())}${source ? ` · ${escapeHTML(source)}` : ''}. Saved with your profile for sync and backups. ${getEncryptionEnabled() ? 'Local encryption is enabled.' : 'Local encryption is off; enable it in Settings → Data protection.'}</p>`;
+/** Explicit first-party renderer: callers keep separate snapshots across DOM/focus publication. */
+export function renderScoreAISummaryForRender(score: BiologySectionScore) {
+  return renderBiologyAI({kind: 'summary', view: projectBiologyAISummary(score, getBiologyAIRenderState(score))});
+}
+export function renderScoreAIAnswerForRender(score: BiologySectionScore) {
+  return renderBiologyAI({kind: 'answer', view: projectBiologyAIAnswer(score, getBiologyAIRenderState(score))});
 }

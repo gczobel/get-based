@@ -6,7 +6,7 @@ import {
   getAIProvider, getActiveModelId, getActiveModelDisplay, supportsWebSearch,
   isPpqPrivateModeActive, isRoutstrPrivateModeActive, isVeniceE2EEActive,
 } from './api.js';
-import { injectLensChunks } from './lab-context.js';
+import { injectLensChunks } from './lab-context-output.js';
 import { hasLens, queryLensMulti } from './lens.js';
 import { getActivePersonality, getCustomPersonality } from './chat-personalities.js';
 import {
@@ -29,7 +29,7 @@ import type { DiscussionUsageReader } from './chat-discussion-round-view.js';
 
 export type DiscussionRoundRequest = Awaited<ReturnType<typeof buildDiscussionRoundRequest>>;
 export type DiscussionRoundAssistantResult = Awaited<ReturnType<typeof callDiscussionRoundAssistant>>;
-interface RoundRequestInput { msgText: unknown; roundHistory: readonly PromptHistoryMessage[]; signal?: AbortSignal | undefined }
+interface RoundRequestInput { msgText: unknown; roundHistory: readonly PromptHistoryMessage[]; signal?: AbortSignal | undefined; personalityId?: string }
 interface RoundAssistantInput {
   request: DiscussionRoundRequest;
   thread?: { agentThreadId?: unknown; chatBackend?: unknown; agentModel?: unknown } | null | undefined;
@@ -50,18 +50,13 @@ interface AssistantMessageInput {
 }
 type RoundAIResultReader = { finishReason?: unknown; drafts?: unknown };
 
-export async function buildDiscussionRoundRequest({ msgText, roundHistory, signal }: RoundRequestInput) {
-  let labContext = buildChatLabContext(msgText);
-  let lensResult: Awaited<ReturnType<typeof queryLensMulti>> = null;
-  if (hasLens()) {
-    lensResult = await queryLensMulti(msgText, { signal });
-    if (lensResult) {
-      labContext = injectLensChunks(labContext, lensResult);
-    }
-  }
-
-  const personality = getActivePersonality();
-  const personalityPrompt = buildPersonalityPrompt(personality, getCustomPersonality());
+export async function buildDiscussionRoundRequest({ msgText, roundHistory, signal, personalityId }: RoundRequestInput) {
+  signal?.throwIfAborted();
+  // Capture the accepted prompt and selection before asynchronous knowledge
+  // lookup. Changing the current persona/model must not rewrite this turn.
+  const personality = { ...(personalityId === undefined ? getActivePersonality() : getActivePersonality(personalityId)) };
+  const custom = personalityId === undefined ? getCustomPersonality() : getCustomPersonality(personalityId);
+  const personalityPrompt = buildPersonalityPrompt(personality, custom);
   const multiPersonaInstruction = buildMultiPersonaInstruction(roundHistory, personality.name);
   const route = getAssistantExecutionRoute();
   const useCodexAgent = route.adapter === 'codex';
@@ -82,6 +77,15 @@ export async function buildDiscussionRoundRequest({ msgText, roundHistory, signa
   const webSearchSupported = !useCodexAgent && supportsWebSearch(provider);
   const webSearch = getChatWebSearchEnabled() && webSearchSupported;
 
+  const apiMessages = buildTaggedChatMessages(roundHistory, personality.name);
+  let labContext = buildChatLabContext(msgText);
+  let lensResult: Awaited<ReturnType<typeof queryLensMulti>> = null;
+  if (hasLens()) {
+    lensResult = await queryLensMulti(msgText, { signal });
+    signal?.throwIfAborted();
+    if (lensResult) labContext = injectLensChunks(labContext, lensResult);
+  }
+
   const webHint = buildWebSearchHint({
     isE2EE: e2ee,
     webSearchEnabled: webSearch,
@@ -95,9 +99,8 @@ export async function buildDiscussionRoundRequest({ msgText, roundHistory, signa
     multiPersonaInstruction,
     webHint,
   });
-  const apiMessages = buildTaggedChatMessages(roundHistory, personality.name);
-
   const { getContextSummary } = await import('./chat-context-summary.js');
+  signal?.throwIfAborted();
   return {
     apiMessages,
     agentId,
@@ -120,8 +123,9 @@ export async function buildDiscussionRoundRequest({ msgText, roundHistory, signa
 }
 
 export async function callDiscussionRoundAssistant({ request, thread, profileId, signal, onStream }: RoundAssistantInput) {
+  signal?.throwIfAborted();
   if (!request.useCodexAgent) {
-    return (callChatAPIWithContinuation as (options: Omit<Parameters<typeof callChatAPIWithContinuation>[0], 'messages'> & { messages: DiscussionRoundRequest['apiMessages'] }) => ReturnType<typeof callChatAPIWithContinuation>)({
+    const result = await (callChatAPIWithContinuation as (options: Omit<Parameters<typeof callChatAPIWithContinuation>[0], 'messages'> & { messages: DiscussionRoundRequest['apiMessages'] }) => ReturnType<typeof callChatAPIWithContinuation>)({
       system: request.systemPrompt,
       messages: request.apiMessages,
       maxTokens: CHAT_RESPONSE_MAX_TOKENS,
@@ -129,8 +133,19 @@ export async function callDiscussionRoundAssistant({ request, thread, profileId,
       onStream,
       webSearch: request.webSearch,
       provider: request.provider,
+      modelOverride: request.modelId,
       reasoningEffort: request.reasoningEffort,
     });
+    signal?.throwIfAborted();
+    return result;
+  }
+
+  const currentRoute = getAssistantExecutionRoute();
+  if (currentRoute.adapter !== 'codex'
+    || currentRoute.provider !== request.agentId
+    || currentRoute.target !== request.target
+    || (currentRoute.model || currentRoute.provider || 'cli-default') !== request.modelId) {
+    throw new Error('The CLI agent selection changed. Retry the discussion with the selected agent.');
   }
 
   const result = await (callCodexAgent as (options: Omit<Parameters<typeof callCodexAgent>[0], 'prompt' | 'threadId' | 'history'> & { prompt: unknown; threadId: unknown; history: Array<{ role: unknown; content: unknown }> }) => ReturnType<typeof callCodexAgent>)({
@@ -146,6 +161,7 @@ export async function callDiscussionRoundAssistant({ request, thread, profileId,
     signal,
     onStream,
   });
+  signal?.throwIfAborted();
   if (thread) {
     thread.agentThreadId = result.threadId;
     thread.chatBackend = 'codex';

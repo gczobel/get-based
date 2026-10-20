@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import {cameraToolClasses as cameraClasses} from '../js/light-camera-classes.js';
 import { readServiceWorkerSource } from '../scripts/service-worker-source.js';
 import { sourcePath } from '../scripts/source-files.js';
 import { fileURLToPath } from 'node:url';
@@ -51,6 +52,8 @@ const tools = await import('../js/light-tools.js');
     ].map(file => fs.readFileSync(sourcePath(fileURLToPath(new URL(`../js/${file}`, import.meta.url))), 'utf8')).join('\n');
     const lightSunCss = fs.readFileSync(new URL('../css/light-sun.css', import.meta.url), 'utf8');
     const lightToolCss = fs.readFileSync(new URL('../css/light-tools.css', import.meta.url), 'utf8');
+    const lightToolClassesSrc = fs.readFileSync(sourcePath(fileURLToPath(new URL('../js/light-tools-classes.js', import.meta.url))), 'utf8');
+    const walkthroughSrc = fs.readFileSync(new URL('../js/components/LightAuditWalkthrough.svelte', import.meta.url), 'utf8');
     const cssFiles = ['styles.css', 'css/app-shell.css', 'css/import.css', 'css/emf.css', 'css/modal-shared.css', 'css/dashboard-core.css', 'css/dashboard-widgets.css', 'css/dashboard-welcome.css', 'css/dashboard-data.css', 'css/category-views.css', 'css/context-profile.css', 'css/genetics.css', 'css/data-protection.css', 'css/settings.css', 'css/mobile-dashboard.css', 'css/cycle.css', 'css/marker-detail-modal.css', 'css/recommendations.css', 'css/client-list.css', 'css/wearables.css', 'css/light-sun.css', 'css/light-channels.css', 'css/light-devices.css', 'css/light-conditions-now.css', 'css/light-setup.css', 'css/light-tools.css', 'css/light-env.css', 'css/chat-panel.css', 'css/chat-panel-open.css', 'css/chat-personality.css', 'css/chat-messages.css', 'css/chat-composer.css', 'css/chat-onboarding.css', 'css/chat-responsive.css', 'css/chat-actions.css', 'css/chat-mobile.css', 'css/redesign-shell.css', 'css/chat-redesign.css', 'css/chat-redesign-open.css'];
     const stylesSrc = cssFiles.map(rel => fs.readFileSync(new URL('../' + rel, import.meta.url), 'utf8')).join('\n');
     const appearsBefore = (src: string, needleA: string, needleB: string, from = 0) => {
@@ -318,7 +321,7 @@ type FixtureMeasurementStream = Omit<NonNullable<Parameters<typeof lockCameraFor
       lightAiSaveHooksSrc.includes('configureLightTools,') &&
       lightAiSaveHooksSrc.includes('getMeasurementsForRoom,') &&
       lightAiSaveHooksSrc.includes("} from './light-tools.js';") &&
-      lightAiSaveHooksSrc.includes("import { maybeAnalyzeMeasurementAfterSave, renderMeasurementAIInline } from './light-tools-ai-analysis.js';") &&
+      lightAiSaveHooksSrc.includes("import { maybeAnalyzeMeasurementAfterSave, getMeasurementAIView } from './light-tools-ai-analysis.js';") &&
       lightAiSaveHooksSrc.includes('configureLightTools({') &&
       lightAiSaveHooksSrc.includes('maybeAnalyzeMeasurementAfterSave') &&
       appLightSunSrc.includes("import './light-ai-save-hooks.js';"));
@@ -342,7 +345,7 @@ type FixtureMeasurementStream = Omit<NonNullable<Parameters<typeof lockCameraFor
       lightAiSaveHooksSrc.includes('suggestRoomSourceFromSpectrum') &&
       lightAiSaveHooksSrc.includes('refreshLightEnvironmentAssessment') &&
       lightAiSaveHooksSrc.includes('solarZenithAngle') &&
-      lightToolsUiHooksSrc.includes("import { navigate } from './views.js';") &&
+      lightToolsUiHooksSrc.includes("import { navigate } from './views-runtime.js';") &&
       lightToolsUiHooksSrc.includes('configureLightTools({ navigate })') &&
       appLightSunSrc.includes('configureLightTools({ navigate });') &&
       !appUiShellSrc.includes("import './light-tools-ui-hooks.js';") &&
@@ -369,8 +372,8 @@ type FixtureMeasurementStream = Omit<NonNullable<Parameters<typeof lockCameraFor
     assert('Lux AmbientLightSensor error retries the camera fallback',
       /sensor\.addEventListener\('error'[\s\S]{0,500}startCameraFallback/.test(lightToolCameraModalsSrc));
     assert('Lux prefers the phone light sensor and exposes a camera source switch',
-      lightToolCameraModalsSrc.includes('id="lux-source-als"') &&
-      lightToolCameraModalsSrc.includes('id="lux-source-camera"') &&
+      fs.readFileSync(new URL('../js/components/LightCameraLux.svelte', import.meta.url), 'utf8').includes('id="lux-source-als"') &&
+      fs.readFileSync(new URL('../js/components/LightCameraLux.svelte', import.meta.url), 'utf8').includes('id="lux-source-camera"') &&
       appearsBefore(lightToolCameraModalsSrc, 'if (!startAmbientSensor())', 'await startCameraFallback();') &&
       lightToolCameraModalsSrc.includes("cameraButton.addEventListener('click'") &&
       lightToolCameraModalsSrc.includes("alsButton.addEventListener('click'"));
@@ -395,21 +398,21 @@ type FixtureMeasurementStream = Omit<NonNullable<Parameters<typeof lockCameraFor
     assert('Light tool overlay is top-anchored so height changes do not recenter',
       /\.light-tool-overlay\.modal-overlay\.show\s*\{[\s\S]{0,140}align-items:\s*flex-start/.test(stylesSrc));
     assert('Live light tool video previews reserve aspect-ratio space before camera metadata',
-      /\.light-tool-modal video\s*\{[\s\S]{0,160}aspect-ratio:\s*4\s*\/\s*3/.test(stylesSrc));
+      cameraClasses('camera-video').includes('[aspect-ratio:4_/_3]'));
     assert('Lux live number reserves tabular-width space',
-      /\.lux-dial-value\s*\{[\s\S]{0,220}min-width:\s*6ch[\s\S]{0,220}font-variant-numeric:\s*tabular-nums/.test(stylesSrc));
+      cameraClasses('lux-dial-value').includes('[min-width:6ch]') && cameraClasses('lux-dial-value').includes('[font-variant-numeric:tabular-nums]'));
     assert('Flicker and darkness result boxes reserve stable height',
-      /\.flicker-result,\s*\.dark-status\s*\{[\s\S]{0,260}min-height:\s*74px/.test(stylesSrc));
+      ['flicker-result', 'dark-status'].every(name => cameraClasses(name).includes('[min-height:74px]')));
     assert('CCT and spectrum live result boxes reserve stable height',
-      /\.cct-result\s*\{[\s\S]{0,160}min-height:\s*116px/.test(stylesSrc) &&
-      /\.spec-result\s*\{[\s\S]{0,220}min-height:\s*140px/.test(stylesSrc));
+      cameraClasses('cct-result').includes('[min-height:116px]') &&
+      cameraClasses('spec-result').includes('[min-height:140px]'));
     assert('Glass and audit result boxes reserve stable numeric layout',
-      /\.glass-reading\s*\{[\s\S]{0,220}min-width:\s*9ch[\s\S]{0,220}font-variant-numeric:\s*tabular-nums/.test(stylesSrc) &&
-      /\.audit-status\s*\{[\s\S]{0,220}min-height:\s*88px/.test(stylesSrc));
+      cameraClasses('glass-reading').includes('[min-width:9ch]') && cameraClasses('glass-reading').includes('[font-variant-numeric:tabular-nums]') &&
+      lightToolClassesSrc.includes('[min-height:88px]') && walkthroughSrc.includes("class={c('audit-status')}"));
     assert('Light tools CSS owns tool modal and aiming guide styles',
       lightToolCss.includes('.light-tool-overlay.modal-overlay.show') &&
-      lightToolCss.includes('.tool-aiming-guide') &&
-      lightToolCss.includes('.lux-dial-value'));
+      cameraClasses('tool-aiming-guide').includes('gb:tool-ui:') &&
+      cameraClasses('lux-dial-value').includes('gb:tool-ui:') && lightToolCss.includes('font-variant-numeric:tabular-nums'));
     assert('Light/Sun CSS no longer owns Light Tools modal styles',
       !lightSunCss.includes('.light-tool-overlay.modal-overlay.show') &&
       !lightSunCss.includes('.lux-dial-value') &&

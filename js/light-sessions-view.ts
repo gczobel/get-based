@@ -1,6 +1,9 @@
+import type{LightSessionRowProps,LightSessionHistoryProps}from'./light-session-presentation.js';
 // light-sessions-view.ts — Unified Light & Sun session list and modal
 
-import { bindModalSyncRefresh, escapeHTML, escapeAttr, formatDate } from './utils.js';
+import { bindModalSyncRefresh, formatDate } from './utils.js';
+import { renderHTML } from './components/LightSessionPresentation.svelte.html.js';
+import { projectCompletedDeviceSession } from './light-session-presentation.js';
 import { openAppendedModalOverlay, removeModalOverlay } from './modal-lifecycle.js';
 
 const LIGHT_SESSIONS_ACTION_ATTR = 'data-light-sessions-action';
@@ -15,7 +18,7 @@ export interface LightSessionsViewDeps {
   getSessions(): SunSessionRecord[];
   getDeviceSessions(): DeviceSessionRecord[];
   getDevices(): LightDeviceRecord[];
-  renderSunSessionRow(session: SunSessionRecord): string;
+  getSunSessionRowView(session: SunSessionRecord): LightSessionRowProps|null;
   openDeviceSessionDetail(id: string): unknown;
   addEventListener(type: string, listener: EventListener): void;
   removeEventListener(type: string, listener: EventListener): void;
@@ -30,7 +33,7 @@ const viewDeps: LightSessionsViewDeps = {
   getSessions: () => [],
   getDeviceSessions: () => [],
   getDevices: () => [],
-  renderSunSessionRow: () => '',
+  getSunSessionRowView: () => null,
   openDeviceSessionDetail: () => {},
   addEventListener: (type, listener) => {
     if (typeof globalThis !== 'undefined' && typeof globalThis.addEventListener === 'function') {
@@ -125,80 +128,34 @@ function _localSessionStamp(timestamp: number) {
   };
 }
 
-function _renderSessionRowsHTML(rows: SessionRow[]) {
+function getSessionRowViews(rows: SessionRow[]) {
   const devices = viewDeps.getDevices();
   const deviceById = Object.fromEntries(devices.map(d => [d.id, d]));
-  const renderSunRow = viewDeps.renderSunSessionRow;
-  let html = '';
+  const getSunRow = viewDeps.getSunSessionRowView;
+  const views:LightSessionRowProps[]=[];
   for (const row of rows) {
     if (row.kind === 'sun') {
-      html += renderSunRow(row.sess);
+      const view=getSunRow(row.sess);if(view)views.push(view);
     } else if (row.kind === 'device') {
       const sess = row.sess;
       const dev = deviceById[sess.deviceId as string] || sess.deviceSnapshot || null;
-      const devName = dev ? `${dev.brand} ${dev.model}` : 'Device details unavailable';
-      const stamp = _localSessionStamp(row.startedAt);
-      const dur = sess.durationMin ? `${Math.round(sess.durationMin * 10) / 10} min` : '—';
-      // Mode badge — only on rows for devices that declare modes. The
-      // resolved mode answers "which LED groups fired" at a glance, key
-      // for hybrid panels where the same device can produce different
-      // channel doses depending on the preset chosen.
-      let modeBadge = '';
-      let modeAria = '';
-      if (dev && Array.isArray(dev.modes) && dev.modes.length > 0) {
-        const resolvedMode = dev.modes.find(m => m.id === sess.mode)
-          || dev.modes.find(m => m.default)
-          || dev.modes[0];
-        if (resolvedMode) {
-          const label = resolvedMode.label || resolvedMode.id;
-          const isDefault = !!resolvedMode.default || dev.modes[0]?.id === resolvedMode.id;
-          modeBadge = `<span class="light-session-mode-chip${isDefault ? '' : ' light-session-mode-chip-accent'}" title="LED-group mode that fired during this session">${escapeHTML(label)}</span>`;
-          modeAria = ` mode ${label}`;
-        }
-      }
-      const unsafeEye = !!sess.safety?.unsafeEyeExposure;
-      const highBurn = Number(sess.safety?.conservativeBaseMedFraction) >= 0.7;
-      const safetyBadge = unsafeEye
-        ? '<span class="light-session-warning light-session-warning-danger">UV eye exposure — review</span>'
-        : (highBurn ? '<span class="light-session-warning">High modeled burn dose</span>'
-          : (sess.safety?.hasUV && sess.safety?.uvDoseStatus && sess.safety.uvDoseStatus !== 'modeled'
-            ? '<span class="light-session-warning">UV dose unavailable</span>' : ''));
-      const devAriaLabel = `Open ${stamp.date}${stamp.time ? ` at ${stamp.time}` : ''} device session details — ${devName}${modeAria}`;
-      html += `<div class="sun-session light-session-row light-session-complete light-session-device" data-id="${escapeAttr(sess.id)}" data-light-sessions-action="open-device-session" data-light-session-id="${escapeAttr(sess.id)}" role="button" tabindex="0" aria-label="${escapeAttr(devAriaLabel)}">
-        <span class="light-session-icon" aria-hidden="true">◉</span>
-        <div class="light-session-summary">
-          <div class="light-session-title"><span class="light-session-kind">Device</span>${escapeHTML(devName)}</div>
-          <div class="light-session-meta-line">
-            <span class="sun-session-date">${escapeHTML(stamp.date)}</span>
-            ${stamp.time ? `<span>${escapeHTML(stamp.time)}</span>` : ''}
-            <span class="sun-session-duration">${escapeHTML(dur)}</span>
-          </div>
-        </div>
-        ${modeBadge}
-        ${safetyBadge}
-        <span class="light-session-chevron" aria-hidden="true">›</span>
-      </div>`;
+      views.push({kind:'row',view:projectCompletedDeviceSession(sess,dev,_localSessionStamp(row.startedAt))});
     }
   }
-  return html;
+  return views;
 }
 
 // Inline render — caps at SESSIONS_DEFAULT_CAP and exposes the rest
 // via "View all" modal instead of expanding inline.
-export function renderUnifiedSessionsList() {
+export function getUnifiedSessionsView():LightSessionHistoryProps|null {
   const { rows, hasDeviceRows } = _collectUnifiedSessionRows();
-  if (rows.length === 0) return '';
-  const totalCount = rows.length;
+  if (rows.length === 0) return null;
   const visibleRows = rows.slice(0, SESSIONS_DEFAULT_CAP);
-  const hiddenCount = totalCount - visibleRows.length;
-  let html = `<div class="sun-sessions-list${hasDeviceRows ? ' light-sessions-list-unified' : ''}">`;
-  html += _renderSessionRowsHTML(visibleRows);
-  html += `</div>`;
-  if (hiddenCount > 0) {
-    html += `<button type="button" class="light-sessions-show-more" data-light-sessions-action="show-all">View all ${totalCount} sessions</button>`;
-  }
-  return html;
+  return { kind: 'history', rows: getSessionRowViews(visibleRows), total: rows.length,
+    sunCount: rows.filter(row => row.kind === 'sun').length, deviceCount: hasDeviceRows ? rows.filter(row => row.kind === 'device').length : 0,
+    modal: false, showMore: rows.length > visibleRows.length };
 }
+export function renderUnifiedSessionsList(){const props=getUnifiedSessionsView();return props?renderHTML(props):'';}
 
 // Modal listing every session — opened from the "View all" button so
 // the Light & Sun page itself stays compact. Reuses the same per-row
@@ -226,21 +183,8 @@ export function _openAllSessionsModal() {
     const { rows, hasDeviceRows } = _collectUnifiedSessionRows();
     const sunCount = rows.filter(row => row.kind === 'sun').length;
     const deviceCount = rows.filter(row => row.kind === 'device').length;
-    const title = `All sessions (${rows.length})`;
-    overlay.innerHTML = `<div class="modal light-sessions-modal" role="dialog" aria-modal="true" aria-labelledby="light-all-sessions-title">
-      <header class="light-sessions-modal-head">
-        <div>
-          <h3 id="light-all-sessions-title">${escapeHTML(title)}</h3>
-          <p>${sunCount} outdoor · ${deviceCount} device</p>
-        </div>
-        <button class="modal-close" aria-label="Close" data-light-sessions-close>×</button>
-      </header>
-      <div class="light-sessions-modal-body">
-        ${rows.length
-          ? `<div class="sun-sessions-list${hasDeviceRows ? ' light-sessions-list-unified' : ''}">${_renderSessionRowsHTML(rows)}</div>`
-          : '<div class="sun-empty"><p>No completed sessions yet.</p></div>'}
-      </div>
-    </div>`;
+    overlay.innerHTML = renderHTML({ kind: 'history', rows: getSessionRowViews(rows), total: rows.length,
+      sunCount, deviceCount: hasDeviceRows ? deviceCount : 0, modal: true, showMore: false });
   };
   renderInto();
   // Re-render on sync pull / AI verdict completion so the modal stays
@@ -272,16 +216,17 @@ export function _openAllSessionsModal() {
       closeOverlay();
       return;
     }
-    const row = target?.closest?.('.sun-session[role="button"]');
+    const row = target?.closest?.('.sun-session:is(button, [role="button"])');
     if (!row || !overlay.contains(row)) return;
-    if (target?.closest?.('button, a, input, select, textarea, [role="menuitem"]')) return;
+    const nestedControl = target?.closest?.('button, a, input, select, textarea, [role="menuitem"]');
+    if (nestedControl && nestedControl !== row) return;
     setTimeout(closeOverlay, 0);
   });
   overlay.addEventListener('keydown', (event) => {
     if ((event as KeyboardEvent).key !== 'Enter' && (event as KeyboardEvent).key !== ' ') return;
     const target = eventElement(event.target as ParentActionTarget | null);
-    const row = target?.closest?.('.sun-session[role="button"]');
-    if (!row || !overlay.contains(row)) return;
+    const row = target?.closest?.('.sun-session:is(button, [role="button"])');
+    if (!row || !overlay.contains(row) || row.matches('button')) return;
     setTimeout(closeOverlay, 0);
   });
   overlay.addEventListener('wheel', (event) => {

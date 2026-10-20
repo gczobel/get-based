@@ -330,7 +330,7 @@ export function getActiveModelDisplay(provider = getAIProvider()) {
 // Exclude specialized variants not suited for medical analysis.
 const OPENROUTER_EXCLUDE = ['codex', 'audio', 'image', 'oss', 'safeguard', 'coder'];
 
-export async function fetchOpenRouterModels(key?: string) {
+export async function fetchOpenRouterModels(key?: string, { isCurrent = () => true }: { isCurrent?: () => boolean } = {}) {
   try {
     let extensionPolicy = getAppExtensionAIModelPolicy({ provider: 'openrouter' });
     if (extensionPolicy?.enforced && !Array.isArray(extensionPolicy.allowlist)) return [];
@@ -348,6 +348,7 @@ export async function fetchOpenRouterModels(key?: string) {
     });
     if (!res.ok) return [];
     const json = await res.json() as CatalogResponse;
+    if (!isCurrent()) return [];
     const all = (json.data || []).filter(function(m) {
       if (!m.id || !modelMetadataIsAvailable(m)) return false;
       if (OPENROUTER_EXCLUDE.some(function(ex) { return m.id.includes(ex); })) return false;
@@ -447,7 +448,7 @@ export function renderModelPricingHint(provider: string, modelId: string) {
   return `<span style="font-size:11px;color:var(--text-muted)">${pre}$${p.input.toFixed(2)}/M in \u00b7 ${pre}$${p.output.toFixed(2)}/M out</span>`;
 }
 
-export async function fetchVeniceModels(key?: string) {
+export async function fetchVeniceModels(key?: string, { isCurrent = () => true }: { isCurrent?: () => boolean } = {}) {
   try {
     const res = await fetch('https://api.venice.ai/api/v1/models', {
       headers: { 'Authorization': 'Bearer ' + (key || getVeniceKey()) }
@@ -457,6 +458,9 @@ export async function fetchVeniceModels(key?: string) {
     const allText = (json.data || []).filter(function(m) {
       return m.id && m.type === 'text' && modelMetadataIsAvailable(m);
     }).sort(function(a, b) { return b.id.localeCompare(a.id); });
+    // The caller may own a credential that was replaced while the request ran.
+    // Reject it before any catalog, capability, pricing or selection write.
+    if (!isCurrent()) return [];
     const e2eeList = allText.filter(modelSupportsVeniceE2EE);
     localStorage.setItem('labcharts-venice-e2ee-models', JSON.stringify(e2eeList));
     const e2eeIds = new Set(e2eeList.map(function(m) { return m.id; }));

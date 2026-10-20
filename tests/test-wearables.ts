@@ -19,6 +19,10 @@ import { createLegacyAssertions } from './helpers/legacy-assertions.js';
 
 import './_node-shim.js';
 
+import {JSDOM} from 'jsdom';
+import {renderHTML as renderWearableHeader} from '../js/components/WearableStripHeader.svelte.html.js';
+import {renderHTML as renderWearableStats} from '../js/components/WearableDetailStats.svelte.html.js';
+import {renderHTML as renderWearableEntries} from '../js/components/WearableManualEntries.svelte.html.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -902,16 +906,13 @@ assert('wearable connector passes the initiating profile into OAuth modules',
 // (JSZip functional smoke — needs real browser <script> injection —
 // lives in test-wearables-dom.js. The loadJSZip source-pattern asserts
 // above run in Node.)
-// ── progress-bar markup must render in BOTH row branches ──
-// importAppleHealthFlow queries #apple-health-progress by id; before this
-// fix only the disconnected-state branch of renderRowDetail rendered that
-// element, so re-imports on already-connected rows ran without any UI
-// feedback (the `if (wrap)` / `if (bar)` / `if (text)` guards no-op'd).
-// Pin both branches so a future refactor can't silently drop one again.
-const appleProgressSrc = await fetch('/js/wearables-settings-panel.js').then(r => r.text());
-const progressIdMatches = (appleProgressSrc.match(/id="apple-health-progress"/g) || []).length;
-assert('renderRowDetail renders #apple-health-progress in BOTH connected and disconnected branches',
-  progressIdMatches >= 2);
+// One owned Apple Health branch supplies progress for both connection states.
+const appleProgressSrc = await fetch('/js/components/WearablesSettings.svelte').then(r => r.text());
+assert('Owned Apple Health progress is shared by connected and disconnected branches',
+  appleProgressSrc.includes("{#if row.detail === 'apple'}")
+    && appleProgressSrc.includes('{#if !row.connected}')
+    && /<\/button>\{\/if\}[\s\S]*id="apple-health-progress"/.test(appleProgressSrc)
+    && appleProgressSrc.includes('role="progressbar"'));
 
 // ── streaming-path parity (parseAppleHealthBlob) ──
 // Multi-GB exports hit V8's ~512 MB max-string-length wall when read via
@@ -1540,25 +1541,26 @@ assert('Wearable storage receives crypto providers without a reverse import',
 // ═══════════════════════════════════════
 console.log('17t. Settings Tab Split');
 
-const settingsV30 = await fetch('/js/settings.js').then(r => r.text());
+const settingsPanelsV30 = read('js/components/SettingsPanels.svelte');
+const settingsV30 = [await fetch('/js/settings.js').then(r => r.text()), await fetch('/js/settings-shell-contract.js').then(r => r.text()), await fetch('/js/components/SettingsShell.svelte').then(r => r.text())].join('\n');
 // Tab buttons
 assert('Settings has a Wearables tab button',
-  /data-tab="wearables"[\s\S]{0,400}Wearables/.test(settingsV30));
+  /id: 'wearables', label: 'Wearables'/.test(settingsV30) && settingsV30.includes('data-tab={tab.id}'));
 assert('Settings has an Agent Access tab button',
-  /data-tab="agent"[\s\S]{0,400}Agent Access/.test(settingsV30));
+  /id: 'agent', label: 'Agent Access'/.test(settingsV30) && settingsV30.includes('data-tab={tab.id}'));
 assert('Old Integrations tab button is gone',
   !/data-tab="integrations"/.test(settingsV30));
 // Tab panels
 assert('Wearables panel renders the wearables-section (adapter rows)',
-  /data-tab-panel="wearables"[\s\S]{0,400}id="wearables-section"/.test(settingsV30));
+  /data-tab-panel="wearables"[\s\S]{0,400}id="wearables-section"/.test(settingsPanelsV30) && settingsV30.includes('<SettingsPanels {panels}/>'));
 assert('Agent Access panel renders the messenger-section (token mgmt + series toggle)',
-  /data-tab-panel="agent"[\s\S]{0,400}id="messenger-section"/.test(settingsV30));
+  /data-tab-panel="agent"[\s\S]{0,400}id="messenger-section"/.test(settingsPanelsV30) && settingsV30.includes('<SettingsPanels {panels}/>'));
 // Backward-compat redirect for legacy 'integrations' tab id
 assert('switchSettingsTab redirects legacy "integrations" → "wearables"',
   /if\s*\(tabId\s*===\s*'integrations'\)\s*tabId\s*=\s*'wearables'/.test(settingsV30));
 // Wearables-rendered event fires on the renamed tab
 assert('settings:wearables-rendered event fires when tabId === "wearables" (renamed from integrations)',
-  /tabId\s*===\s*'wearables'[\s\S]{0,200}settings:wearables-rendered/.test(settingsV30));
+  /tabId\s*===\s*'wearables'[\s\S]{0,250}notifySettingsWearablesRendered\(\)/.test(settingsV30) && /function notifySettingsWearablesRendered\(\)[\s\S]{0,160}settings:wearables-rendered/.test(settingsV30));
 
 // ═══════════════════════════════════════
 // 17u. Tri-state agent series + IDB encryption (v1.29.0)
@@ -1615,13 +1617,13 @@ if (state?.importedData?.wearableSummary) {
 }
 
 // Settings UI is now a select, not a checkbox.
-const settingsSyncPanelV29 = await fetch('/js/settings-sync-panel-impl.js').then(r => r.text());
+const settingsSyncPanelV29 = [await fetch('/js/settings-sync-panel-impl.js').then(r => r.text()), await fetch('/js/components/AgentAccessSettings.svelte').then(r => r.text())].join('\n');
 assert('Settings → Agent Access uses a <select> for the series window',
   /id="agent-wearable-series-select"/.test(settingsSyncPanelV29));
 assert('Settings select dispatches to synced Agent Access scalar through delegated action',
   /data-sync-action="set-agent-wearable-series-days"/.test(settingsSyncPanelV29) &&
   /setAgentAccessWearableSeriesDays\(days\)/.test(settingsSyncPanelV29) &&
-  /saveImportedData\(\{ reason: 'agent-access-series' \}\)/.test(settingsSyncPanelV29) &&
+  settingsSyncPanelV29.includes("mutation.save('agent-access-series')") &&
   !/appWindow\.setAgentWearableSeriesDays/.test(settingsSyncPanelV29));
 assert('Settings select offers Off / 7 / 30 / 90 options',
   /<option value="off"/.test(settingsSyncPanelV29) &&
@@ -1684,7 +1686,7 @@ assert('WHOOP and Google Health raw rows are excluded from profile backups with 
 const credentialVaultSrc = await fetch('/js/wearables-credential-vault.js').then(r => r.text());
 assert('Every OAuth wearable stores tokens in the device-local credential vault',
   /VAULTED_CREDENTIAL_ADAPTERS\s*=\s*new Set\(\[[\s\S]*?'oura'[\s\S]*?'whoop'[\s\S]*?'withings'[\s\S]*?'ultrahuman'[\s\S]*?'fitbit'[\s\S]*?'google_health'[\s\S]*?'polar'/.test(credentialVaultSrc));
-const wearableSettingsPanelSrc = await fetch('/js/wearables-settings-panel.js').then(r => r.text());
+const wearableSettingsPanelSrc = [await fetch('/js/wearables-settings-panel.js').then(r => r.text()), await fetch('/js/components/WearablesSettings.svelte').then(r => r.text())].join('\n');
 const whoopStorageProtection = await import('../js/wearables-whoop-storage.js');
 assert('Wearable settings distinguish always-encrypted restricted imports from other history',
   wearableSettingsPanelSrc.includes('Connection keys plus WHOOP and Google Health imports are always encrypted on this device.')
@@ -1803,20 +1805,31 @@ assert('_scrubError redacts Bearer tokens in error messages',
 assert('Backfill + sync error toasts run their messages through _scrubError',
   /_scrubError\(getErrorMessage\(e\)\)/.test(connectSrcP2));
 
-// P2 a11y: friendlier aria on manual delete button + collapse-arrow header.
+// P2 a11y: real authored children retain the spoken labels and native controls.
+const manualDeleteLabel = 'Delete blood pressure reading from January 2, 2026, 120/80 mmHg';
+const manualEntryMarkup = JSDOM.fragment(renderWearableEntries({view: {
+  kind: 'list', metric: 'bp_systolic', count: 1, rows: [{
+    date: '2026-01-02', shortDate: 'Jan 2', value: '120/80', unit: 'mmHg',
+    tags: null, note: null, deleteLabel: manualDeleteLabel, deleteDate: '2026-01-02', metric: 'bp_systolic',
+  }],
+}}));
+const headerMarkup = JSDOM.fragment(renderWearableHeader({view: {
+  manualOnly: false, sourceNames: 'Controlled source', coverage: '', showDemo: false,
+  reorderMode: true, lastSync: null, sync: false, collapsed: false, collapseLabel: 'Collapse wearables strip',
+}}));
 assert('Manual-entry delete aria reads as a sentence (long date + value + unit)',
-  /aria-label="\$\{escapeHTML\(ariaText\)\}"/.test(wearablesDetailSrcP2) &&
+  manualEntryMarkup.querySelector('.wearable-manual-entry-del')?.getAttribute('aria-label') === manualDeleteLabel && read('js/components/WearableManualEntries.svelte').includes('aria-label="{entry.deleteLabel}"') &&
   /Delete\s+\$\{isBloodPressure\s*\?\s*'blood pressure'\s*:\s*metricLabel\.toLowerCase\(\)\}\s+reading\s+from/.test(wearablesDetailSrcP2));
 assert('Strip-header role="button" carries an aria-label distinct from the live source list',
   /'(Expand|Collapse) wearables strip'/.test(wearablesSrcP2)
-  && /aria-label="\$\{ariaLabel\}"/.test(wearablesSrcP2));
+  && headerMarkup.querySelector('button.wearable-collapse-arrow')?.getAttribute('aria-label') === 'Collapse wearables strip' && headerMarkup.querySelector('button.wearable-collapse-arrow')?.getAttribute('aria-expanded') === 'true' && headerMarkup.querySelector('.wearable-source-label')?.textContent === 'Controlled source');
 
 // (Niche-disclosure copy assertion was here. The disclosure was removed in
 // v1.30.1 — see the matching "STRIP_NICHE_METRICS / disclosure / nicheDeferred
 // all gone" check below.)
 
 // P2 copy: Settings → Agent Access label includes "and context".
-const settingsSyncPanelSrcP2 = await fetch('/js/settings-sync-panel-impl.js').then(r => r.text());
+const settingsSyncPanelSrcP2 = [await fetch('/js/settings-sync-panel-impl.js').then(r => r.text()), await fetch('/js/components/AgentAccessSettings.svelte').then(r => r.text())].join('\n');
 assert('Settings Agent Access description says "labs and context" (covers wearables + cards too)',
   /Let AI agents query your labs and context/.test(settingsSyncPanelSrcP2));
 
@@ -2006,7 +2019,7 @@ assert('Touch media block extends to .wearable-reorder-arrow (≥44px)',
   /@media\s*\(pointer:\s*coarse\)[\s\S]{0,5000}\.wearable-reorder-arrow[\s\S]{0,200}min-height:\s*44px/.test(cssSrc));
 
 // In-app token-cost copy aligned with measured reality (~400 not ~1500).
-const settingsSyncPanelSrc = await fetch('/js/settings-sync-panel-impl.js').then(r => r.text());
+const settingsSyncPanelSrc = [await fetch('/js/settings-sync-panel-impl.js').then(r => r.text()), await fetch('/js/components/AgentAccessSettings.svelte').then(r => r.text())].join('\n');
 // v1.29.0: tri-state toggle (off / 7 / 30 / 90) — copy now cites all three
 // window sizes with their respective costs.
 assert('Agent series tri-state copy cites the 7/30/90 token costs',
@@ -2080,7 +2093,7 @@ console.log('17a. UX Audit Fixes');
 const wearablesSrc2 = await fetch('/js/wearables.js').then(r => r.text());
 const wearablesDetailSrc2 = await fetch('/js/wearables-detail-modal.js').then(r => r.text());
 assert('Strip passes showSourceBadges (whole-strip flag) into renderCard, not the per-metric provider count',
-  /renderCard\(metricId,\s*canon,\s*metric,\s*showSourceBadges/.test(wearablesSrc2));
+  /projectCard\(metricId,\s*canon,\s*metric,\s*showSourceBadges/.test(wearablesSrc2));
 assert('No leftover per-metric providersForMetric.length > 1 gate',
   !/providersForMetric\.length\s*>\s*1/.test(wearablesSrc2));
 
@@ -2098,7 +2111,7 @@ assert('Detail modal mirrors delta-suppression rules',
 
 // P0-5: source-swap reachable from the detail modal when ≥2 wearables connected
 assert('Detail modal renders source-swap button when ≥2 wearables connected',
-  /wearable-modal-source-swap/.test(wearablesDetailSrc2));
+  read('js/components/WearableDetailChrome.svelte').includes('wearable-modal-source-swap') && /Object.keys\(connectedSources\).length > 1 && !!adapter/.test(wearablesDetailSrc2) && wearablesDetailSrc2.includes('sourceSwap: swapButton'));
 
 // P1-1: glyph subs + RHR drops sub
 assert('hrv_rmssd uses 🌙 glyph not "overnight" word',
@@ -2115,7 +2128,7 @@ assert('Daytime-empty state passes a tooltip as the 4th tuple element',
 assert('Daytime tooltip references v2 (not the v1 typo)',
   /v2 API exposes overnight HRV only/.test(wearablesDetailSrc2) && !/v1 API exposes overnight HRV only/.test(wearablesDetailSrc2));
 assert('Stats grid renders the optional title attribute',
-  /\$\{tooltip\s*\?\s*` title="\$\{escapeHTML\(tooltip\)\}"`/.test(wearablesDetailSrc2));
+  JSDOM.fragment(renderWearableStats({view: [{tooltip: 'Controlled <hint> "quote"', label: 'Sample', value: '1', sub: null}]})).querySelector('.wearable-detail-stat')?.getAttribute('title') === 'Controlled <hint> "quote"' && read('js/components/WearableDetailStats.svelte').includes('title={stat.tooltip??undefined}') && wearablesDetailSrc2.includes('tooltip: tooltip ? wearableEmptyText(tooltip) : null'));
 
 // P1-3: BP carries spoken-aria override
 assert('renderCard prefers canon.ariaLabel over derived label for spoken text',
@@ -2123,7 +2136,7 @@ assert('renderCard prefers canon.ariaLabel over derived label for spoken text',
 
 // P1-6: reorder-mode banner pill
 assert('Reorder mode shows a banner pill in the header',
-  /wearable-strip-reorder-pill/.test(wearablesSrc2));
+  headerMarkup.querySelector('.wearable-strip-reorder-pill')?.textContent === '⇄ Reorder mode — use ◀ ▶ on each card' && wearablesSrc2.includes('reorderMode, lastSync, sync, collapsed, collapseLabel: ariaLabel'));
 
 // P1-8: the "vendor-specific scores" disclosure was removed in v1.30.1
 // — it framed Oura-only resilience as different from Oura-only cardio
@@ -2390,18 +2403,17 @@ try {
 // The Node shim has no hostname, so use the equivalent maintainer preview
 // escape; localhost visibility itself is covered above with an explicit host.
 localStorage.setItem(escapeKey, 'true');
-const settingsHtml = wearableSettings.renderWearablesSettingsSection();
+const { buildWearablesSettingsSnapshot } = await import('../js/wearables-settings-view.js');
+const settingsSnapshot = buildWearablesSettingsSnapshot(state.currentProfile || 'default', false);
+const settingsRows = settingsSnapshot.groups.flatMap(group => group.rows);
+assert('Settings renderer retains its required mount host', wearableSettings.renderWearablesSettingsSection().includes('data-wearables-view-host'));
 assert('Settings render shows disabled WHOOP setup row on localhost',
-  /data-adapter="whoop"/.test(settingsHtml)
-    && !/aria-label="Connect WHOOP"/.test(settingsHtml));
+  settingsRows.some(row => row.id === 'whoop' && !row.primaryAction && row.detail === 'setup'));
 assert('Settings render shows disabled Ultrahuman setup row on localhost',
-  /data-adapter="ultrahuman"/.test(settingsHtml)
-    && !/aria-label="Connect Ultrahuman"/.test(settingsHtml));
+  settingsRows.some(row => row.id === 'ultrahuman' && !row.primaryAction && row.detail === 'setup'));
 assert('Settings marks experimental self-host setup as required',
-  /Set up on your server/.test(settingsHtml));
-assert('Settings render still shows Oura row',
-  /data-adapter-id="oura"|connectAdapter\('oura'\)|adapter\.id === 'oura'/i.test(settingsHtml) ||
-  /Oura/.test(settingsHtml));
+  settingsRows.some(row => row.status === 'Set up on your server'));
+assert('Settings render still shows Oura row', settingsRows.some(row => row.id === 'oura' && row.name === 'Oura'));
 
 console.log(`\nResults: ${legacyAssertions.pass} passed, ${legacyAssertions.fail} failed, ${legacyAssertions.pass + legacyAssertions.fail} total`);
 process.exit(legacyAssertions.fail > 0 ? 1 : 0);

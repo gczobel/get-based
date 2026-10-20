@@ -54,6 +54,11 @@ const backupModule = await import('../js/backup.js');
 const backupSrc = read('js/backup.js');
 const cryptoStoreSrc = read('js/crypto.js');
 const cryptoUiSrc = read('js/crypto-ui.js');
+const passphraseViewSrc = read('js/components/PassphraseDialog.svelte');
+const passphraseClassesSrc = read('js/passphrase-classes.ts');
+const passphraseControllerSrc = read('js/passphrase-controller.js');
+const encryptionViewSrc = read('js/components/EncryptionSettings.svelte');
+const backupViewSrc = read('js/components/BackupSettings.svelte');
 const cycleStoreSrc = read('js/cycle-store.js');
 const profileStorageKeySrc = read('js/profile-storage-key.js');
 
@@ -291,13 +296,13 @@ console.log('9. Security section rendering');
 try {
   const html = cryptoModule.renderEncryptionSection();
   assert('renderEncryptionSection returns HTML', typeof html === 'string' && html.length > 50);
-  assert('Encryption section has status card', html.includes('encryption-status-card'));
-  assert('Encryption section uses delegated actions', html.includes('data-crypto-action=') && !html.includes('onclick='));
+  assert('Encryption section has status card', encryptionViewSrc.includes('encryption-status-card'));
+  assert('Encryption section uses delegated actions', encryptionViewSrc.includes('data-crypto-action=') && !html.includes('onclick='));
   const backupHtml = cryptoModule.renderBackupSection();
   assert('renderBackupSection returns HTML', typeof backupHtml === 'string' && backupHtml.length > 50);
-  assert('Backup section has download button', backupHtml.includes('Download Backup'));
-  assert('Backup section has restore button', backupHtml.includes('Restore Backup'));
-  assert('Backup section uses delegated actions', backupHtml.includes('data-crypto-action=') && !/on(click|change)=/.test(backupHtml));
+  assert('Backup section has download button', backupViewSrc.includes('Download Backup'));
+  assert('Backup section has restore button', backupViewSrc.includes('Restore Backup'));
+  assert('Backup section uses delegated actions', backupViewSrc.includes('data-crypto-action=') && !/on(click|change)=/.test(backupHtml));
 } catch (e) {
   assert('Settings section rendering', false, (e as {message?: unknown}).message);
 }
@@ -317,19 +322,23 @@ console.log('10. Encryption enabled state');
 }
 
 // ═══════════════════════════════════════════════
-// 11. Encryption section reflects state
+// 11. Component state branches retain controls; live states are covered by settings-protection.test.ts
 // ═══════════════════════════════════════════════
 console.log('11. Encryption section reflects state');
 {
   const wasEnabled = localStorage.getItem('labcharts-encryption-enabled');
   localStorage.removeItem('labcharts-encryption-enabled');
-  const offHtml = cryptoModule.renderEncryptionSection();
+  const offHost = cryptoModule.renderEncryptionSection();
+  assert('OFF state retains the mount contract', offHost.includes('data-encryption-settings-root'));
+  const offHtml = encryptionViewSrc.split('{:else}').at(-1)!;
   assert('OFF state shows Enable button', offHtml.includes('Enable Encryption'));
-  assert('OFF state shows encryption-status-off', offHtml.includes('encryption-status-off'));
+  assert('OFF state shows encryption-status-off', encryptionViewSrc.includes('encryption-status-off'));
   assert('OFF state enable button is delegated', offHtml.includes('data-crypto-action="enable-encryption"'));
 
   localStorage.setItem('labcharts-encryption-enabled', 'true');
-  const onHtml = cryptoModule.renderEncryptionSection();
+  const onHost = cryptoModule.renderEncryptionSection();
+  assert('ON state retains the mount contract', onHost === offHost);
+  const onHtml = encryptionViewSrc;
   assert('ON state shows Change Passphrase', onHtml.includes('Change Passphrase'));
   assert('ON state shows Disable Encryption', onHtml.includes('Disable Encryption'));
   assert('ON state shows encryption-status-on', onHtml.includes('encryption-status-on'));
@@ -405,14 +414,14 @@ for (const name of ['showNotification', 'showConfirmDialog', 'showPromptDialog',
 console.log('13. Passphrase modal CSS');
 try {
   const cssText = read('css/data-protection.css');
-  assert('CSS has .passphrase-overlay', cssText.includes('.passphrase-overlay'));
-  assert('CSS has .passphrase-dialog', cssText.includes('.passphrase-dialog'));
-  assert('CSS has .passphrase-input', cssText.includes('.passphrase-input'));
-  assert('CSS has .passphrase-btn', cssText.includes('.passphrase-btn'));
-  assert('CSS has .passphrase-btn-primary', cssText.includes('.passphrase-btn-primary'));
-  assert('CSS has .encryption-status-card', cssText.includes('.encryption-status-card'));
-  assert('CSS has .encryption-status-on', cssText.includes('.encryption-status-on'));
-  assert('CSS has .encryption-status-off', cssText.includes('.encryption-status-off'));
+  assert('CSS scopes dialogs to #passphrase-overlay', cssText.includes('#passphrase-overlay'));
+  assert('Owned Tailwind styles cover passphrase-dialog', passphraseViewSrc.includes('passphrase-dialog') && passphraseViewSrc.includes('gb:passphrase:') && cssText.includes('gb\\:passphrase\\:bg-secondary-surface'));
+  assert('Owned Tailwind styles cover passphrase-input', passphraseClassesSrc.includes('passphrase-input') && passphraseClassesSrc.includes('gb:passphrase:') && cssText.includes('gb\\:passphrase\\:w-full'));
+  assert('Owned Tailwind styles cover passphrase-btn', passphraseClassesSrc.includes('passphrase-btn') && passphraseClassesSrc.includes('gb:passphrase:') && cssText.includes('gb\\:passphrase\\:min-h-11'));
+  assert('Owned Tailwind styles cover passphrase-btn-primary', passphraseClassesSrc.includes('passphrase-btn-primary') && passphraseClassesSrc.includes('gb:passphrase:') && cssText.includes('gb\\:passphrase\\:bg-accent'));
+  assert('Svelte owns encryption-status-card styling', encryptionViewSrc.includes('encryption-status-card') && encryptionViewSrc.includes('gb:protection:'));
+  assert('Svelte owns encryption-status-on styling', encryptionViewSrc.includes('encryption-status-on') && encryptionViewSrc.includes('gb:protection:'));
+  assert('Svelte owns encryption-status-off styling', encryptionViewSrc.includes('encryption-status-off') && encryptionViewSrc.includes('gb:protection:'));
 } catch (e) {
   assert('CSS verification', false, (e as {message?: unknown}).message);
 }
@@ -424,7 +433,7 @@ console.log('14. crypto.js source inspection');
 try {
   const src = await fetchWithRetry('js/crypto.js');
   const uiSrc = await fetchWithRetry('js/crypto-ui.js');
-  const surfaceSrc = `${src}\n${uiSrc}`;
+  const surfaceSrc = `${src}\n${uiSrc}\n${passphraseControllerSrc}\n${passphraseViewSrc}`;
   assert('crypto.js uses PBKDF2', src.includes('PBKDF2'));
   assert('crypto.js uses AES-GCM', src.includes('AES-GCM'));
   assert('crypto.js has 600000 iterations', src.includes('600000'));
@@ -434,13 +443,13 @@ try {
   assert('crypto surface has backup format', surfaceSrc.includes('labcharts-backup'));
   assert('crypto.js has v1: prefix', src.includes("'v1:'") || src.includes('`v1:'));
   assert('crypto surface never stores passphrase', !surfaceSrc.match(/localStorage\.setItem\([^)]*passphrase/));
-  assert('Forgot passphrase does NOT use showConfirmDialog', !uiSrc.includes("forgotButton.addEventListener('click', () => {\n    showConfirmDialog"));
-  assert('Forgot passphrase has inline confirm UI', uiSrc.includes('passphrase-forgot-confirm'));
-  assert('Forgot passphrase has Go Back button', uiSrc.includes('passphrase-forgot-cancel'));
-  assert('Forgot passphrase wipes IndexedDB-backed app data', uiSrc.includes("import('./data-wipe.js'") && uiSrc.includes('eraseAllLocalAppData'));
+  assert('Forgot passphrase does NOT use showConfirmDialog', !passphraseControllerSrc.includes('showConfirmDialog'));
+  assert('Forgot passphrase has inline confirm UI', passphraseViewSrc.includes('passphrase-forgot-confirm'));
+  assert('Forgot passphrase has Go Back button', passphraseViewSrc.includes('passphrase-forgot-cancel'));
+  assert('Forgot passphrase wipes IndexedDB-backed app data', passphraseControllerSrc.includes("import('./data-wipe.js'") && passphraseControllerSrc.includes('eraseAllLocalAppData'));
   assert('Forgot passphrase does not reload after an incomplete wipe',
-    /catch \(error\)[\s\S]{0,700}return;\s*\}\s*cryptoUiDeps\.clearEncryptionSession/.test(uiSrc)
-    && !/catch \(error\)[\s\S]{0,700}localStorage\.removeItem/.test(uiSrc));
+    /catch \(error\)[\s\S]{0,700}return;\s*\}\s*services\.clearEncryptionSession/.test(passphraseControllerSrc)
+    && !/catch \(error\)[\s\S]{0,700}localStorage\.removeItem/.test(passphraseControllerSrc));
   const bkSrc0 = await fetchWithRetry('js/backup.js');
   assert('Backup includes encryptionSalt field', bkSrc0.includes('encryptionSalt'));
   assert('Restore sets labcharts-encryption-enabled', bkSrc0.includes("localStorage.setItem('labcharts-encryption-enabled'"));
@@ -607,12 +616,49 @@ try {
   const src = await fetchWithRetry('js/settings.js');
   const runtimeSrc = await fetchWithRetry('js/settings-runtime.js');
   const runtimeBridgeSrc = await fetchWithRetry('js/settings-runtime-bridge.js');
-  assert('settings.js imports renderEncryptionSection', src.includes('renderEncryptionSection'));
-  assert('settings.js imports renderBackupSection', src.includes('renderBackupSection'));
-  assert('settings.js has Security group', src.includes('Security'));
-  assert('settings.js has Backup group', src.includes('Backup'));
-  assert('settings.js has encryption-section id', src.includes('encryption-section'));
-  assert('settings.js has backup-section id', src.includes('backup-section'));
+  const panelsSrc = await fetchWithRetry('js/components/SettingsPanels.svelte');
+  const shellSrc = await fetchWithRetry('js/settings-shell.js');
+  const shellViewSrc = await fetchWithRetry('js/components/SettingsShell.svelte');
+  const protectionSrc = await fetchWithRetry('js/settings-protection-component.js');
+  const dataPanel = panelsSrc.match(/<div[^>]*\bdata-tab-panel="data"[\s\S]*?(?=<!-- Wearables Tab)/)?.[0] || '';
+  const mountAt = src.indexOf('mountSettingsShell(modal,');
+  assert('settings prepares the encryption feature through its crypto boundary before mounting the shell',
+    /import\s*\{[^}]*prepareEncryptionSection[^}]*\}\s*from '\.\/crypto\.js'/.test(src) &&
+    src.indexOf('prepareEncryptionSection();') >= 0 && src.indexOf('prepareEncryptionSection();') < mountAt &&
+    cryptoStoreSrc.includes('prepareEncryptionSection') &&
+    /export function prepareEncryptionSection\(\)[\s\S]*?queueMicrotask\(hydrateProtectionSettings\)/.test(cryptoUiSrc));
+  assert('settings prepares the backup feature through its crypto boundary before mounting the shell',
+    /import\s*\{[^}]*prepareBackupSection[^}]*\}\s*from '\.\/crypto\.js'/.test(src) &&
+    src.indexOf('prepareBackupSection();') >= 0 && src.indexOf('prepareBackupSection();') < mountAt &&
+    cryptoStoreSrc.includes('prepareBackupSection') &&
+    /export function prepareBackupSection\(\)[\s\S]*?queueMicrotask\(hydrateProtectionSettings\)/.test(cryptoUiSrc));
+  assert('the mounted SettingsPanels Data tab owns the Security group',
+    dataPanel.includes('<div class="settings-group-title">Security</div>'));
+  assert('the mounted SettingsPanels Data tab owns the Backup and Restore group',
+    dataPanel.includes('<div class="settings-group-title">Backup &amp; Restore</div>'));
+  assert('the encryption section exposes the host consumed by the typed EncryptionSettings owner',
+    /id="encryption-section">\s*<div data-encryption-settings-root data-settings-protection-view="encryption"/.test(dataPanel) &&
+    protectionSrc.includes("from './components/EncryptionSettings.svelte.native.js'") &&
+    protectionSrc.includes("document.querySelector('[data-encryption-settings-root]')") &&
+    protectionSrc.includes('mount(EncryptionSettings, { target: host, props: { initial: snapshot } })') &&
+    cryptoUiSrc.includes('refreshEncryptionSettings({ enabled })'));
+  assert('the backup section exposes the host consumed by the typed BackupSettings owner',
+    /id="backup-section">\s*<div data-backup-settings-root data-settings-protection-view="backup"/.test(dataPanel) &&
+    protectionSrc.includes("from './components/BackupSettings.svelte.native.js'") &&
+    protectionSrc.includes("document.querySelector('[data-backup-settings-root]')") &&
+    protectionSrc.includes('mountBackup(BackupSettings, { target: host, props: { initial: snapshot } })') &&
+    cryptoUiSrc.includes('refreshBackupSettings(getBackupSettingsSnapshot('));
+  assert('the settings controller mounts the Svelte shell which composes the actual protection hosts',
+    src.includes("from './settings-shell.js'") && mountAt >= 0 &&
+    shellSrc.includes("from './components/SettingsShell.svelte.native.js'") &&
+    shellSrc.includes('mount(SettingsShell, { target, props })') &&
+    shellViewSrc.includes("import SettingsPanels from './SettingsPanels.svelte'") &&
+    shellViewSrc.includes('<SettingsPanels {panels}/>'));
+  assert('settings hydrates both typed protection features after shell mounting and disposes previous owners',
+    src.indexOf('disposeSettingsProtection();') >= 0 && src.indexOf('disposeSettingsProtection();') < mountAt &&
+    src.indexOf('hydrateProtectionSettings();') > mountAt &&
+    src.indexOf('loadBackupSnapshots();') > mountAt &&
+    protectionSrc.includes('void unmount(encryption)') && protectionSrc.includes('void unmountBackup(backup)'));
   assert('settings.js delegates browser runtime hooks to settings-runtime',
     src.includes("from './settings-runtime.js'") &&
     !/\bwindow(?:\.|\s*\[)/.test(src));
@@ -695,11 +741,11 @@ try {
 console.log('24. Backup section auto-backup UI');
 try {
   const html = cryptoModule.renderBackupSection();
-  assert('Backup section has auto-backup status', html.includes('backup-auto-status'));
-  assert('Backup section has snapshot list container', html.includes('backup-snapshot-list'));
+  assert('Backup section has auto-backup status', backupViewSrc.includes('backup-auto-status'));
+  assert('Backup section has snapshot list container', backupViewSrc.includes('backup-snapshot-list'));
   assert('Backup section has delegated snapshot toggle and import',
-    html.includes('data-crypto-action="toggle-backup-snapshots"') &&
-    html.includes('data-crypto-action="import-backup"') &&
+    backupViewSrc.includes('data-crypto-action="toggle-backup-snapshots"') &&
+    backupViewSrc.includes('data-crypto-action="import-backup"') &&
     !/on(click|change)=/.test(html));
 } catch (e) {
   assert('Backup section auto-backup UI', false, (e as {message?: unknown}).message);
@@ -711,11 +757,11 @@ try {
 console.log('25. Auto-backup CSS');
 try {
   const cssText = read('css/data-protection.css');
-  assert('CSS has .backup-auto-status', cssText.includes('.backup-auto-status'));
-  assert('CSS has .backup-snapshot-list', cssText.includes('.backup-snapshot-list'));
-  assert('CSS has .backup-snapshot-item', cssText.includes('.backup-snapshot-item'));
-  assert('CSS has .backup-snapshot-date', cssText.includes('.backup-snapshot-date'));
-  assert('CSS has .backup-snapshot-meta', cssText.includes('.backup-snapshot-meta'));
+  assert('Svelte owns backup-auto-status styling', backupViewSrc.includes('backup-auto-status gb:protection:') && !cssText.includes('.backup-auto-status'));
+  assert('Svelte owns backup-snapshot-list styling', backupViewSrc.includes('backup-snapshot-list gb:protection:') && !cssText.includes('.backup-snapshot-list'));
+  assert('Svelte owns backup-snapshot-item styling', backupViewSrc.includes('backup-snapshot-item gb:protection:') && !cssText.includes('.backup-snapshot-item'));
+  assert('Svelte owns backup-snapshot-date styling', backupViewSrc.includes('backup-snapshot-date gb:protection:') && !cssText.includes('.backup-snapshot-date'));
+  assert('Svelte owns backup-snapshot-meta styling', backupViewSrc.includes('backup-snapshot-meta gb:protection:') && !cssText.includes('.backup-snapshot-meta'));
 } catch (e) {
   assert('CSS auto-backup styles', false, (e as {message?: unknown}).message);
 }

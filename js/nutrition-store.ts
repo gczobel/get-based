@@ -1,3 +1,4 @@
+import { readNutritionMealRows } from './nutrition-store-reads.js';
 import type { ProfileData } from '../types/app-state.js';
 import type { StoredNutritionMeal } from './nutrition-sync-sanitize.js';
 import type { DeviceLocalEnvelope } from './wearable-storage-types.js';
@@ -31,6 +32,8 @@ import { computeNutritionSummary, mergeNutritionOperationSurface, NUTRITION_SUMM
 import { getDailyRange } from './wearables-store.js';
 import { clearTombstone, recordTombstone } from './data-merge.js';
 import { sanitizeNutritionMeal } from './nutrition-sync-sanitize.js';
+import { requestPersistentNutritionStorage } from './nutrition-storage-permission.js';
+export { requestPersistentNutritionStorage } from './nutrition-storage-permission.js';
 
 export { sanitizeNutritionMeal } from './nutrition-sync-sanitize.js';
 
@@ -242,9 +245,9 @@ async function encryptPayload(profileId: unknown, value: unknown) {
   return { version: 1, iv, ciphertext };
 }
 
-async function decryptPayload(profileId: unknown, envelope: MealEnvelope): Promise<Record<string, unknown> | null> {
+async function decryptPayload(profileId: unknown, envelope: MealEnvelope, readKey?: () => Promise<unknown>): Promise<Record<string, unknown> | null> {
   if (envelope?.version !== 1 || !envelope.iv || !envelope.ciphertext) return null;
-  const key = await readMeta(profileId, DEVICE_KEY_META);
+  const key = await (readKey ? readKey() : readMeta(profileId, DEVICE_KEY_META));
   if (!isAesKey(key)) return null;
   try {
     const plaintext = await globalThis.crypto.subtle.decrypt(
@@ -294,9 +297,9 @@ export async function putNutritionMeal(profileId: unknown, meal: unknown, option
   return normalized;
 }
 
-async function decryptStoredMeal(profileId: unknown, row: StoredMealRow): Promise<MealReader> {
+async function decryptStoredMeal(profileId: unknown, row: StoredMealRow, readKey?: () => Promise<unknown>): Promise<MealReader> {
   if (!row?._devicePayload) throw new NutritionStorageIntegrityError('A stored meal is missing its encrypted payload.');
-  const payload = await decryptPayload(profileId, row._devicePayload);
+  const payload = await decryptPayload(profileId, row._devicePayload, readKey);
   if (!payload) throw new NutritionStorageIntegrityError();
   return { id: row.id, eatenAt: row.eatenAt, updatedAt: row.updatedAt, ...payload };
 }
@@ -313,23 +316,11 @@ export async function getNutritionMeal(profileId: unknown, id: unknown) {
 
 export async function listNutritionMeals(profileId: unknown, { since = null, limit = 500 }: ListMealOptions = {}) {
   const db = (await openNutritionDB(profileId));
-  const rows = await new Promise<StoredMealRow[]>((resolve, reject) => {
-    const index = db.transaction(STORE_MEALS, 'readonly').objectStore(STORE_MEALS).index('by_eaten_at');
-    const range = since && typeof IDBKeyRange !== 'undefined' ? IDBKeyRange.lowerBound(String(since)) : null;
-    const request = index.openCursor(range, 'prev');
-    const found: StoredMealRow[] = [];
-    request.onsuccess = () => {
-      const cursor = request.result;
-      if (cursor && found.length < Math.max(1, Number(limit) || 500)) {
-        found.push(cursor.value);
-        cursor.continue();
-      } else {
-        resolve(found);
-      }
-    };
-    request.onerror = () => reject(request.error);
-  });
-  return Promise.all(rows.map(row => decryptStoredMeal(profileId, row)));
+  const rows = await readNutritionMealRows<StoredMealRow>(db, {since, limit});
+  let key: Promise<unknown> | undefined;
+  const readKey = typeof profileId === 'string' && profileId.length > 0
+    ? () => key ??= readMeta(profileId, DEVICE_KEY_META) : undefined;
+  return Promise.all(rows.map(row => decryptStoredMeal(profileId, row, readKey)));
 }
 
 export async function deleteNutritionMeal(profileId: unknown, id: unknown) {
@@ -373,15 +364,6 @@ export async function getLocalNutritionComparison(profileId: unknown) {
   const encrypted = await readMeta(profileId, COMPARISON_META);
   if (!encrypted) return null;
   return decryptPayload(profileId, encrypted as MealEnvelope);
-}
-
-export async function requestPersistentNutritionStorage() {
-  try {
-    if (typeof globalThis.navigator?.storage?.persist !== 'function') return false;
-    return await globalThis.navigator.storage.persist();
-  } catch {
-    return false;
-  }
 }
 
 export async function deleteNutritionDB(profileId: unknown): Promise<void> {
@@ -754,7 +736,9 @@ async function saveProfileMeal(profileId: string, importedData: NutritionProfile
   if (committedMeal) await putNutritionMeal(profileId, committedMeal, { preserveUpdatedAt: true });
   else await deleteNutritionMeal(profileId, saved.id);
   await writeMeta(profileId, PROFILE_SYNC_INITIALIZED_META, true);
-  await requestPersistentNutritionStorage();
+  // Canonical and encrypted IndexedDB commits above determine save success.
+  // Optional eviction protection must not hold the save queue or summary open.
+  void requestPersistentNutritionStorage();
   await recomputeActiveSummary(profileId, persistedData);
   return committedMeal || saved;
 }

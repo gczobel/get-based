@@ -1,9 +1,3 @@
-declare const Buffer: {
-  from(value: ArrayBuffer | ArrayLike<number> | string, encoding?: string): {
-    toString(encoding?: string): string;
-  };
-};
-
 declare const qrcode: any;
 
 type AnyFunction = (...args: any[]) => any;
@@ -134,8 +128,6 @@ interface Window {
   _settingsHadProvider?: boolean;
   _veniceAttestation?: any;
   _ppqAttestation?: any;
-  _rsCashuBackupTimer?: ReturnType<typeof setTimeout>;
-  _walletSeedThenAction?: AnyFunction | null;
   _getActiveProfileId?: () => string | null;
   _openChatAfterInit?: boolean;
   _openSettingsAfterInit?: string;

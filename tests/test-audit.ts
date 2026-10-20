@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 import { sourceFunctionHasInitializer } from './helpers/native-source-contracts.js';
+import { deviceLibraryClasses } from '../js/light-device-library-classes.js';
+import { deviceSetupClasses } from '../js/light-device-setup-classes.js';
 import { dataModuleSource } from './helpers/data-module-source.js';
 import { readServiceWorkerSource } from '../scripts/service-worker-source.js';
 import { createLegacyAssertions } from './helpers/legacy-assertions.js';
@@ -17,7 +19,10 @@ import { createLegacyAssertions } from './helpers/legacy-assertions.js';
 // *source-inspection* asserts (guard wiring present) stay here.
 
 import './_node-shim.js';
+import { auditMigrationWitnesses } from './helpers/audit-migration-contracts.js';
 import { walkSourceFiles } from '../scripts/source-files.js';
+import { auditDomSinks } from '../scripts/dom-sink-audit.mjs';
+import { parse as parseSvelte } from 'svelte/compiler';
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -152,7 +157,7 @@ assert('index defers import CSS behind its ordered lazy-load anchor',
   importLoaderAuditSrc.includes("new URL('../css/import.css', import.meta.url)") &&
   importLoaderAuditSrc.includes('data-import-stylesheet-anchor'));
 assert('shared import controls remain in the eager app shell',
-  appShellCssAuditSrc.includes('.import-btn {') &&
+  appShellCssAuditSrc.includes('.import-btn:not(:where([data-chat-empty-view] *)) {') &&
   appShellCssAuditSrc.includes('.header-icon-btn.header-import-btn {') &&
   appShellCssAuditSrc.includes('.drop-zone {'));
 assert('SW APP_SHELL includes import CSS bundle', swAuditSrc.includes("'/css/import.css'"));
@@ -190,9 +195,16 @@ assert('dashboard CSS split loads before category views',
   swAuditSrc.indexOf("'/css/dashboard-welcome.css'") < swAuditSrc.indexOf("'/css/dashboard-data.css'") &&
   swAuditSrc.indexOf("'/css/dashboard-data.css'") < swAuditSrc.indexOf("'/css/category-views.css'"));
 const categoryPageRuntimeAuditSrc = read('js/category-page-runtime.js');
-const categoryViewsRouteAuditSrc = read('js/views.js').replace(/(correlations: data => showCategoryPresentationRoute\()\s*'correlations',\s*'Correlations',/, "$1\n      'correlations',\n      'Correlations',");
+const viewsRuntimeAuditSrc = read('js/views-runtime.js');
+const viewsCompatibilityAuditSrc = read('js/views.js');
+const viewsRuntimePublicExport = /export\s*\{([^}]+)\}\s*from\s*['"]\.\/views-runtime\.js['"]/.exec(viewsCompatibilityAuditSrc);
+const viewsRuntimePublicNames = new Set(
+  (viewsRuntimePublicExport?.[1] || '').split(',').map(name => name.trim()),
+);
+const categoryViewsRouteAuditSrc = viewsRuntimeAuditSrc.replace(/(correlations: data => showCategoryPresentationRoute\()\s*'correlations',\s*'Correlations',/, "$1\n      'correlations',\n      'Correlations',");
 const dashboardCoreAuditSrc = read('css/dashboard-core.css');
 const dashboardDataAuditSrc = read('css/dashboard-data.css');
+const sharedControlsAuditSrc = read('styles.css');
 assert('index defers category views CSS behind its ordered lazy-load anchor',
   !indexSrc.includes('href="css/category-views.css"') &&
   indexSrc.includes('data-category-views-stylesheet-anchor') &&
@@ -206,13 +218,19 @@ assert('category views CSS lazy-load anchor preserves the original cascade posit
 assert('category, compare, and correlations routes wait for category presentation',
   categoryViewsRouteAuditSrc.includes("category: (category, data) => showCategoryPresentationRoute(") &&
   categoryViewsRouteAuditSrc.includes("showCategoryPresentationRoute('compare'") &&
-  categoryViewsRouteAuditSrc.includes("'correlations',\n      'Correlations',"));
+  categoryViewsRouteAuditSrc.includes("'correlations',\n      'Correlations',") &&
+  categoryViewsRouteAuditSrc.includes('() => isCategoryViewsStylesheetLoaded() && (!needsCharts || isChartsModuleLoaded())') &&
+  categoryViewsRouteAuditSrc.includes('loadCategoryViewsStylesheet(),') &&
+  /function showPreparedRoute[^\n]*\{[\s\S]{0,800}return prepare\(\)\s*\.then\(async[^\n]*\{[\s\S]{0,300}await render\(\.\.\.args\)/.test(viewsRuntimeAuditSrc) &&
+  ['navigate', 'showCategory', 'showCompare', 'showCorrelations'].every(name => viewsRuntimePublicNames.has(name)));
 assert('dashboard-owned category primitives remain eager',
   dashboardCoreAuditSrc.includes('.category-header { margin-bottom: 24px; }') &&
   dashboardDataAuditSrc.includes('.alerts-section') &&
   dashboardDataAuditSrc.includes('.alert-card') &&
-  dashboardDataAuditSrc.includes('.date-range-filter') &&
-  dashboardDataAuditSrc.includes('.range-btn'));
+  sharedControlsAuditSrc.includes('.date-range-filter {') &&
+  sharedControlsAuditSrc.includes('.range-btn {') &&
+  indexSrc.includes('href="styles.css"') &&
+  indexSrc.indexOf('href="styles.css"') < indexSrc.indexOf('data-category-views-stylesheet-anchor'));
 assert('SW APP_SHELL includes category views CSS bundle', swAuditSrc.includes("'/css/category-views.css'"));
 assert('index loads shared modal CSS bundle', indexSrc.includes('href="css/modal-shared.css"'));
 assert('SW APP_SHELL includes shared modal CSS bundle', swAuditSrc.includes("'/css/modal-shared.css'"));
@@ -228,14 +246,16 @@ assert('index defers context editor CSS behind its ordered lazy-load anchor',
   contextEditorAuditSrc.includes("new URL('../css/context-editor.css', import.meta.url)") &&
   contextEditorAuditSrc.includes('data-context-editor-stylesheet-anchor'));
 assert('context editor and tips actions wait for their presentation',
-  read('js/context-card-medical-history-editor-impl.js').includes('runWithContextEditorStylesheet(openDiagnosesEditor)') &&
-  read('js/context-card-lifestyle-editors-impl.js').includes('runWithContextEditorStylesheet(openDietEditor)') &&
-  read('js/context-cards.js').includes('runWithContextEditorStylesheet(() => openCardTipsModal(cardKey))'));
+  read('js/context-card-medical-history-editor-impl.js').includes('openDiagnosesEditor as openMedicalHistory') &&
+  read('js/context-medical-history-view.js').includes('runWithContextEditorStylesheet(() =>') &&
+  read('js/context-card-lifestyle-editors-impl.js').includes("openLifestyleForm('diet')") &&
+  read('js/context-lifestyle-form-view.js').includes('runWithContextEditorStylesheet(() =>') &&
+  read('js/context-cards.js').includes('runWithContextEditorStylesheet(() => openCardTipsModal(cardKey, ticket, owner))'));
 assert('context editor split preserves shared context controls eagerly',
   read('css/context-profile.css').includes('.ctx-btn-option') &&
   read('css/context-profile.css').includes('.ctx-tag') &&
-  read('css/context-profile.css').includes('.context-info-icon') &&
-  read('css/context-profile.css').includes('.ctx-notes-textarea'));
+  read('js/components/ContextCardCatalog.svelte').includes('context-info-icon {CONTEXT_INFO}') &&
+  read('js/components/ContextNotes.svelte').includes('ctx-notes-textarea gb:context-catalog:'));
 assert('SW APP_SHELL includes context editor CSS bundle', swAuditSrc.includes("'/css/context-editor.css'"));
 const dnaRuntimeAuditSrc = read('js/dna-runtime.js');
 assert('index defers genetics CSS behind its ordered lazy-load anchor',
@@ -282,7 +302,7 @@ const clientListSrc = read('js/client-list-impl.js');
 const appUiShellModulesSrc = read('js/app-ui-shell-modules.js');
 const wearablesRuntimeAuditSrc = read('js/wearables-runtime.js');
 const cycleRuntimeAuditSrc = read('js/cycle-runtime.js');
-const cycleViewsAuditSrc = read('js/views.js');
+const cycleViewsAuditSrc = viewsRuntimeAuditSrc;
 const themeAuditSrc = read('js/theme.js');
 const extraThemeBootstrapSrc = read('js/extra-theme-bootstrap.js');
 const extraThemesAuditSrc = read('themes-extra.css');
@@ -335,7 +355,8 @@ assert('female Dashboard and Body routes wait for Cycle presentation',
   cycleViewsAuditSrc.includes('needsCyclePresentation') &&
   cycleViewsAuditSrc.includes('loadCycleStylesheet()') &&
   cycleViewsAuditSrc.includes('dashboard: showDashboardRoute') &&
-  cycleViewsAuditSrc.includes('body: showBodyRoute'));
+  cycleViewsAuditSrc.includes('body: showBodyRoute') &&
+  ['navigate', 'showDashboard', 'showBodyLens'].every(name => viewsRuntimePublicNames.has(name)));
 assert('SW APP_SHELL includes cycle CSS bundle', swAuditSrc.includes("'/css/cycle.css'"));
 assert('index conditionally loads optional theme presentation',
   !indexSrc.includes('<link rel="stylesheet" href="themes-extra.css">') &&
@@ -523,11 +544,19 @@ console.log('3. XSS Prevention');
 
 const viewsSrc = read('js/views.js');
 read('js/dashboard-page-view.js');
-const lensPageShellSrc = read('js/lens-page-shell.js');
+const lensPageShellSrc = read('js/lens-page-shell-core.js');
 read('js/lens.js');
 const lensActionsSrc = read('js/lens-actions.js');
 const lensKnowledgeBaseUiSrc = read('js/lens-knowledge-base-ui.js');
 const lensPagesSrc = read('js/lens-pages.js');
+const lensContentViewSrc = read('js/components/LensPageContent.svelte');
+const lensDataPageSrc = read('js/components/LensDataPage.svelte');
+const lensDataWidgetBodySrc = read('js/components/LensDataWidgetBody.svelte');
+const lensActionButtonsSrc = read('js/components/LensActionButtons.svelte');
+const lensBodySourcesSrc = read('js/components/BodySources.svelte');
+const lensContentProjectorSrc = read('js/lens-content-presentation.ts');
+// Cover authored quoted/braced handlers and legacy directive modifiers/forwarding.
+const authoredEventAttributePattern = /(?:\s|\{)(?:on[a-z]+|on:[a-z]+(?:\|[a-z]+)*)(?:\s*=|\s*}|[\s/>])/;
 const dnaActionsSrc = read('js/dna-actions.js');
 const categoryPageViewSrc = read('js/category-page-view.js');
 const categoryViewRenderersSrc = read('js/category-view-renderers.js');
@@ -548,22 +577,46 @@ const contextEditorCssAuditSrc = read('css/context-editor.css');
 const dnaSrc = read('js/dna.js');
 const dnaUiSrc = read('js/dna-ui.js');
 const dnaSurfaceSrc = `${dnaSrc}\n${dnaUiSrc}`;
-assert('Trend alert name escaped', dashboardLabRenderersSrc.includes('escapeHTML(alert.name)'));
-assert('Trend alert category escaped', dashboardLabRenderersSrc.includes('escapeHTML(alert.category)'));
-assert('Flagged marker name escaped', /escapeHTML\(f\.name\)/.test(dashboardLabRenderersSrc));
-assert('Category label escaped in header', categoryPageViewSrc.includes('escapeHTML(cat.label)'));
-assert('marker.unit escaped in detail modal', /escapeHTML\(marker\.unit\)/.test(markerDetailSrc));
+const migratedAudit = await auditMigrationWitnesses();
+const dashboardAlertsViewSrc = read('js/components/DashboardAlerts.svelte');
+const categoryPageChromeSrc = read('js/components/CategoryPageChrome.svelte');
+const markerDetailChromeSrc = read('js/components/MarkerDetailChrome.svelte');
+const markerDetailHistorySrc = read('js/components/MarkerDetailHistory.svelte');
+const correlationOptionsSrc = read('js/components/CorrelationsSelectionOptions.svelte');
+assert('Trend alert name escaped',
+  dashboardLabRenderersSrc.includes('summaryText(alert.name)')
+    && dashboardAlertsViewSrc.includes('{alert.name}') && migratedAudit.contracts.trendName);
+assert('Trend alert category escaped',
+  dashboardLabRenderersSrc.includes('summaryText(alert.category)')
+    && dashboardAlertsViewSrc.includes('{alert.category}') && migratedAudit.contracts.trendCategory);
+assert('Flagged marker name escaped',
+  dashboardLabRenderersSrc.includes('summaryText(flag.name)')
+    && dashboardAlertsViewSrc.includes('{flag.name}') && migratedAudit.contracts.flaggedName);
+assert('Category label escaped in header',
+  categoryPageViewSrc.includes('categoryLiteral(cat.label)')
+    && categoryPageChromeSrc.includes('{view.label}') && migratedAudit.contracts.categoryLabel);
+assert('marker.unit escaped in detail modal',
+  markerDetailImplSrc.includes('captureMarkerDetailText(marker.unit)')
+    && markerDetailChromeSrc.includes('<div class="modal-unit">{node.unit}</div>')
+    && migratedAudit.contracts.markerUnit);
 assert('marker history controls keep their styling in the lazy marker-detail bundle',
-  markerDetailSrc.includes('class="marker-history-show-more"') &&
-  !markerDetailSrc.includes('light-sessions-show-more marker-history-show-more') &&
+  markerDetailHistorySrc.includes('class="marker-history-show-more"') &&
+  !markerDetailHistorySrc.includes('light-sessions-show-more marker-history-show-more') &&
   markerDetailCssAuditSrc.includes('.marker-detail-modal .marker-history-show-more:hover'));
-assert('Correlation option names escaped', /escapeHTML\(marker\.name\)/.test(compareCorrelationsSrc));
+assert('Correlation option names escaped',
+  compareCorrelationsSrc.includes('projectCorrelationMarkerOption(selected, fullKey, marker, cat, count)')
+    && correlationOptionsSrc.includes('data-name={option.name}')
+    && correlationOptionsSrc.includes('{option.label}') && migratedAudit.contracts.correlationName);
 assert('Light channel next-move HTML does not render dynamic device names',
-  lightChannelViewSrc.includes('const showDev = !!matchingDevice;') &&
+  read('js/components/LightChannelDetail.svelte').includes('view.takeaway.matchingDevice') &&
+    read('js/light-channel-presentation.ts').includes('matchingDevice: input.matchingDevice') &&
     !lightChannelViewSrc.includes('matchingDevice.brand') &&
     !lightChannelViewSrc.includes('matchingDevice.model'));
 assert('Genome genetics refs keep shared unscoped CSS',
-  dnaUiSrc.includes('class="detail-genetics-ref"') && /\.detail-genetics-ref\s*\{/.test(geneticsCssAuditSrc));
+  dnaUiSrc.includes('renderGeneticsSectionView(')
+    && read('js/genetics-section-presentation.js').includes("'./components/GeneticsSection.svelte.html.js'")
+    && read('js/components/GeneticsSection.svelte').includes('class="detail-genetics-ref"')
+    && /\.detail-genetics-ref\s*\{/.test(geneticsCssAuditSrc));
 assert('Marker detail bundle does not own shared genetics refs',
   !/\.marker-detail-modal\s+\.detail-genetics(?:-ref)?/.test(markerDetailCssAuditSrc));
 
@@ -603,9 +656,13 @@ assert('switchView guards on safeMarkerId(categoryKey) at function entry',
 assert('showDetailModal guards on safeMarkerId(id) at function entry',
   /export function showDetailModal[^{]*\{[\s\S]{0,400}if\s*\(\s*!safeMarkerId\(id\)\s*\)\s*return/.test(markerDetailSrc));
 assert('renderChartCard returns "" on unsafe id (chokepoint for dashboard + category)',
-  /export function renderChartCard[^{]*\{[\s\S]{0,400}if\s*\(\s*!safeMarkerId\(id\)\s*\)\s*return\s*''/.test(categoryViewRenderersSrc));
+  /export function projectCategoryChartCard[^{]*\{[\s\S]{0,400}if\s*\(\s*!safeMarkerId\(id\)\s*\)\s*return\s*null/.test(categoryViewRenderersSrc)
+    && /renderCategoryChartCard\(projectCategoryChartCard\(id,\s*marker,\s*dateLabels,\s*chartDates\)\)/.test(categoryViewRenderersSrc)
+    && migratedAudit.chartGuard);
 assert('renderFattyAcidsView returns "" on unsafe categoryKey',
-  /export function renderFattyAcidsView[^{]*\{[\s\S]{0,400}if\s*\(\s*!safeMarkerId\(categoryKey\)\s*\)\s*return\s*''/.test(categoryViewRenderersSrc));
+  /export function projectCategoryFattyAcids[^{]*\{[\s\S]{0,400}if\s*\(\s*!safeMarkerId\(categoryKey\)\s*\)\s*return\s*null/.test(categoryViewRenderersSrc)
+    && /renderCategoryFatty\(projectCategoryFattyAcids\(cat,\s*categoryKey\)\)/.test(categoryViewRenderersSrc)
+    && migratedAudit.fattyGuard);
 assert('showCategory chart-cards loop skips legacy customMarkers with unsafe keys',
   /for\s*\(\s*const\s*\[\s*key\s*,\s*marker\s*\]\s+of\s+withData\s*\)\s*\{\s*[\s\S]{0,200}if\s*\(\s*!safeMarkerId\(key\)\s*\)\s*continue/.test(categoryPageViewSrc));
 assert('category-customization.js owns rename/icon helpers',
@@ -619,7 +676,8 @@ assert('marker rename rejects whitespace-only labels after trim',
   /export async function renameMarker[^{]*\{[\s\S]{0,700}const trimmed = newName\.trim\(\);\s*if\s*\(\s*!trimmed\s*\)\s*return/.test(categoryCustomizationSrc));
 assert('category customization refreshes the active view with fresh data',
   /function _refreshActiveView[^{]*\{[\s\S]{0,300}const data = getActiveData\(\);[\s\S]{0,200}const buildSidebar = _buildSidebar \|\| getFallbackBuildSidebar\(\);[\s\S]{0,200}buildSidebar\?\.\(data\);[\s\S]{0,200}_navigate\(opts\.forceRoute \|\| state\.currentView \|\| fallbackRoute, data\)/.test(categoryCustomizationSrc) &&
-  viewsSrc.includes('configureCategoryCustomization({ navigate, buildSidebar });'));
+  viewsRuntimeAuditSrc.includes('configureCategoryCustomization({ navigate, buildSidebar });') &&
+  viewsRuntimePublicNames.has('navigate'));
 assert('marker rename refreshes the backing view before reopening modal',
   /export async function renameMarker[^{]*\{[\s\S]{0,900}await saveImportedData\(\);\s*_refreshActiveView\(catKey\);\s*showDetailModal\(id\)/.test(categoryCustomizationSrc));
 
@@ -633,15 +691,14 @@ assert('marker rename refreshes the backing view before reopening modal',
 console.log('3c. exhaustive HTML sink review ratchet');
 
 const contextCardEditorSrc = read('js/context-card-editor-ui.js');
-const contextCardLifestyleSrc = [
-  read('js/context-card-lifestyle-editors-impl.js'),
-  read('js/context-card-lifestyle-special-editors.js'),
-].join('\n');
+const contextCardLifestyleSrc = [read('js/context-card-lifestyle-editors-impl.js'), read('js/context-card-lifestyle-special-editors.js')].join('\n');
+const contextLightMirrorSrc = read('js/components/ContextLightSetupMirror.svelte');
 assert('context Light setup mirror owns its deferred editor styling',
-  contextCardLifestyleSrc.includes('ctx-lightsetup-ott-badge') &&
-  !contextCardLifestyleSrc.includes('class="light-ott-badge') &&
-  contextEditorCssAuditSrc.includes('.ctx-lightsetup-ott-badge') &&
-  contextEditorCssAuditSrc.includes('.ctx-lightsetup-ott-tier-4'));
+  contextLightMirrorSrc.includes('data-context-light-setup') &&
+  contextLightMirrorSrc.includes('data-light-burden-tier') &&
+  contextLightMirrorSrc.includes('gb:context-form:border-danger') &&
+  read('css/context-editor.tailwind.css').includes('@source "../js/components/ContextLightSetupMirror.svelte"') &&
+  !contextEditorCssAuditSrc.includes('.ctx-lightsetup-ott-badge'));
 assert('Context select field escapes label text',
   /function renderSelectField[\s\S]{0,1800}<label class="ctx-field-label"[^>]*>\$\{escapeHTML\(label\)\}<\/label>/.test(contextCardEditorSrc));
 assert('Context tags field escapes label text',
@@ -650,9 +707,11 @@ assert('Context editor controls use delegated data actions',
   contextCardEditorSrc.includes('initContextEditorDelegates')
     && contextCardEditorSrc.includes('contextEditorActionAttrs')
     && !/\son(?:click|keydown|input|change)\s*=/.test(contextCardEditorSrc));
-assert('Lifestyle context actions use delegated handlers',
+assert('Lifestyle context actions use delegated badge handlers and authored dialog callbacks',
   contextCardLifestyleSrc.includes('initLifestyleContextDelegates')
-    && contextCardLifestyleSrc.includes('lifestyleActionAttrs')
+    && read('js/components/ContextFoodContaminantsBadge.svelte').includes('data-lifestyle-action="show-diet-contaminants"')
+    && read('js/components/ContextFoodContaminants.svelte').includes('if (current()) discuss()')
+    && read('js/components/ContextFoodContaminants.svelte').includes('if (current()) close()')
     && !/\son(?:click|keydown)\s*=/.test(contextCardLifestyleSrc));
 assert('Lens settings controls use delegated handlers',
   lensKnowledgeBaseUiSrc.includes("from './lens-actions.js'")
@@ -661,16 +720,50 @@ assert('Lens settings controls use delegated handlers',
     && lensActionsSrc.includes('export function lensActionAttrs')
     && !/\son(?:click|change|input)\s*=/.test(lensKnowledgeBaseUiSrc));
 assert('Lens page controls use delegated shell actions',
-  lensPagesSrc.includes('lensPageActionAttrs')
-    && lensPageShellSrc.includes('open-wearables-settings')
-    && lensPageShellSrc.includes('open-privacy-settings')
-    && !/\son(?:click|change|input)\s*=/.test(lensPagesSrc));
+  lensPagesSrc.includes("from './components/LensDataPage.svelte.html.js'")
+    && lensPagesSrc.includes("projectLensActions('body')")
+    && lensPagesSrc.includes("projectLensActions('tips',")
+    && lensDataPageSrc.includes('<LensActionButtons view={view.actions}/>')
+    && /<BodySources\s+view=\{content.view\}/.test(lensDataWidgetBodySrc)
+    && /<button\b[^>]*type="button"[^>]*data-lens-page-action=\{button.action\}/s.test(lensActionButtonsSrc)
+    && /<button\b[^>]*data-lens-page-action="open-wearables-settings"/s.test(lensBodySourcesSrc)
+    && lensContentProjectorSrc.includes("action: 'open-wearables-settings'")
+    && lensContentProjectorSrc.includes("action: 'open-privacy-settings'")
+    && lensPageShellSrc.includes("callLensPageRuntime('openSettingsModal', 'wearables')")
+    && lensPageShellSrc.includes("callLensPageRuntime('openSettingsModal', 'privacy')")
+    && lensPageShellSrc.includes("document.addEventListener('click', handleLensPageShellClick)")
+    && !/\son(?:click|change|input)\s*=/.test(lensPagesSrc)
+    && [lensContentViewSrc, lensDataPageSrc, lensDataWidgetBodySrc, lensActionButtonsSrc, lensBodySourcesSrc].every(source => !authoredEventAttributePattern.test(source)));
+// Parse only authored attributes: prose such as "one SNP" is not an event handler.
+function hasAuthoredEventAttributes(source: string): boolean {
+  function visit(value: unknown): boolean {
+    if (!value || typeof value !== 'object') return false;
+    if ('type' in value) {
+      if (value.type === 'OnDirective' || value.type === 'SpreadAttribute') return true;
+      if (value.type === 'Attribute' && 'name' in value && typeof value.name === 'string'
+        && /^on[a-z]+$/.test(value.name)) return true;
+    }
+    return Object.values(value).some(visit);
+  }
+  return visit(parseSvelte(source, {modern: true}).fragment);
+}
+assert('authored event audit accepts ordinary prose', !hasAuthoredEventAttributes('<p>Use one SNP, only once.</p>'));
+for (const [label, markup] of [
+  ['quoted event', '<button onclick="handler()">Save</button>'],
+  ['braced event', '<button onclick={handler}>Save</button>'],
+  ['shorthand event', '<button {onclick}>Save</button>'],
+  ['legacy directive', '<button on:click|preventDefault={handler}>Save</button>'],
+  ['forwarded event', '<button on:click>Save</button>'],
+  ['unknown spread', '<button {...props}>Save</button>'],
+]) assert('authored event audit rejects ' + label, hasAuthoredEventAttributes(markup!));
+const manualSnpViewSrc = read('js/components/ManualSnpDialog.svelte');
 assert('DNA controls use delegated actions',
   dnaSurfaceSrc.includes("from './dna-actions.js'")
     && dnaActionsSrc.includes('function handleDnaActionClick')
     && dnaActionsSrc.includes('function handleDnaActionKeydown')
     && dnaActionsSrc.includes('export function dnaActionAttrs')
-    && !/\son(?:click|keydown|change|input)\s*=/.test(dnaSurfaceSrc));
+    && !/\son(?:click|keydown|change|input)\s*=/.test(dnaSurfaceSrc)
+    && !hasAuthoredEventAttributes(manualSnpViewSrc));
 
 const _domSinkAuditSource = read('scripts/dom-sink-audit.mjs');
 const _domSinkPolicy = JSON.parse(read('scripts/dom-sink-policy.json'));
@@ -682,7 +775,7 @@ assert(
 );
 assert(
   `${_domSinkPolicy.sinkCount} HTML-writing sinks retain committed reviewed fingerprints`,
-  _domSinkPolicy.sinkCount > 400
+  auditDomSinks(_domSinkPolicy).ok
     && _domSinkAuditSource.includes('export function auditDomSinks')
     && _domSinkAuditSource.includes('expected.count !== actual.count || expected.digest !== actual.digest'),
 );
@@ -704,8 +797,24 @@ console.log('5. CSS Variable Fixes');
 const cssSrc = readCssBundle();
 const lightSunCss = read('css/light-sun.css');
 const lightChannelsCss = read('css/light-channels.css');
-const lightDevicesCss = read('css/light-devices.css');
+const lightPageComponent = read('js/components/LightPagePresentation.svelte');
+const lightActionsComponent = read('js/components/LightSessionActions.svelte');
+const lightLiveReadoutsComponent = read('js/components/LightLiveReadouts.svelte');
+const lightActiveProjection = read('js/light-active-session-presentation.ts');
+const lightSetupClasses = read('js/light-setup-classes.ts');
+const lightSetupRecipeCatalog = read('scripts/style-recipes/light-setup.mts');
+const lightOnboardingClasses = read('js/light-onboarding-ai-classes.ts');
+const lightRowComponent = read('js/components/LightSessionRow.svelte');
+const lightDetailComponent = read('js/components/LightSessionDetail.svelte');
+const lightMethodsComponent = read('js/components/LightMethods.svelte');
+const channelPillClasses = read('js/light-channel-pill-classes.ts');
+const channelDetailClasses = read('js/light-channel-classes.ts');
+const channelPillsComponent = read('js/components/LightChannelPills.svelte');
+const channelDetailComponent = read('js/components/LightChannelDetail.svelte');
+const channelChartComponent = read('js/components/LightChannelChart.svelte');
 const lightConditionsCss = read('css/light-conditions-now.css');
+const lightConditionsClasses = read('js/light-conditions-classes.ts');
+const lightConditionsTailwind = read('css/light-conditions-now.tailwind.css');
 const lightSetupCss = read('css/light-setup.css');
 read('js/sun.js');
 const sunActiveSessionSrc = read('js/sun-active-session.js');
@@ -718,7 +827,7 @@ assert('No var(--card-bg) reference', !cssSrc.includes('var(--card-bg)'));
 assert('No var(--text) without suffix', !/(var\(--text\))(?!-)/.test(cssSrc));
 assert('Dead overview-grid CSS removed', !cssSrc.includes('.overview-grid'));
 assert('Dead overview-card CSS removed', !cssSrc.includes('.overview-card'));
-assert('Light page uses scoped layout wrapper', lightPageViewSrc.includes('class="light-page"'));
+assert('Light page uses scoped layout wrapper', lightPageComponent.includes('class="light-page ') && lightPageComponent.includes('data-light-page-presentation'));
 assert('Modal lifecycle helpers live outside sun-active-session.js',
   /export function wireBackdropClose/.test(modalLifecycleSrc)
     && /export function trapModalFocus/.test(modalLifecycleSrc)
@@ -728,8 +837,8 @@ assert('Marker analysis helpers live outside data.js',
     && /export function detectTrendAlerts\(/.test(markerAnalysisSrc)
     && !/export function getEffectiveRange\(|export function detectTrendAlerts\(/.test(dataSrc));
 const dashboardWidgetsBlock = (dashboardWidgetsSrc.match(/const dashboardWidgets = \[([\s\S]*?)\];/) || [null, ''])[1];
-const lightSessionLogStart = lightPageViewSrc.indexOf('function renderLightSessionLogActions');
-const lightSessionLogEnd = lightPageViewSrc.indexOf('function renderLightWidgetPrompt', lightSessionLogStart);
+const lightSessionLogStart = lightPageViewSrc.indexOf('function getLightSessionLogActionsView');
+const lightSessionLogEnd = lightPageViewSrc.indexOf('function renderLightSessionLogActions', lightSessionLogStart);
 const lightSessionLogBlock = lightSessionLogStart >= 0 && lightSessionLogEnd > lightSessionLogStart
   ? lightPageViewSrc.slice(lightSessionLogStart, lightSessionLogEnd)
   : '';
@@ -743,7 +852,8 @@ assert('Dashboard focus card does not truncate AI output',
   !/-webkit-line-clamp|line-clamp|overflow\s*:\s*hidden/.test(dashboardFocusCardTextBlock || ''),
   'Dashboard and Insight should show the same full focus-card text');
 assert('Light page renders as a reorderable page widget route',
-  lightPageViewSrc.includes("renderLensPageWidgets('light', widgets)") &&
+  lightPageViewSrc.includes("getLensContentGrid('light', widgets)") &&
+  read('js/components/LightPageWidgets.svelte').includes('data-lens-route={view.route}') &&
   lightPageViewSrc.includes("id: 'light-conditions-now'") &&
   lightPageViewSrc.includes("id: 'light-session-log'") &&
   lightPageViewSrc.includes("id: 'light-setup'") &&
@@ -755,10 +865,12 @@ assert('Light page renders as a reorderable page widget route',
   !lightPageViewSrc.includes("id: 'light-workbench'") &&
   !lightPageViewSrc.includes("id: 'light-now-log'"));
 assert('Light page uses full workspace width',
-  /\.light-page\s*\{[\s\S]*width:\s*100%;[\s\S]*max-width:\s*none;/.test(cssSrc));
+  lightPageComponent.includes('gb:light-page:w-full') && lightPageComponent.includes('gb:light-page:max-w-none'));
 assert('Light page grid uses zero-min track for mobile',
-  /\.light-page\s*\{[\s\S]*grid-template-columns:\s*minmax\(0,\s*1fr\);[\s\S]*min-width:\s*0;/.test(cssSrc) &&
-  /\.light-page > \*\s*\{[\s\S]*min-width:\s*0;[\s\S]*max-width:\s*100%;/.test(cssSrc));
+  lightPageComponent.includes('gb:light-page:grid-cols-[minmax(0,1fr)]') &&
+  lightPageComponent.includes('gb:light-page:min-w-0') &&
+  lightPageComponent.includes('gb:light-page:[&>*]:min-w-0') &&
+  lightPageComponent.includes('gb:light-page:[&>*]:max-w-full'));
 assert('Light page splits conditions, setup, and logging into separate widgets',
   !lightPageViewSrc.includes('class="light-top-grid"') &&
   lightPageViewSrc.indexOf("id: 'light-conditions-now'") < lightPageViewSrc.indexOf("id: 'light-setup'") &&
@@ -806,7 +918,10 @@ assert('Light page dashboard toggles are explicitly scoped',
   /id: 'light-methods'[\s\S]*?dashboardId: ''/.test(lightPageViewSrc) &&
   lensPageShellSrc.includes("Object.prototype.hasOwnProperty.call(opts, 'dashboardId')"));
 assert('Light Conditions Now chrome is owned by split CSS',
-  /\.dashboard-widget\[data-widget-id="light-conditions-now"\] \.light-conditions-now-wrap\s*\{[\s\S]*background:\s*transparent;[\s\S]*box-shadow:\s*none;/.test(lightConditionsCss) &&
+  lightConditionsClasses.includes("[.dashboard-widget[data-widget-id='light-conditions-now']_&.light-conditions-now-wrap]:bg-transparent") &&
+  lightConditionsClasses.includes("[.dashboard-widget[data-widget-id='light-conditions-now']_&.light-conditions-now-wrap]:[box-shadow:none]") &&
+  lightConditionsCss.includes('data-light-conditions-presentation') &&
+  lightConditionsTailwind.includes('@source "../js/light-conditions-classes.ts"') &&
   !lightSunCss.includes('.dashboard-widget[data-widget-id="light-conditions-now"] .light-conditions-now-wrap'));
 assert('Light session widget keeps deframed operation surface',
   /\.dashboard-widget\[data-widget-id="light-session-log"\] \.light-quicklog-row\s*\{[\s\S]*background:\s*transparent;[\s\S]*box-shadow:\s*none;/.test(lightSunCss));
@@ -814,40 +929,59 @@ assert('Live Light widget uses a shared full-width renderer with wrapping estima
   /id: 'light-live-session'[\s\S]*?size: 'full'[\s\S]*?render: renderers\.renderDashboardLightLiveSessionWidget/.test(dashboardWidgetsBlock) &&
   lightPageViewSrc.includes('export function renderLightLiveSession') &&
   dashboardRenderersSrc.includes('return renderLightLiveSession({ includeEmptyState: true });') &&
-  /\.sun-session-live-readouts\s*\{[\s\S]*flex-wrap:\s*wrap;/.test(lightSunCss));
+  lightLiveReadoutsComponent.includes('sun-session-live-readouts gb:light-active:flex gb:light-active:flex-wrap'));
 assert('Active sun card keeps vitamin D visible outside the fixed header',
-  sunSessionUiSrc.includes('class="sun-session-live-readouts"') &&
-  sunSessionUiSrc.includes('☀ Vitamin D estimate') &&
-  sunActiveSessionSrc.includes("else if (live)") &&
-  sunActiveSessionSrc.includes('Number.isFinite(iu) && iu > 0') &&
-  !sunActiveSessionSrc.includes('if (iu >= 50)'));
+  lightLiveReadoutsComponent.includes('sun-session-live-readouts') &&
+  lightLiveReadoutsComponent.includes('☀ Vitamin D estimate') &&
+  sunActiveSessionSrc.includes("kind: 'live-readouts', readouts: liveSessionReadouts(") &&
+  lightActiveProjection.includes('Number.isFinite(iu) && iu > 0') &&
+  !lightActiveProjection.includes('iu >= 50') && !sunActiveSessionSrc.includes('if (iu >= 50)'));
 assert('Light setup chrome is owned by split CSS',
   /\.light-page \.dashboard-widget\[data-widget-id="light-setup"\] \.light-setup-card,[\s\S]*\.light-page \.dashboard-widget\[data-widget-id="light-setup"\] \.light-setup-summary\s*\{[\s\S]*background:\s*transparent;[\s\S]*box-shadow:\s*none;/.test(lightSetupCss) &&
   !/\.light-setup-card\s*\{/.test(lightSunCss) &&
   !/\.light-setup-focus-modal\s*\{/.test(lightSunCss));
-assert('Conditions Now CSS owns tooltip and responsive grid styles',
-  /\.conditions-now-grid\s*\{[\s\S]*grid-template-columns:\s*2fr 1fr 1fr 1fr;/.test(lightConditionsCss) &&
-  /\.app-tooltip\s*\{[\s\S]*position:\s*fixed/.test(lightConditionsCss) &&
+assert('Conditions Now CSS owns its carriers and responsive grid styles while app shell owns the shared tooltip',
+  lightConditionsClasses.includes('gb:conditions:grid-cols-[2fr_1fr_1fr_1fr]') &&
+  lightConditionsCss.includes('grid-template-columns:2fr 1fr 1fr 1fr') &&
+  lightConditionsClasses.includes('gb:conditions:conditions-narrow:grid-cols-[1fr]') &&
+  /\.app-tooltip\s*\{[\s\S]*position:\s*fixed/.test(appShellCssAuditSrc) &&
+  appShellCssAuditSrc.includes('[data-app-tooltip] {') &&
+  appShellCssAuditSrc.includes('button[data-app-tooltip] {') &&
+  appShellCssAuditSrc.includes('[aria-describedby="app-tooltip"]:focus-visible') &&
+  /\.app-tooltip\.is-visible/.test(appShellCssAuditSrc) &&
+  /@media \(prefers-reduced-motion:\s*reduce\)\s*\{\s*\.app-tooltip/.test(appShellCssAuditSrc) &&
+  lightConditionsCss.includes('.light-conditions-now-actions [data-conditions-tooltip]') &&
+  !lightConditionsCss.includes('[data-app-tooltip]') &&
+  !/\.app-tooltip\s*\{/.test(lightConditionsCss) &&
   !/\.conditions-now-grid\s*\{/.test(lightSunCss) &&
   !/\.app-tooltip\s*\{/.test(lightSunCss));
 assert('Light setup CSS owns onboarding editor and setup AI styles',
-  /\.light-setup-card\s*\{[\s\S]*border-top:\s*3px solid var\(--accent\)/.test(lightSetupCss) &&
-  /\.light-setup-ott-questions\s*\{[\s\S]*grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\)/.test(lightSetupCss) &&
-  /\.light-setup-ai-block\s*\{[\s\S]*padding:\s*0;[\s\S]*background:\s*transparent;[\s\S]*border:\s*0;/.test(lightSetupCss));
-assert('Light channels CSS owns pill, drill-down, and channel AI styles',
-  /\.light-channels-section \.light-pill\s*\{[\s\S]*grid-template-areas:[\s\S]*"icon label count"[\s\S]*"icon spark spark";/.test(lightChannelsCss) &&
-  /\.light-channel-detail\s*\{[\s\S]*--channel-accent:\s*var\(--accent\);[\s\S]*border:\s*1px solid color-mix\(in srgb, var\(--channel-accent\)/.test(lightChannelsCss) &&
-  /\.light-channel-mix-ai\s*\{[\s\S]*margin:\s*12px 0;/.test(lightChannelsCss) &&
-  !/\.light-channels-section \.light-pill\s*\{/.test(lightSunCss) &&
-  !/\.light-channel-detail\s*\{/.test(lightSunCss) &&
-  !/\.light-channel-mix-ai\s*\{/.test(lightSunCss));
+  lightSetupRecipeCatalog.includes('[border-top:3px_solid_var(--accent)]') &&
+  lightSetupClasses.includes('"light-setup-ott-questions"') &&
+  lightSetupRecipeCatalog.includes('[grid-template-columns:repeat(2,_minmax(0,_1fr))]') &&
+  lightOnboardingClasses.includes('gb:onboarding-ai:p-0') &&
+  lightOnboardingClasses.includes('gb:onboarding-ai:bg-transparent') &&
+  lightOnboardingClasses.includes('gb:onboarding-ai:[border:0]'));
+assert('Light channel presentation is owned by authored components and scoped Tailwind',
+  channelPillsComponent.includes('LightChannelSparkline') &&
+  channelDetailComponent.includes('LightChannelChart') &&
+  channelDetailComponent.includes('LightChannelResearch') &&
+  channelPillClasses.includes('gb:channel-pill:') && channelDetailClasses.includes('gb:channel-detail:') &&
+  !/\.light-pill\s*\{/.test(lightChannelsCss) &&
+  !/\.light-channel-detail\s*\{/.test(lightChannelsCss) &&
+  !/\.light-channel-mix-ai\s*\{/.test(lightChannelsCss) &&
+  !/\.light-channels-section \.light-pill\s*\{/.test(read('css/light-sun.base.css')));
 assert('Light devices CSS owns device cards, picker, and distance controls',
-  /\.light-devices-section\s*\{[\s\S]*margin-top:\s*24px/.test(lightDevicesCss) &&
-  /\.light-device-card\s*\{[\s\S]*display:\s*flex;[\s\S]*flex-direction:\s*column/.test(lightDevicesCss) &&
-  /\.dev-distance-row\s*\{[\s\S]*display:\s*flex/.test(lightDevicesCss) &&
-  /\.light-device-picker-row\s*\{[\s\S]*cursor:\s*pointer/.test(lightDevicesCss) &&
+  deviceLibraryClasses('light-devices-section').includes('[margin-top:24px]') &&
+  deviceLibraryClasses('light-device-card').includes('[display:flex]') &&
+  deviceLibraryClasses('light-device-card').includes('[flex-direction:column]') &&
+  read('js/components/LightDeviceLibrary.svelte').includes('light-device-card') &&
+  deviceSetupClasses('dev-distance-row').includes('[display:flex]') &&
+  read('js/components/LightDeviceSpecFields.svelte').includes("c('dev-distance-row')") &&
+  read('js/components/LightDevicePicker.svelte').includes('light-device-picker-row') &&
+  deviceLibraryClasses('light-device-picker-row').includes('[cursor:pointer]') &&
   !/\.light-device-card\s*\{/.test(lightSunCss) &&
-  !/\.dev-distance-row\s*\{/.test(lightSunCss) &&
+  !/\.dev-distance-row\s*\{/.test(read('css/light-sun.base.css')) &&
   !/\.light-device-picker-row\s*\{/.test(lightSunCss));
 assert('Light page workbench is split into page-only redesigned widgets',
   lightPageViewSrc.includes("id: 'light-devices'") &&
@@ -855,37 +989,43 @@ assert('Light page workbench is split into page-only redesigned widgets',
   lightPageViewSrc.includes("id: 'light-tools'") &&
   lightPageViewSrc.includes("id: 'light-methods'") &&
   lightPageViewSrc.includes('renderLightWidgetPrompt') &&
-  cssSrc.includes('.light-widget-prompt') &&
-  cssSrc.includes('.light-setup-fields-grid') &&
-  lightSessionLogBlock.includes('dashboard-action-btn') &&
-  !lightSessionLogBlock.includes('import-btn') &&
+  read('js/components/LightWidgetPrompt.svelte').includes('light-widget-prompt gb:light-page:') &&
+  lightSetupClasses.includes('light-setup-fields-grid') &&
+  lightSessionLogBlock.includes("kind: 'actions'") && lightActionsComponent.includes('data-light-page-action={action.action}') && lightActionsComponent.includes('gb:light-page:bg-accent') &&
+  !lightSessionLogBlock.includes('import-btn') && !lightActionsComponent.includes('import-btn') &&
   !lightPageViewSrc.includes('function renderCollapsedSubsection'));
 assert('Light conditions grid stays compact on phones',
-  /@media \(max-width:\s*600px\)\s*\{[\s\S]*\.conditions-now-grid\s*\{[\s\S]*grid-template-columns:\s*repeat\(3,\s*minmax\(0,\s*1fr\)\);/.test(cssSrc) &&
-  /\.conditions-now-cell-hero\s*\{[\s\S]*grid-column:\s*1\s*\/\s*-1;/.test(cssSrc));
+  lightConditionsClasses.includes('gb:conditions:max-[600px]:grid-cols-[repeat(3,minmax(0,1fr))]') &&
+  lightConditionsClasses.includes('gb:conditions:max-[600px]:col-[1/-1]') &&
+  lightConditionsClasses.includes('gb:conditions:conditions-narrow:grid-cols-[1fr]'));
 assert('Light page sun data source avoids inline card styling',
-  lightPageViewSrc.includes('class="light-data-source-details"') &&
-  !lightPageViewSrc.includes('light-data-source-details" style='));
+  lightMethodsComponent.includes('class="light-data-source-details gb:light-page:') &&
+  !/<details[^>]*class="light-data-source-details[^>]*style=/.test(lightMethodsComponent));
 assert('Light channel pills use redesigned channel tile treatment',
-  /\.light-channels-section \.light-pills-row\s*\{[\s\S]*display:\s*grid;[\s\S]*grid-template-columns:\s*repeat\(auto-fit,\s*minmax\(min\(174px,\s*100%\),\s*1fr\)\);/.test(cssSrc) &&
-  /\.light-channels-section \.light-pill\s*\{[\s\S]*grid-template-areas:[\s\S]*"icon label count"[\s\S]*"icon spark spark";[\s\S]*box-shadow:\s*inset 3px 0 0/.test(cssSrc) &&
-  cssSrc.includes('.light-channels-section .light-pill[data-channel="violet_eye"] { --channel-accent: var(--purple); }'));
+  channelPillClasses.includes('[grid-template-columns:repeat(auto-fit,_minmax(min(174px,_100%),_1fr))]') &&
+  channelPillClasses.includes("[grid-template-areas:'icon_label_count'_'icon_spark_spark']") &&
+  channelPillClasses.includes('[box-shadow:inset_3px_0_0') &&
+  channelPillClasses.includes('violet_eye:') && channelPillClasses.includes('[--channel-accent:var(--purple)]'));
 assert('Light channel detail charts inherit activated channel accent',
-  lightChannelViewSrc.includes('class="light-channel-detail" data-channel="${escapeAttr(channelKey)}"') &&
-  lightChannelViewSrc.includes('fill="var(--channel-accent, var(--accent))"') &&
-  /\.light-channel-detail\s*\{[\s\S]*--channel-accent:\s*var\(--accent\);[\s\S]*border:\s*1px solid color-mix\(in srgb, var\(--channel-accent\)/.test(cssSrc) &&
-  cssSrc.includes('.light-channel-detail[data-channel="violet_eye"] { --channel-accent: var(--purple); }') &&
-  /\.light-channel-weekchart\s*\{[\s\S]*color-mix\(in srgb, var\(--channel-accent\) 8%, transparent\)/.test(cssSrc));
+  channelDetailComponent.includes('data-channel={view.channel}') &&
+  channelChartComponent.includes('fill="var(--channel-accent, var(--accent))"') &&
+  channelDetailClasses.includes('[--channel-accent:var(--accent)]') &&
+  channelDetailClasses.includes('[border:1px_solid_color-mix(in_srgb,_var(--channel-accent)') &&
+  channelDetailClasses.includes('violet_eye:') && channelDetailClasses.includes('[--channel-accent:var(--purple)]') &&
+  channelDetailClasses.includes('color-mix(in_srgb,_var(--channel-accent)_8%,_transparent)'));
 assert('Light recent session rows and modals use session/channel accents',
-  sunSessionUiSrc.includes('class="sun-session light-session-row light-session-complete light-session-sun"') &&
-  lightSessionsViewSrc.includes('class="sun-session light-session-row light-session-complete light-session-device"') &&
+  lightRowComponent.includes('sun-session light-session-row light-session-complete light-session-${view.kind}') &&
+  lightRowComponent.includes("view.kind === 'sun' ? 'gb:light-session:bg-[var(--yellow-bg)] gb:light-session:text-warning-ink' : 'gb:light-session:bg-[var(--red-bg)] gb:light-session:text-danger-ink'") &&
   !lightSessionsViewSrc.includes('_renderLightSessionChannelChips') &&
-  sunSessionUiSrc.includes('class="modal sun-detail-modal" data-session-kind="sun"') &&
-  lightDevicesSrc.includes('class="modal sun-detail-modal" data-session-kind="device"') &&
-  /sun-detail-channel-row sun-detail-channel-row-clickable sun-chip-tier-\$\{hasSignal \? 2 : 0\}" data-channel="\$\{escapeAttr\(k\)\}"/.test(sunSessionUiSrc) &&
-  /sun-detail-channel-row sun-detail-channel-row-clickable sun-chip-tier-\$\{hasSignal \? 2 : 0\}" data-channel="\$\{escapeAttr\(k\)\}"/.test(lightDevicesSrc) &&
-  /\.light-session-row\s*\{[\s\S]*--session-accent:\s*var\(--orange\);[\s\S]*box-shadow:[\s\S]*inset 3px 0 0/.test(cssSrc) &&
-  /\.sun-detail-channel-row\s*\{[\s\S]*--channel-accent:\s*var\(--accent\);[\s\S]*grid-template-columns:[\s\S]*box-shadow:\s*inset 3px 0 0/.test(cssSrc));
+  sunSessionUiSrc.includes("kind: 'sun', id:") && lightDevicesSrc.includes("kind: 'device', id:") &&
+  lightDetailComponent.includes('data-session-kind={view.kind}') &&
+  lightDetailComponent.includes('sun-detail-channel-row sun-detail-channel-row-clickable gb:light-detail:grid') &&
+  lightDetailComponent.includes('sun-chip-tier-${item.hasSignal ? 2 : 0}') &&
+  lightDetailComponent.includes('data-channel={item.key}') &&
+  lightDetailComponent.includes('gb:light-detail:grid-cols-[30px_minmax(0,1fr)_auto_auto_14px]') &&
+  lightDetailComponent.includes('[--session-accent:var(--orange)]') &&
+  lightDetailComponent.includes('[--session-accent:var(--red)]') &&
+  lightDetailComponent.includes('[box-shadow:var(--shadow-lg),inset_0_3px_0_color-mix(in_srgb,var(--session-accent)_78%,transparent)]'));
 assert('Sun session chip legacy vitamin D path applies genetics multiplier',
   sunSessionUiSrc.includes('uiDeps.vitaminDIU(channelAu, fitz, uvi, !!sess?.bodyExposure?.rotatedSides, state.importedData?.genetics || null)'));
 assert('Active sun session live and stop vitamin D paths apply genetics multiplier',
@@ -893,18 +1033,24 @@ assert('Active sun session live and stop vitamin D paths apply genetics multipli
   sunActiveSessionSrc.includes('genetics: state.importedData?.genetics') &&
   sunActiveSessionSrc.includes('activeDeps.vitaminDIU(live.doses.vitamin_d, fitz, uvi, rotated, state.importedData?.genetics || null)'));
 assert('Light context setup mirror is not double-framed',
-  /\.ctx-lightsetup-mirror\s*\{[\s\S]*background:\s*transparent;[\s\S]*border:\s*0;[\s\S]*padding:\s*0;/.test(cssSrc));
+  !/gb:context-form:(?:border|bg-|shadow)/.test(contextLightMirrorSrc.match(/<section[^>]+>/)?.[0] || '') &&
+  !cssSrc.includes('.ctx-lightsetup-mirror'));
 assert('Light setup AI context wrapper is not double-framed',
-  /\.light-setup-ai-block\s*\{[\s\S]*padding:\s*0;[\s\S]*background:\s*transparent;[\s\S]*border:\s*0;/.test(cssSrc) &&
-  /\.light-setup-ai-block-green,[\s\S]*\.light-setup-ai-block-yellow,[\s\S]*\.light-setup-ai-block-red\s*\{\s*border-left:\s*0;\s*\}/.test(cssSrc));
+  lightOnboardingClasses.includes('gb:onboarding-ai:p-0') &&
+  lightOnboardingClasses.includes('gb:onboarding-ai:bg-transparent') &&
+  lightOnboardingClasses.includes('gb:onboarding-ai:[border:0]') &&
+  lightOnboardingClasses.includes('gb:onboarding-ai:rounded-none') &&
+  !/['"]light-setup-ai-block-(green|yellow|red)['"]\s*:/.test(lightOnboardingClasses));
 assert('Light page surfaces use shared card/theme tokens',
-  cssSrc.includes('.light-page') &&
-  /\.light-channels-section\s*\{[\s\S]*background:\s*color-mix\(in srgb, var\(--bg-card\)/.test(cssSrc) &&
-  /\.light-setup-card\s*\{[\s\S]*border-top:\s*3px solid var\(--accent\)/.test(cssSrc));
+  lightPageComponent.includes('class="light-page ') &&
+  read('js/light-channel-section-classes.ts').includes('[background:color-mix(in_srgb,_var(--bg-card)_94%,_transparent)]') &&
+  lightSetupRecipeCatalog.includes('[border-top:3px_solid_var(--accent)]') &&
+  lightSetupRecipeCatalog.includes('[background:color-mix(in_srgb,_var(--bg-card)_94%,_transparent)]'));
 assert('Light page status chips use theme tokens instead of legacy blue fallbacks',
   !cssSrc.includes('var(--accent-bg, rgba(96,165,250,0.10))') &&
   cssSrc.includes('background: color-mix(in srgb, var(--accent) 10%, transparent);') &&
-  cssSrc.includes('.conditions-uvi-extreme   .conditions-now-value { color: var(--purple); }'));
+  lightConditionsClasses.includes('gb:conditions:[&_.conditions-now-value]:[color:var(--conditions-purple,var(--purple))]') &&
+  lightConditionsClasses.includes('gb:conditions:[&_.conditions-now-label]:before:[background:var(--purple)]'));
 assert('Mobile hides closed chat panel so it cannot widen pages',
   /@media \(max-width:\s*768px\)\s*\{[\s\S]*\.chat-panel:not\(\.open\)\s*\{[\s\S]*display:\s*none;/.test(cssSrc));
 const quickMarkerBaseIndex = cssSrc.indexOf('.db-quick-marker-grid {\n  display: grid;');
@@ -915,21 +1061,23 @@ assert('Mobile quick marker grid override comes after base grid',
   /\.db-quick-marker-grid\s*\{[\s\S]*grid-template-columns:\s*1fr;/.test(cssSrc.slice(quickMarkerMobileIndex, quickMarkerMobileIndex + 1800)));
 assert('Mobile compare tables scroll instead of clipping columns',
   /@media \(max-width:\s*768px\)\s*\{[\s\S]*\.data-table-wrapper,\s*[\s\S]*\.compare-table-wrapper,\s*[\s\S]*\.heatmap-wrapper\s*\{[\s\S]*overflow-x:\s*auto;[\s\S]*overflow-y:\s*clip;/.test(cssSrc) &&
-  compareCorrelationsSrc.includes('class="compare-date-field"'));
+  read('js/components/CompareDatesPage.svelte').includes('class="compare-date-field"'));
 const importPreviewHeadBlock = cssSrc.match(/\.import-preview-head\s*\{([\s\S]*?)\}/)?.[1] || '';
 const importReviewActionsBlock = cssSrc.match(/\.import-review-actions\s*\{([\s\S]*?)\}/)?.[1] || '';
 assert('Import review modal header/footer are not sticky',
   !/position:\s*sticky/.test(importPreviewHeadBlock) &&
   !/position:\s*sticky/.test(importReviewActionsBlock));
 assert('Compare and correlations headings are text-only',
-  compareCorrelationsSrc.includes('<h2>Compare Dates</h2>') &&
-  compareCorrelationsSrc.includes('<h2>Correlations</h2>') &&
+  read('js/components/CompareDatesPage.svelte').includes('<h2>Compare Dates</h2>') &&
+  read('js/components/CorrelationsSelectionPage.svelte').includes('<h2>Correlations</h2>') &&
+  migratedAudit.contracts.compareHeading && migratedAudit.contracts.correlationsHeading &&
   !compareCorrelationsSrc.includes('<h2>\\u2194 Compare Dates</h2>') &&
   !compareCorrelationsSrc.includes('<h2>\\uD83D\\uDCC8 Correlations</h2>'));
 const themesExtraSrc = read('themes-extra.css');
 assert('Glass theme includes Light page surfaces',
-  themesExtraSrc.includes('[data-theme="glass"] .light-setup-card') &&
-  themesExtraSrc.includes('[data-theme="glass"] .light-conditions-now-wrap'));
+  lightSetupRecipeCatalog.includes("[[data-theme='glass']_&]") &&
+  lightConditionsClasses.includes("gb:conditions:[[data-theme='glass']_&]:[backdrop-filter:blur(8px)_saturate(140%)]") &&
+  !themesExtraSrc.includes('[data-theme="glass"] .light-conditions-now-wrap'));
 
 // ═══════════════════════════════════════
 // 6. Data integrity fixes
@@ -1008,8 +1156,10 @@ assert('Skip link CSS', cssSrc.includes('.skip-link'));
 
 const navSrc = read('js/nav.js');
 const appEventsSrc = read('js/app-event-listeners.js');
-assert('Nav items have tabindex', navSrc.includes('tabindex="0"'));
-assert('Nav items have role=button', navSrc.includes('role="button"'));
+assert('Nav items have tabindex', navSrc.includes('renderSidebarPresentation(view)')
+  && read('js/components/SidebarCategoryItem.svelte').includes('tabindex="0"') && migratedAudit.contracts.navTabindex);
+assert('Nav items have role=button', navSrc.includes('renderSidebarPresentation(view)')
+  && read('js/components/SidebarCategoryItem.svelte').includes('role="button"') && migratedAudit.contracts.navRole);
 assert('Nav items use delegated actions instead of inline handlers',
   navSrc.includes('data-nav-action') &&
     navSrc.includes('installNavActionDelegates') &&
@@ -1017,7 +1167,8 @@ assert('Nav items use delegated actions instead of inline handlers',
 assert('Nav role-button keyboard activation remains delegated globally',
   appEventsSrc.includes('function handleRoleButtonKeydown') &&
     appEventsSrc.includes('t.click()'));
-assert('Category labels escaped in sidebar', navSrc.includes('escapeHTML(label)') || navSrc.includes('escapeHTML(cat.label)'));
+assert('Category labels escaped in sidebar', navSrc.includes('sidebarText(label)')
+  && read('js/components/SidebarCategoryItem.svelte').includes('{view.label}') && migratedAudit.contracts.sidebarLabel);
 
 assert('Focus trap for modals', appEventsSrc.includes('e.key === "Tab"') && appEventsSrc.includes('focusable'));
 
@@ -1039,19 +1190,44 @@ console.log('12. Cycle Stats Guard');
 
 const cycleSrc = read('js/cycle.ts');
 const cycleSummarySrc = read('js/cycle-summary.js');
+const cycleEditorClassesSrc = read('js/cycle-editor-classes.ts');
+const cycleOverviewViewSrc = read('js/components/CycleOverviewPresentation.svelte');
+const cycleOverviewProfileSrc = read('js/components/CycleOverviewProfile.svelte');
+const cycleEditorViewSrc = read('js/components/CycleEditorPresentation.svelte');
+const cycleAuthoredFiles = fs.readdirSync(path.join(ROOT, 'js/components'))
+  .filter(name => /^Cycle[A-Za-z]+\.svelte$/.test(name));
+const cycleAuthoredSources = cycleAuthoredFiles.map(name => read(`js/components/${name}`));
 assert('Cycle stats filters periods with endDate', cycleSummarySrc.includes('filter(p => p.endDate)'));
 assert('Period length guards empty array', cycleSummarySrc.includes('if (periodLengths.length > 0)'));
 assert('Cycle renderer no longer uses supplement UI classes',
   !/supp-(timeline-header|add-btn|form-row|form-field|list)/.test(cycleSrc));
 assert('Cycle renderer avoids inline style attributes', !cycleSrc.includes('style='));
-assert('Cycle editor uses dedicated modal shell', cycleSrc.includes("modal.className = 'modal cycle-modal'"));
+assert('Cycle editor uses dedicated modal shell',
+  cycleSrc.includes("from './cycle-editor-classes.js'") &&
+  cycleSrc.includes('modal.className = cycleEditorModalClasses();') &&
+  cycleEditorClassesSrc.includes('export function cycleEditorModalClasses(): string') &&
+  cycleEditorClassesSrc.includes("return `modal ${cycleEditorClasses('cycle-modal')}`;") &&
+  cycleEditorClassesSrc.includes("[name, classes[name] || '', cycleSharedUtilities(name)]"));
 assert('Cycle cards use semantic buttons',
-  cycleSrc.includes('<button type="button" class="cycle-prompt"') &&
-  cycleSrc.includes('<button type="button" class="cycle-summary-card"'));
+  cycleSrc.includes("from './components/CycleOverviewPresentation.svelte.html.js'") &&
+  cycleSrc.includes('return renderCycleOverviewPresentation(') &&
+  cycleOverviewViewSrc.includes('<CycleOverviewProfile summary={view.summary}/>') &&
+  /<button\b[^>]*type="button"[^>]*class=\{c\('cycle-prompt'\)\}[^>]*data-cycle-action="open-editor"/s.test(cycleOverviewProfileSrc) &&
+  /<button\b[^>]*type="button"[^>]*class=\{c\('cycle-summary-card'\)\}[^>]*data-cycle-action="open-editor"/s.test(cycleOverviewProfileSrc));
 assert('Cycle renderer delegates actions instead of inline handlers',
   cycleSrc.includes('initCycleActionDelegates') &&
-    cycleSrc.includes('cycleActionAttrs') &&
-    !/\son(?:click|change|keydown)\s*=/.test(cycleSrc));
+    cycleSrc.includes("closestCycleElement(event.target, '[data-cycle-action]')") &&
+    cycleSrc.includes("document.addEventListener('click', handleCycleClick)") &&
+    cycleSrc.includes("document.addEventListener('change', handleCycleChange)") &&
+    cycleSrc.includes('modal.innerHTML = renderCycleEditorPresentation(') &&
+    cycleEditorViewSrc.includes('data-cycle-action="close"') &&
+    cycleEditorViewSrc.includes('data-cycle-action="save"') &&
+    cycleOverviewProfileSrc.includes('data-cycle-action="open-editor"') &&
+    !/\son(?:click|change|keydown)\s*=/.test(cycleSrc) &&
+    cycleAuthoredFiles.length > 0 &&
+    cycleAuthoredFiles.includes('CycleEditorPresentation.svelte') &&
+    cycleAuthoredFiles.includes('CycleOverviewProfile.svelte') &&
+    cycleAuthoredSources.every(source => !authoredEventAttributePattern.test(source)));
 assert('Cycle mobile modal uses full-height layout',
   cssSrc.includes('.cycle-modal') && cssSrc.includes('height: calc(100dvh - 24px)'));
 const themeExtraSrc = read('themes-extra.css');
@@ -1095,7 +1271,14 @@ assert('Notification container has aria-live', indexSrc.includes('aria-live="pol
 assert('Notification container has role=status', indexSrc.includes('role="status"'));
 const utilsSrc2 = read('js/utils.js');
 assert('Error toasts get role=alert', utilsSrc2.includes("role', 'alert'"));
-assert('Confirm dialog has role=alertdialog', utilsSrc2.includes('role="alertdialog"'));
+const utilsConfirmViewSrc = read('js/components/UtilsConfirmPresentation.svelte');
+const utilsDialogRenderingSrc = read('js/utils-dialog-rendering.js');
+assert('Confirm dialog has role=alertdialog',
+  /<div\b[^>]*class=\{c\('confirm-dialog', 'panel'\)\}[^>]*role="alertdialog"[^>]*aria-modal="true"/s.test(utilsConfirmViewSrc) &&
+    utilsDialogRenderingSrc.includes("from './components/UtilsConfirmPresentation.svelte.html.js'") &&
+    utilsDialogRenderingSrc.includes('renderConfirmHTML({ view: projectUtilsConfirm(facts) })') &&
+    utilsSrc2.includes("from './utils-dialog-rendering.js'") &&
+    utilsSrc2.includes('overlay.innerHTML = renderUtilsConfirm('));
 
 // ═══════════════════════════════════════
 // 15. Colorblind Accessibility
@@ -1124,10 +1307,13 @@ const demoAIConsentSrc = ctxHealthDotsSrc.slice(
   ctxHealthDotsSrc.indexOf('export function applyDotColor'),
 );
 assert('Health dots facade stays in context-cards', ctxSrc2.includes('loadContextHealthDotsImpl'));
-assert('Health dots have title attribute', ctxHealthDotsSrc.includes('dot.title'));
-assert('Health dots have aria-label', ctxHealthDotsSrc.includes("dot.setAttribute('aria-label'"));
+const contextStatusViewSrc = read('js/components/ContextCardStatus.svelte');
+assert('Authored health dots have a text title', contextStatusViewSrc.includes('title={model.visible ? model.label : undefined}'));
+assert('Authored health indicators expose labeled assessment text',
+  contextStatusViewSrc.includes('AI assessment: ${model.label}') && contextStatusViewSrc.includes('ctx-health-label') && contextStatusViewSrc.includes('aria-hidden="true"'));
 assert('AI tips expose a text severity label',
-  ctxHealthDotsSrc.includes('severityLabels') && ctxHealthDotsSrc.includes('dataset.severity'));
+  contextStatusViewSrc.includes('data-severity={model.insight ? model.severity : undefined}')
+    && contextStatusViewSrc.includes('{model.insightLabel} · {model.severity}'));
 assert('AI profile summaries share the cached health-dot batch',
   ctxHealthDotsSrc.includes('cardSummaries') && ctxHealthDotsSrc.includes("summary: '...'"));
 assert('AI profile summaries are constrained to reported facts',
@@ -1145,7 +1331,7 @@ assert('PDF report values have status prefix', reportSrc.includes('sPrefix'));
 // ═══════════════════════════════════════
 console.log('16. Context Assembly Pipeline');
 
-const labCtxSrc = read('js/lab-context.js');
+const labCtxSrc = read('js/lab-context-assembly.js');
 
 assert('buildLabContext has age computation',
   labCtxSrc.includes('Math.floor((now - new Date(state.profileDob).getTime())'));
@@ -1195,7 +1381,9 @@ assert('views.js imports focus card module', viewsSrc.includes("from './focus-ca
 assert('Focus card uses buildFocusContext', focusCardSrc.includes('buildFocusContext()'));
 assert('Focus card context-aware system prompt', focusCardSrc.includes("this person's goals/conditions"));
 assert('Focus card disables reasoning for its small token cap', /reasoningEffort:\s*'none'/.test(focusCardSrc));
-assert('Focus card surfaces the failure reason', focusCardSrc.includes('escapeHTML(reason)'));
+assert('Focus card surfaces the failure reason', focusCardSrc.includes('String(reason)')
+  && focusCardSrc.includes("replaceFocusCardBody(el, { kind: 'message', text: 'Could not load insight'")
+  && read('js/components/FocusCardBody.svelte').includes('{current.text}') && migratedAudit.contracts.focusReason);
 
 assert('askAIAboutMarker uses the effective dated range', chatMarkerPromptsSrc.includes('getEffectiveRangeForDate(marker, latestIdx)') && chatMarkerPromptsSrc.includes('getEffectiveRangeLabelForDate(marker, latestIdx)') && chatMarkerPromptsSrc.includes('lr.min') && chatMarkerPromptsSrc.includes('lr.max'));
 assert('askAIAboutMarker has trend direction', chatMarkerPromptsSrc.includes("Trend: ${dir}"));

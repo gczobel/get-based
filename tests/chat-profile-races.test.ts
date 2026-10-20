@@ -2,10 +2,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Mock } from 'vitest';
 import { state } from '../js/state.js';
+import { disposeChatThreadNavigation } from '../js/chat-thread-navigation-component.js';
 import { encryptedGetItem, encryptedSetItem } from '../js/crypto.js';
-import { loadChatThreads, saveChatThreadIndex } from '../js/chat-threads.js';
+import { loadChatThreads, saveChatThreadIndex, renderThreadList } from '../js/chat-threads.js';
 import { loadChatHistory, saveChatHistory } from '../js/chat-history.js';
-import { summarizeThread, closeSummaryModal } from '../js/chat-summaries.js';
+import { summarizeThread, closeSummaryModal, viewSavedSummary } from '../js/chat-summaries.js';
 import { callAssistantFeatureAI } from '../js/ai-feature-routing.js';
 import { saveImportedData } from '../js/data.js';
 import { configureChatImages, handleDroppedChatFiles } from '../js/chat-images.js';
@@ -56,6 +57,7 @@ afterEach(() => {
   closeSummaryModal();
   filterThreadList('');
   invalidateThreadContentCache();
+  disposeChatThreadNavigation();
   Object.assign(state, saved);
   vi.useRealTimers();
   vi.unstubAllGlobals();
@@ -150,7 +152,9 @@ describe('chat operations stay within their originating profile', () => {
     vi.useFakeTimers();
     const read = deferred();
     (vi.mocked(encryptedGetItem) as unknown as Mock<(...args: Parameters<typeof encryptedGetItem>) => Promise<unknown>>).mockReturnValueOnce(read.promise);
-    configureChatThreadSearch({ getChatThreadKey: id => `labcharts-${state.currentProfile}-chat-${id}`, renderThreadList: () => {} });
+    configureChatThreadSearch({ getChatThreadKey: id => `labcharts-${state.currentProfile}-chat-${id}`, renderThreadList });
+    renderThreadList();
+    (document.getElementById('chat-thread-search') as HTMLInputElement).value = 'private';
     filterThreadList('private');
     vi.advanceTimersByTime(250);
     expect(encryptedGetItem).toHaveBeenCalledOnce();
@@ -176,6 +180,24 @@ describe('chat operations stay within their originating profile', () => {
     expect(state.chatThreads[0]!.summary).toBeUndefined();
     expect(document.getElementById('summary-modal-body')?.textContent).not.toContain('Private A');
     expect(saveImportedData).not.toHaveBeenCalled();
+  });
+
+  it('keeps a reopened summary visible past the previous close timer', () => {
+    vi.useFakeTimers();
+    Object.assign(state.importedData, { chatSummaries: [
+      { id: 'summary-owned', threadName: 'Saved summary', content: 'Keep this reopened dialog.' },
+    ] });
+    viewSavedSummary('summary-owned');
+    const overlay = document.getElementById('summary-modal-overlay')!;
+    closeSummaryModal();
+    viewSavedSummary('summary-owned');
+    vi.advanceTimersByTime(350);
+    expect(overlay.isConnected).toBe(true);
+    expect(overlay.classList.contains('show')).toBe(true);
+    expect(overlay.textContent).toContain('Keep this reopened dialog.');
+    closeSummaryModal();
+    vi.advanceTimersByTime(350);
+    expect(document.getElementById('summary-modal-overlay')).toBeNull();
   });
 
   it('still persists a successful summary for the originating profile', async () => {

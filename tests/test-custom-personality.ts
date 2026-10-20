@@ -235,7 +235,7 @@ const chatWindowBindingsSrc = read('js/chat-window-bindings.js');
 const chatDiscussionSrc = read('js/chat-discussion.js');
 const chatDiscussionFlowSrc = read('js/chat-discussion-flow.js');
 const chatDiscussionStateSrc = read('js/chat-discussion-state.js');
-assert('CSS has .chat-send-btn.streaming', css.includes('.chat-send-btn.streaming'));
+assert('Owned send control retains streaming danger styling', read('js/chat-composer-classes.js').includes('gb:composer:[&.streaming]:bg-danger') && read('js/chat-composer-classes.js').includes('gb:composer:[&.streaming]:text-on-danger'));
 assert('CSS has .chat-stopped-note', css.includes('.chat-stopped-note'));
 
 // ── 20. Discuss button exports ──
@@ -250,11 +250,11 @@ assert('getThreadPersonaCount exported', typeof chatDiscussion.getThreadPersonaC
 
 // ── 22. Discuss button CSS ──
 console.log('22. Discuss button CSS');
-assert('CSS has .chat-discuss-btn', css.includes('.chat-discuss-btn'));
+assert('Owned discuss control uses shared styled tool button', read('js/components/ChatComposer.svelte').includes('class={"chat-discuss-btn " + COMPOSER_TOOL_BUTTON}') && read('js/chat-composer-classes.js').includes('COMPOSER_TOOL_BUTTON =') && read('js/chat-composer-classes.js').includes('gb:composer:pointer-coarse:size-11'));
 assert('CSS has .chat-msg-auto', css.includes('.chat-msg-auto'));
-assert('CSS has persistent discussion mode', css.includes('.chat-discussion-mode'));
-assert('CSS has discussion participants', css.includes('.chat-discussion-participants'));
-assert('CSS has discussion progress', css.includes('.chat-discussion-progress'));
+assert('CSS has persistent discussion mode', read('js/components/ChatDiscussion.svelte').includes('chat-discussion-mode'));
+assert('CSS has discussion participants', read('js/components/ChatDiscussion.svelte').includes('chat-discussion-participants'));
+assert('CSS has discussion progress', read('js/components/ChatDiscussion.svelte').includes('chat-discussion-progress'));
 
 // ── 23. getThreadPersonaCount source ──
 console.log('23. getThreadPersonaCount');
@@ -276,9 +276,14 @@ assert('callOpenAICompatibleAPI has signal param', apiOpenAICompatibleSrc.includ
 console.log('25. Auto message rendering');
 assert('renderChatMessages stays module-only', !('renderChatMessages' in window));
 const renderSrc2 = chatRender.renderChatMessages.toString();
-assert('renderChatMessages checks msg.auto', renderSrc2.includes('msg.auto'));
-assert('renderChatMessages applies chat-msg-auto class', renderSrc2.includes('chat-msg-auto'));
-assert('renderChatMessages checks msg.stopped', renderSrc2.includes('msg.stopped'));
+const transcriptSrc = read('js/chat-transcript-presentation.js');
+const messageComponentSrc = read('js/components/ChatMessage.svelte');
+const { projectChatTranscriptMessage } = await import('../js/chat-transcript-presentation.js');
+const autoStopped = projectChatTranscriptMessage({ role: 'assistant', content: 'fixture auto', auto: true, stopped: true }, -1);
+const manualRunning = projectChatTranscriptMessage({ role: 'assistant', content: 'fixture manual', auto: false, stopped: false }, -1);
+assert('renderChatMessages checks msg.auto', renderSrc2.includes('projectChatTranscript') && transcriptSrc.includes('auto: !!message.auto') && autoStopped.auto === true && manualRunning.auto === false);
+assert('renderChatMessages applies chat-msg-auto class', messageComponentSrc.includes('class:chat-msg-auto={view.auto}'));
+assert('renderChatMessages checks msg.stopped', transcriptSrc.includes('stopped: !!message.stopped') && messageComponentSrc.includes('{#if view.stopped}') && autoStopped.stopped === true && manualRunning.stopped === false);
 
 // ── 26. startDiscussion source ──
 console.log('26. startDiscussion source');
@@ -306,7 +311,7 @@ assert('endDiscussion restores personality', endSrc.includes('currentChatPersona
 // ── 27. Single-composer discussion ──
 console.log('27. Single-composer discussion');
 assert('legacy steer input CSS removed', !css.includes('.chat-discuss-steer'));
-assert('discussion uses main-composer mode bar', css.includes('.chat-discussion-mode-actions'));
+assert('discussion uses main-composer mode bar', read('js/components/ChatDiscussion.svelte').includes('chat-discussion-mode-actions'));
 
 // ── Restore ──
 if (origVal !== null) localStorage.setItem(key, origVal);

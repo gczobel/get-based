@@ -4,10 +4,24 @@
 // divs, modal-close aria-labels, brand-voice copy, settings tablist,
 // chart layers ARIA, tour dialog role, chat stream status, progress bar.
 //
-// Static source inspection only — fs.readFileSync instead of HTTP fetch.
+// Source and synchronous authored-markup contracts; no HTTP fetch.
 //
 // Run: node tests/test-a11y-phase3.ts  (or via npm test)
 
+import { deviceSetupClasses } from '../js/light-device-setup-classes.js';
+import { setupClasses } from '../js/light-setup-classes.js';
+import { lightSetupUtilityRecipes } from '../scripts/style-recipes/light-setup.mjs';
+import { projectChannelPill, projectChannelDetail } from '../js/light-channel-presentation.js';
+import { renderHTML as renderChannelPills } from '../js/components/LightChannelPills.svelte.html.js';
+import { renderHTML as renderChannelDetail } from '../js/components/LightChannelDetail.svelte.html.js';
+import { renderImportProgress } from '../js/import-progress-rendering.js';
+import { projectCycleOverviewPresentation } from '../js/cycle-overview-presentation.js';
+import { renderHTML as renderCycleOverview } from '../js/components/CycleOverviewPresentation.svelte.html.js';
+import { JSDOM } from 'jsdom';
+import {projectMarkerDetailAction} from '../js/marker-detail-projection.js';
+import { renderMarkerDetailRange } from '../js/marker-detail-results-presentation.js';
+import { renderSupplementRow } from '../js/supplement-dashboard-presentation.js';
+import { renderAnalyticsConsentBody } from '../js/analytics-consent-rendering.js';
 import { readAuthoredRepositorySource } from './helpers/repository-source.js';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -38,47 +52,80 @@ console.log('=== Phase 3 A11y Tests ===\n');
   const categoryPageViewSrc = read('/js/category-page-view.js');
   const lightChannelViewSrc = read('/js/light-channel-view.js');
   const categoryViewRenderersSrc = read('/js/category-view-renderers.js');
-  const focusCardSrc = read('/js/focus-card.js');
+  const focusCardSrc = read('/js/components/FocusCard.svelte');
+  const chartCardMarkup = read('/js/components/CategoryChartCard.svelte');
+  const heatmapMarkup = read('/js/components/CategoryHeatmapRows.svelte');
+  const fattyMarkup = read('/js/components/CategoryFattyAcids.svelte');
+  const alertsMarkup = read('/js/components/DashboardAlerts.svelte');
+  const notesMarkup = read('/js/components/DashboardLabNotes.svelte');
   const onboardingViewSrc = read('/js/onboarding-view.js');
-  const markerDetailSrc = read('/js/marker-detail-modal-impl.js');
   const dashboardLabRenderersSrc = read('/js/dashboard-lab-widget-renderers.js');
   assert('chart-card body has role and tabindex without nesting the Tips control',
-    categoryViewRenderersSrc.includes('class="chart-card-main" role="button" tabindex="0"')
-      && categoryViewRenderersSrc.includes('class="chart-card-tips-host"'));
+    chartCardMarkup.includes('class="chart-card-main" role="button" tabindex="0"') && categoryViewRenderersSrc.includes('renderCategoryChartCard(projectCategoryChartCard(')
+      && chartCardMarkup.includes('class="chart-card-tips-host"') && chartCardMarkup.indexOf('chart-card-tips-host') < chartCardMarkup.indexOf('chart-card-main'));
   assert('trend-alert-card has role and tabindex',
-    dashboardLabRenderersSrc.includes('class="trend-alert-card ${cls}" role="button" tabindex="0"'));
+    alertsMarkup.includes('class={`trend-alert-card ${alert.tone}`} role="button" tabindex="0"') && alertsMarkup.includes('data-dashboard-widget-id={alert.id ?? undefined}') && dashboardLabRenderersSrc.includes('renderDashboardLabSummary(projectDashboardAlertsWidget(ctx))'));
   assert('alert-card (critical) has role and tabindex',
-    dashboardLabRenderersSrc.includes('class="alert-card ${cls}" role="button" tabindex="0"'));
+    alertsMarkup.includes('class={`alert-card ${flag.tone}`} role="button" tabindex="0"') && alertsMarkup.includes('data-dashboard-widget-route={flag.route ?? undefined}'));
   assert('note-card has role and tabindex',
-    dashboardLabRenderersSrc.includes('class="note-card" role="button" tabindex="0"'));
+    notesMarkup.includes('class="note-card" role="button" tabindex="0"') && notesMarkup.includes('data-dashboard-widget-index={note.index}'));
   assert('heatmap header td has role+tabindex',
-    categoryViewRenderersSrc.includes('<tr><td role="button" tabindex="0"'));
+    heatmapMarkup.includes('<tr><td role="button" tabindex="0"') && heatmapMarkup.includes('data-marker-detail-id={row.id}'));
   assert('heatmap cell td has role+tabindex',
-    categoryViewRenderersSrc.match(/heatmap-\$\{s\}" role="button" tabindex="0"/));
+    heatmapMarkup.includes('class="heatmap-{cell.status}" role="button" tabindex="0"') && heatmapMarkup.includes('aria-label={cell.label}'));
   assert('fa-card has role+tabindex',
-    categoryViewRenderersSrc.includes('class="fa-card" role="button" tabindex="0"'));
+    fattyMarkup.includes('class="fa-card" role="button" tabindex="0"') && fattyMarkup.includes('data-marker-detail-id={card.id}'));
+  const rangeEdit = JSDOM.fragment(renderMarkerDetailRange({kind: 'edit-control',
+    optimalClass: '', label: 'Reference', currentRange: '1–2',
+    actions: projectMarkerDetailAction('edit-ref-range',{id:'controlled',type:'ref'}), lowerLabel: 'reference', badge: null,
+  })).querySelector('.ref-editable');
   assert('range edit control is a native button',
-    markerDetailSrc.includes('type="button" class="ref-editable'));
+    rangeEdit?.tagName === 'BUTTON' && rangeEdit.getAttribute('type') === 'button'
+      && rangeEdit.getAttribute('aria-label') === 'Edit Reference range, currently 1–2'
+      && rangeEdit.getAttribute('data-marker-detail-action') === 'edit-ref-range'
+      && readAuthoredRepositorySource('js/marker-detail-modal-impl.js').includes('return ({ kind: "edit-control"'));
   assert('focus-card refresh has aria-label and delegated action',
     focusCardSrc.includes('class="focus-card-refresh"') &&
     focusCardSrc.includes('aria-label="Regenerate insight"') &&
     focusCardSrc.includes('data-focus-card-action'));
 
-  const cycleSrc = read('/js/cycle.js');
+  const cycleSrc = readAuthoredRepositorySource('js/cycle.js');
+  const cycleView = (summary: Parameters<typeof projectCycleOverviewPresentation>[0]['summary']) =>
+    projectCycleOverviewPresentation({
+      compact: false, showHeader: false, hasProfile: summary !== null, summary,
+      drawDescription: null, phases: [], phaseOverflow: 0, periods: [], alerts: [],
+    });
+  const cyclePrompt = JSDOM.fragment(renderCycleOverview({view: cycleView(null)})).querySelector('.cycle-prompt');
+  const cycleSummary = JSDOM.fragment(renderCycleOverview({view: cycleView({
+    primary: '28-day cycle', aria: '28-day cycle', meta: ['regular', 'moderate flow'],
+  })})).querySelector('.cycle-summary-card');
   assert('cycle-prompt is a semantic button',
-    cycleSrc.includes('<button type="button" class="cycle-prompt"'));
+    cyclePrompt?.tagName === 'BUTTON' && cyclePrompt.getAttribute('type') === 'button'
+      && cyclePrompt.getAttribute('aria-label') === 'Set up cycle tracking');
   assert('cycle-summary is a semantic button',
-    cycleSrc.includes('<button type="button" class="cycle-summary-card"'));
+    cycleSummary?.tagName === 'BUTTON' && cycleSummary.getAttribute('type') === 'button'
+      && cycleSummary.getAttribute('aria-label') === 'Edit cycle: 28-day cycle');
   assert('cycle editable cards use delegated button actions',
-    cycleSrc.includes("cycleActionAttrs('open-editor')") &&
-      !cycleSrc.includes('CYCLE_KEY_ACTIVATE_EDITOR'));
+    cyclePrompt?.getAttribute('data-cycle-action') === 'open-editor'
+      && cycleSummary?.getAttribute('data-cycle-action') === 'open-editor'
+      && /function handleCycleClick\(event: MouseEvent\) \{\s*const actionEl = closestCycleElement\(event\.target, '\[data-cycle-action\]'\);/.test(cycleSrc)
+      && /switch \(actionEl\.dataset\.cycleAction \|\| ''\) \{/.test(cycleSrc)
+      && /case 'open-editor':\s*openMenstrualCycleEditor\(\);\s*break;/.test(cycleSrc)
+      && cycleSrc.includes("document.addEventListener('click', handleCycleClick);")
+      && cycleSrc.includes('return renderCycleOverviewPresentation({view: projectMenstrualCycleSection(data, opts)});') && cycleSrc.includes('function projectMenstrualCycleSection')
+      && !cycleSrc.includes('CYCLE_KEY_ACTIVATE_EDITOR'));
 
-  const suppSrc = read('/js/supplement-dashboard.js');
-  assert('supp-bar-row has role+tabindex',
-    suppSrc.includes('class="supp-bar-row" role="button" tabindex="0"'));
+  const suppSrc = readAuthoredRepositorySource('js/supplement-dashboard.js');
+  const suppRow = JSDOM.fragment(renderSupplementRow(3, 'Zinc · 10 mg', 'Zinc', [])).querySelector('.supp-bar-row');
+  assert('supp-bar-row has role+tabindex and retained native delegated action',
+    suppRow?.getAttribute('role') === 'button' && suppRow.getAttribute('tabindex') === '0'
+      && suppRow.getAttribute('aria-label') === 'Edit Zinc · 10 mg'
+      && suppRow.getAttribute('data-supp-action') === 'open-editor'
+      && suppRow.getAttribute('data-supp-index') === '3'
+      && suppSrc.includes('rows.push(supplementRow(index, fullLabel, shortName, bars));'));
 
   // ─── 3. Modal close aria-labels ───
-  for (const f of ['/js/views.js', '/js/feedback.js', '/js/changelog-impl.js', '/js/emf-editor.js', '/js/settings.js']) {
+  for (const f of ['/js/views.js', '/js/emf-editor.js', '/js/settings.js']) {
     const src = read(f);
     const closeButtons = src.match(/<button\b[^>]*class="[^"]*\bmodal-close\b[^"]*"[^>]*>/g) || [];
     const labelled = closeButtons.filter(button => /\baria-label="[^"]+"/.test(button)).length;
@@ -86,8 +133,37 @@ console.log('=== Phase 3 A11y Tests ===\n');
       closeButtons.length === labelled,
       `${labelled}/${closeButtons.length} labelled`);
   }
-  const feedbackSrc = read('/js/feedback.js');
+  // Feedback markup has an authored Svelte owner; a controller-only regex can pass 0/0.
+  const feedbackPresentationSrc = read('/js/components/FeedbackPresentation.svelte');
+  const feedbackCloseButtons = feedbackPresentationSrc.match(/<button\b[^>]*class="modal-close"[^>]*>/g) || [];
+  assert('Feedback authored close button has native type, label and delegated action',
+    feedbackCloseButtons.length === 1
+      && /\btype="button"/.test(feedbackCloseButtons[0]!)
+      && /\baria-label="Close"/.test(feedbackCloseButtons[0]!)
+      && /\bdata-feedback-action="close"/.test(feedbackCloseButtons[0]!));
+  const feedbackRenderingSrc = readAuthoredRepositorySource('js/feedback-rendering.js');
+  const feedbackSrc = readAuthoredRepositorySource('js/feedback.js');
+  assert('Feedback facade clones native template content and controller consumes the clone',
+    feedbackRenderingSrc.includes("from './components/FeedbackPresentation.svelte.html.js'")
+      && /const template = document\.createElement\('template'\);\s*template\.innerHTML = renderHTML\(\);\s*return template\.content\.cloneNode\(true\);/.test(feedbackRenderingSrc)
+      && feedbackSrc.includes("from './feedback-rendering.js'")
+      && feedbackSrc.includes('modal.replaceChildren(renderFeedbackForm());')
+      && !feedbackSrc.includes('modal.innerHTML = renderFeedbackForm()'));
   const changelogSrc = read('/js/changelog-impl.js');
+  const changelogPresentationSrc = read('/js/components/ChangelogPresentation.svelte');
+  const changelogCloseButtons = changelogPresentationSrc.match(/<button\b[^>]*class="modal-close"[^>]*>/g) || [];
+  assert('Changelog authored close button has native type, label and delegated action',
+    changelogCloseButtons.length === 1
+      && /\btype="button"/.test(changelogCloseButtons[0]!)
+      && /\baria-label="Close"/.test(changelogCloseButtons[0]!)
+      && /\bdata-changelog-action="close"/.test(changelogCloseButtons[0]!));
+  const changelogRenderingSrc = readAuthoredRepositorySource('js/changelog-rendering.js');
+  const changelogControllerSrc = readAuthoredRepositorySource('js/changelog-impl.js');
+  assert('Changelog controller parses its actual authored presentation synchronously',
+    changelogControllerSrc.includes("from './changelog-rendering.js'")
+      && changelogControllerSrc.includes('modal.innerHTML = renderChangelog(projectChangelogView(entries, renderChangelogItem));')
+      && changelogRenderingSrc.includes("from './components/ChangelogPresentation.svelte.html.js'")
+      && changelogRenderingSrc.includes('return renderHTML({ view });'));
   assert('feedback modal uses shared overlay lifecycle helpers',
     feedbackSrc.includes("from './modal-lifecycle.js'")
       && feedbackSrc.includes('openModalOverlay(')
@@ -98,10 +174,13 @@ console.log('=== Phase 3 A11y Tests ===\n');
       && changelogSrc.includes('closeModalOverlay('));
 
   // ─── 4. Hosted-product copy avoids personal-maintainer framing ───
-  const utilsSrc = read('/js/utils.js');
+  const utilsSrc = readAuthoredRepositorySource('js/utils.js');
+  const analyticsConsent = JSDOM.fragment(renderAnalyticsConsentBody()).textContent || '';
   assert('utils.js analytics consent uses product-level wording',
-    !utilsSrc.includes('help me improve getbased') && utilsSrc.includes('help improve getbased'));
-  const settingsSrc = `${read('/js/settings.js')}\n${read('/js/settings-privacy.js')}`;
+    !utilsSrc.includes('help me improve getbased') && !analyticsConsent.includes('help me improve getbased')
+      && analyticsConsent.includes('help improve getbased')
+      && utilsSrc.includes('banner.innerHTML = renderAnalyticsConsentBody();'));
+  const settingsSrc = `${read('/js/settings.js')}\n${read('/js/settings-privacy.js')}\n${read('/js/components/PrivacySettings.svelte')}`;
   assert('settings.js privacy copy identifies Umami without personal framing',
     !settingsSrc.includes('I track cookieless') && settingsSrc.includes('Umami analytics service'));
   assert('onboarding-view.js drops "us show" framing',
@@ -116,20 +195,25 @@ console.log('=== Phase 3 A11y Tests ===\n');
     && !importPreflightSrc.includes("We'd love to support"));
 
   // ─── 5. Settings tablist wiring ───
+  const settingsShellSrc = read('/js/components/SettingsShell.svelte');
+  const settingsContractSrc = readAuthoredRepositorySource('js/settings-shell-contract.js');
   assert('settings-tabs-bar has role=tablist',
-    settingsSrc.includes('class="settings-tabs-bar" role="tablist"'));
-  // 7 tabs each with runtime aria-selected expression
-  const ariaSelMatches = (settingsSrc.match(/aria-selected="\$\{_activeSettingsTab/g) || []).length;
-  assert('all 7 settings tabs have runtime aria-selected', ariaSelMatches === 7, `found ${ariaSelMatches}`);
+    settingsShellSrc.includes('settings-tabs-bar') && settingsShellSrc.includes('role="tablist"'));
+  // Each of the seven core definitions uses the component's reactive selection.
+  const ariaSelMatches = (settingsContractSrc.match(/id: '/g) || []).length;
+  assert('all 7 settings tabs have runtime aria-selected', ariaSelMatches === 7 && settingsShellSrc.includes('aria-selected={activeTab === tab.id}')
+    && settingsShellSrc.includes("tabindex={activeTab === tab.id ? 0 : -1}"), `found ${ariaSelMatches}`);
   assert('view-toggle (Charts/Table/Heatmap) is a tablist',
-    categoryPageViewSrc.includes('class="view-toggle" role="tablist"'));
+    read('/js/components/CategoryPageChrome.svelte').includes('class="view-toggle" role="tablist"') && categoryPageViewSrc.includes('renderCategoryPagePresentation'));
 
   // ─── 6. Chart layers dropdown ARIA ───
   const dataSrc = read('/js/data-view-controls.js');
+  const chartLayersSrc = read('/js/components/ChartLayersDropdown.svelte');
   assert('chart-layers-trigger has aria-haspopup + aria-controls',
-    /<button class="view-btn chart-layers-trigger"[\s\S]{0,220}aria-haspopup="true"[\s\S]{0,220}aria-expanded="false"[\s\S]{0,220}aria-controls="chart-layers-dropdown"/.test(dataSrc));
+    /<button class="view-btn chart-layers-trigger"[\s\S]{0,220}aria-haspopup="true"[\s\S]{0,220}aria-expanded="false"[\s\S]{0,220}aria-controls="chart-layers-dropdown"/.test(chartLayersSrc));
   assert('chart-layers-dropdown has role=menu',
-    dataSrc.includes('class="chart-layers-dropdown" id="chart-layers-dropdown" role="menu"'));
+    chartLayersSrc.includes('class="chart-layers-dropdown" id="chart-layers-dropdown" role="menu"'));
+  assert('authored chart layers are wired into the public renderer', dataSrc.includes("from './chart-layers-presentation.js'") && dataSrc.includes('const view = projectChartLayersDropdown()') && dataSrc.includes('renderChartLayersPresentation({ hasNotes: !!view.notes, hasSupps: !!view.supplements, hasCycle: !!view.cycle }') && dataSrc.includes("view.notes?.checked ? 'on' : 'off'") && dataSrc.includes("view.supplements?.checked ? 'on' : 'off'") && dataSrc.includes("view.cycle?.checked ? 'on' : 'off'"));
   assert('toggle handler updates aria-expanded',
     dataSrc.includes("trigger.setAttribute('aria-expanded', String(!isOpen))"));
   assert('toggle handler closes on Escape',
@@ -142,7 +226,7 @@ console.log('=== Phase 3 A11y Tests ===\n');
     tourSrc.includes("setAttribute('aria-modal', 'true')") &&
     tourSrc.includes("setAttribute('aria-labelledby', 'tour-tooltip-heading')"));
   assert('tour heading has matching id',
-    tourSrc.includes('id="tour-tooltip-heading"'));
+    read('/js/components/TourPresentation.svelte').includes('id="tour-tooltip-heading"'));
 
   // ─── 8. Chat streaming announcements ───
   const chatSendSrc = read('/js/chat-send.js');
@@ -153,13 +237,16 @@ console.log('=== Phase 3 A11y Tests ===\n');
   assert('decorative typing indicators stay silent while one shared status announces response phases',
     chatSendSrc.includes('createChatThinkingIndicator')
     && chatDiscussionRoundViewSrc.includes('createChatThinkingIndicator')
-    && chatThinkingStatusSrc.includes("element.setAttribute('aria-hidden', 'true')")
+    && chatThinkingStatusSrc.includes("components/ChatThinkingStatus.svelte.native.js")
+    && read('/js/components/ChatThinkingStatus.svelte').includes('aria-hidden="true"')
     && chatMarkupSrc.includes('id="chat-stream-status" role="status" aria-live="polite" aria-atomic="true"')
     &&  /if\s*\(status\)\s*status\.textContent = message;/.test(chatStreamStatusSrc));
 
   // ─── 9. Progress bar ARIA ───
+  const progressMarkup = renderImportProgress(2, 12, 'Synthetic progress.pdf');
   assert('import-progress-bar declares role=progressbar',
-    importProgressSrc.includes('class="import-progress-bar" role="progressbar"'));
+    /class="import-progress-bar [^"]*" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="12" aria-label="Import progress"/.test(progressMarkup)
+      && importProgressSrc.includes('return renderImportProgress(step, pct, fileName);'));
   assert('import-progress updates aria-valuenow',
     importProgressSrc.includes("bar.setAttribute('aria-valuenow', String(pct))"));
 
@@ -199,9 +286,10 @@ console.log('=== Phase 3 A11y Tests ===\n');
     /html\s*\{[^}]*background:\s*var\(--bg-primary\)[^}]*color-scheme:\s*dark/.test(cssSrc) &&
     /\[data-theme="light"\]\s*\{[^}]*color-scheme:\s*light/.test(cssSrc));
   assert('footer carries current company, founder, and documentation details',
-    indexSrc.includes('&copy; 2026 getbased s.r.o.')
-      && indexSrc.includes('Founded and built with &#10084;&#65039; by')
-      && indexSrc.includes('href="https://docs.getbased.health"'));
+    read('/js/components/AppFooter.svelte').includes('&copy; 2026 getbased s.r.o.')
+      && read('/js/components/AppFooter.svelte').includes('Founded and built with &#10084;&#65039; by')
+      && read('/js/components/AppFooter.svelte').includes('href="https://docs.getbased.health"')
+      && JSDOM.fragment(indexSrc).querySelector('.app-footer-legal')?.textContent?.includes('© 2026 getbased s.r.o.'));
   assert('desktop footer clears the fixed sidebar and returns to full width below the sidebar breakpoint',
     /\.app-footer \{[^}]*margin-left: 260px/.test(cssSrc)
       && /@media \(max-width: 1024px\)[\s\S]*?\.app-footer \{ margin-left: 0; \}/.test(cssSrc));
@@ -291,10 +379,25 @@ console.log('=== Phase 3 A11y Tests ===\n');
     '.chat-personality-current-name',
     '.chat-personality-opt-name',
   ];
+  const ownedChatTitle = read('/js/components/ChatHeader.svelte').match(/class="chat-header-title [^"]*"/)?.[0] || '';
+  const ownedChatTitleUsesDisplayFont = ownedChatTitle.includes('gb:header:theme-neuro:[font-family:var(--font-neuromancer-display)]')
+    && ownedChatTitle.includes('gb:header:theme-neuro:[font-size-adjust:0.62]');
+  const ownedLightTitle = new Map([
+    ['.light-setup-title',lightSetupUtilityRecipes['light-setup-title']],
+    ['.light-setup-focus-head h3',lightSetupUtilityRecipes['light-setup-focus-head']],
+    ['.light-setup-ott h4',lightSetupUtilityRecipes['light-setup-ott']],
+  ]);
   assert('neuromancer VT323 stays scoped to display accents',
     !!neuromancerDisplayToken &&
     !!neuromancerDisplayRule &&
-    neuromancerDisplaySelectors.every(selector => neuromancerDisplayRule[0]!.includes(selector)) &&
+    ['light-setup-title', 'light-setup-focus-head', 'light-setup-ott'].every(hook =>
+      setupClasses(hook) === `${hook} gb-ls-${hook}`) &&
+    neuromancerDisplaySelectors.every(selector => selector === '.chat-header-title'
+      ? ownedChatTitleUsesDisplayFont : ownedLightTitle.has(selector)
+        ? ownedLightTitle.get(selector)!.includes("[[data-theme='neuromancer']_")
+          && ownedLightTitle.get(selector)!.includes('[font-family:var(--font-neuromancer-display)]')
+          && ownedLightTitle.get(selector)!.includes('[font-size-adjust:0.62]')
+        : neuromancerDisplayRule[0]!.includes(selector)) &&
     neuromancerBaseFontSelectors.every(selector => !neuromancerDisplayRule[0]!.includes(selector)) &&
     neuromancerDisplayRule[0]!.includes('font-size-adjust: 0.62') &&
     !/\[data-theme="neuromancer"\]\s+body\s*\{[^}]*VT323/.test(themesSrc));
@@ -324,8 +427,11 @@ console.log('=== Phase 3 A11y Tests ===\n');
 
   const chatRenderSrc = read('/js/chat-render.js');
   const chatRenderRuntimeSrc = read('/js/chat-render-runtime.js');
+  const chatTranscriptProjectionSrc = read('/js/chat-transcript-presentation.ts');
   assert('chat-render browser hooks are isolated in runtime adapter',
-    chatRenderSrc.includes("from './chat-render-runtime.js'")
+    chatRenderSrc.includes("from './chat-transcript-presentation.js'")
+      && chatTranscriptProjectionSrc.includes("from './chat-render-runtime.js'")
+      && !/\bwindow(\.|\s*\[)/.test(chatTranscriptProjectionSrc)
       && !/\bwindow(\.|\s*\[)/.test(chatRenderSrc)
       && chatRenderRuntimeSrc.includes('isChatRenderProductRecsEnabled')
       && chatRenderRuntimeSrc.includes('renderChatRecommendationSections'));
@@ -345,7 +451,7 @@ console.log('=== Phase 3 A11y Tests ===\n');
   const lightDevModalLoaderSrc = read('/js/light-device-modal-loader.ts');
   const lightDevSetupSrc = read('/js/light-device-setup-modal.ts');
   const lightDevSessionSrc = read('/js/light-device-session-modal.ts');
-  const lightDevCss = read('/css/light-devices.css');
+  const lightDevPresetsSrc = read('/js/components/LightDevicePresets.svelte');
   assert('light-devices.js lazily delegates session dialog rendering',
     lightDevSrc.includes("from './light-device-modal-loader.js'")
       && !lightDevSrc.includes("from './light-device-session-modal.js'")
@@ -355,17 +461,17 @@ console.log('=== Phase 3 A11y Tests ===\n');
       && !lightDevSrc.includes("from './light-device-setup-modal.js'")
       && lightDevModalLoaderSrc.includes("import('./light-device-setup-modal.js')"));
   assert('Add-device preset picker stays inside modal as button rows, not a native dropdown',
-    lightDevSetupSrc.includes('light-device-preset-groups') &&
-    lightDevSetupSrc.includes('light-device-preset-row') &&
-    !lightDevSetupSrc.includes('id="add-device-preset"'));
+    lightDevPresetsSrc.includes("c('light-device-preset-groups')") &&
+    lightDevPresetsSrc.includes("c('light-device-preset-row')") &&
+    !lightDevPresetsSrc.includes('id="add-device-preset"'));
   assert('Add-device preset picker uses one vertical modal scroller with no horizontal row overflow',
     lightDevSetupSrc.includes("overlay.addEventListener('wheel'") &&
     lightDevSetupSrc.includes('modal.scrollBy({ top: event.deltaY * unit, left: 0') &&
-    lightDevCss.includes('.light-device-add-modal') &&
-    lightDevCss.includes('touch-action: pan-y') &&
-    lightDevCss.includes('overflow-x: hidden') &&
-    lightDevCss.includes('word-break: break-word') &&
-    lightDevCss.includes('overflow: visible'));
+    lightDevPresetsSrc.includes('light-device-add-modal') &&
+    deviceSetupClasses('light-device-add-modal').includes('[touch-action:pan-y]') &&
+    deviceSetupClasses('modal-body').includes('[overflow-x:hidden]') &&
+    deviceSetupClasses('light-device-preset-meta').includes('[word-break:break-word]') &&
+    deviceSetupClasses('light-device-preset-groups').includes('[overflow:visible]'));
   assert('custom-device URL extraction checks hosted proxy response status',
     lightDevSetupSrc.includes('if (!res.ok) throw new Error(`Proxy error ${res.status}`);'));
   assert('custom-device async extraction suppresses stale detached-overlay notifications',
@@ -398,17 +504,23 @@ console.log('=== Phase 3 A11y Tests ===\n');
   // The detail panel is role=region with aria-label; close button has its
   // own aria-label. Hidden text in .sr-only carries the qualitative tier
   // for screen readers since the dots are aria-hidden.
+  const pillMarkup = renderChannelPills({pills:[projectChannelPill('circadian',
+    {label:'Circadian',icon:'☀',what:'Daily rhythm'},1,0,
+    {n:2,sun:2,device:0,txt:'2 days'},{bars:[]})]});
+  const detailMarkup = renderChannelDetail({view:projectChannelDetail({
+    channel:'circadian',meta:{label:'Circadian',icon:'☀',what:'Daily rhythm'},sun:1,device:0,
+    recentDays:[],chartDays:null,iuDays:null,pbmJoulesPerCm2:null,matchingDevice:false,peakAt:null,peakUV:null,
+  })});
   assert('pill is a <button> with aria-expanded + aria-controls',
-    /<button type="button" class="light-pill light-pill-tier-\$\{active \? 2 : 0\}[\s\S]{0,400}aria-expanded="false" aria-controls="\$\{detailId\}"/.test(lightChannelViewSrc));
+    /<button type="button"[^>]*aria-expanded="false" aria-controls="light-pill-detail-circadian"/.test(pillMarkup));
   assert('pill sparkline is aria-hidden (qualitative info already in sr-only span)',
-    lightChannelViewSrc.includes('class="light-pill-sparkline"') &&
-    /<svg class="light-pill-sparkline"[^>]*aria-hidden="true"/.test(lightChannelViewSrc));
+    /<svg[^>]*class="light-pill-sparkline [^"]*"[^>]*aria-hidden="true"/.test(pillMarkup));
   assert('pill carries sr-only tier + day-count label for assistive tech',
-    /class="sr-only">\$\{escapeHTML\(sourceLabel\)\}\$\{dc\.n \? ` on \$\{dc\.n\} day/.test(lightChannelViewSrc));
+    pillMarkup.includes('<span class="sr-only">Sunlight logged on 2 days this week</span>'));
   assert('detail panel is role=region with aria-label',
-    /class="light-channel-detail"[\s\S]{0,200}role="region" aria-label="\$\{escapeHTML\(meta\.label/.test(lightChannelViewSrc));
+    /id="light-pill-detail-circadian" role="region" aria-label="Circadian detail"/.test(detailMarkup));
   assert('detail close button has aria-label',
-    /class="light-channel-detail-close" aria-label="Close \$\{escapeAttr\(meta\.label/.test(lightChannelViewSrc));
+    /<button type="button"[^>]*class="light-channel-detail-close [^"]*"[^>]*aria-label="Close Circadian detail"/.test(detailMarkup));
   assert('_toggleChannelDetail flips aria-expanded on the active pill',
     /p\.setAttribute\('aria-expanded', 'true'\)/.test(lightChannelViewSrc) &&
     /p\.setAttribute\('aria-expanded', 'false'\)/.test(lightChannelViewSrc));

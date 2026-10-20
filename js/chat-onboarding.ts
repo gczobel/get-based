@@ -1,18 +1,19 @@
+import {tsStateStyles} from './ts-state-ui-inline-style-map.generated.js';
+import { isChatOptionalSetupActionCurrent } from './chat-optional-setup-component.js';
 // chat-onboarding.js — Chat-first onboarding handlers and render helpers
 
 import type { ProfileData } from '../types/app-state.js';
 import type { ActiveData } from './data-view-types.js';
-import type { LocationCacheEntry } from './profile.js';
 import { state } from './state.js';
-import { LATITUDE_BANDS } from './constants.js';
-import { escapeAttr, escapeHTML, showNotification } from './utils.js';
+import { projectOnboardingProgress } from './chat-onboarding-presentation.js';
+import { renderHTML as renderProgressHTML } from './components/ChatOnboardingProgress.svelte.html.js';
+import { renderHTML as renderProviderHTML } from './components/ChatProviderQuiz.svelte.html.js';
+import { isChatProviderSetupActionCurrent } from './chat-provider-setup-component.js';
+import { createChatProfileOnboarding } from './chat-profile-onboarding.js';
+import { showNotification } from './utils.js';
 import { actionAttributes } from './action-attributes.js';
 import { saveImportedData } from './data.js';
 import { appendImportedArrayItem, deleteImportedArrayItem } from './data-merge.js';
-import {
-  getLatitudeFromLocation, getLocationCache, latitudeToBand, renameProfile,
-  setProfileDob, setProfileLocation, setProfileSex,
-} from './profile.js';
 import { isAIPaused } from './api.js';
 import { hasChatResponseBackend } from './chat-backend-selection.js';
 import { handleAppExtensionOnboardingAction, renderAppExtensionOnboardingSlot } from './app-extension-runtime.js';
@@ -57,22 +58,24 @@ export function chatOnboardingActionAttrs(action: string, attrs: Parameters<type
 }
 
 function isChatOnboardingActionScope(actionEl: Element) {
-  return !!actionEl.closest('#chat-panel, .chat-provider-quiz');
+  return !!actionEl.closest('#chat-panel, .chat-provider-quiz') && isChatProviderSetupActionCurrent(actionEl) && isChatOptionalSetupActionCurrent(actionEl);
 }
 
-function openAiSettings() {
+function openAiSettings(current: () => boolean) {
   clearForcedOnboardingStep();
   closeChatPanel();
   setTimeout(() => {
-    openSettingsModal('ai');
+    if (current()) openSettingsModal('ai');
   }, 300);
 }
 
-function openAiProviderSettings(provider: string) {
+function openAiProviderSettings(provider: string, current: () => boolean) {
   clearForcedOnboardingStep();
   closeChatPanel();
   setTimeout(async () => {
+    if (!current()) return;
     await openSettingsModal('ai');
+    if (!current()) return;
     if (provider === 'cli') {
       const cliButton = (document.querySelector('[data-settings-action="show-cli-agent-provider"]') as HTMLElement | null);
       cliButton?.click();
@@ -86,6 +89,11 @@ async function handleChatOnboardingClick(event: MouseEvent) {
   const actionEl = (target.closest('[data-chat-onboarding-action]') as HTMLElement | null);
   if (!actionEl || !isChatOnboardingActionScope(actionEl)) return;
   const action = actionEl.dataset.chatOnboardingAction || '';
+  const profile = state.currentProfile;
+  const thread = state.currentThreadId;
+  const history = state.chatHistory;
+  const current = () => profile === state.currentProfile && thread === state.currentThreadId
+    && history === state.chatHistory && actionEl.isConnected && isChatProviderSetupActionCurrent(actionEl) && isChatOptionalSetupActionCurrent(actionEl);
   event.preventDefault();
 
   const extensionHandled = handleAppExtensionOnboardingAction({
@@ -98,6 +106,7 @@ async function handleChatOnboardingClick(event: MouseEvent) {
   });
   if (extensionHandled === true
     || (extensionHandled instanceof Promise && await extensionHandled)) return;
+  if (!current()) return;
 
   if (action === 'back-to-provider-quiz') {
     backToProviderQuiz();
@@ -105,9 +114,9 @@ async function handleChatOnboardingClick(event: MouseEvent) {
     clearForcedOnboardingStep();
     startOpenRouterOAuth();
   } else if (action === 'open-ai-settings') {
-    openAiSettings();
+    openAiSettings(current);
   } else if (action === 'open-provider-settings') {
-    openAiProviderSettings(actionEl.dataset.chatProvider || '');
+    openAiProviderSettings(actionEl.dataset.chatProvider || '', current);
   } else if (action === 'set-provider-branch') {
     setProviderQuizBranch(actionEl.dataset.chatProviderBranch || '');
   } else if (action === 'start-file-import') {
@@ -270,134 +279,27 @@ export function startOnboardingFileImport() {
   input.click();
 }
 
-export function _updateOnboardNextBtn() {
-  const btn = buttonById('chat-onboard-next');
-  if (!btn) return;
-  const name = textControlById('chat-onboard-name')?.value?.trim();
-  const sex = state.profileSex;
-  btn.disabled = !(name && sex);
-}
-
-export async function setChatProfileSex(sex: string | null) {
-  try {
-    if (!await setProfileSex(state.currentProfile, sex)) return false;
-  } catch {
-    return false;
-  }
-  document.querySelectorAll('.chat-onboard-form .welcome-sex-btn').forEach(b => b.classList.remove('active'));
-  const btns = document.querySelectorAll('.chat-onboard-form .welcome-sex-btn');
-  if (sex === 'male' && btns[0]) btns[0].classList.add('active');
-  if (sex === 'female' && btns[1]) btns[1].classList.add('active');
-  state.profileSex = sex;
-  _updateOnboardNextBtn();
-  return true;
-}
-
-let _chatLocTimer: ReturnType<typeof setTimeout> | null = null;
-export function onboardHeightUnitChanged() {
-  const input = textControlById('chat-onboard-height');
-  const select = selectById('chat-onboard-height-unit');
-  if (!input || !select) return;
-  const val = parseFloat(input.value);
-  if (!val) { input.placeholder = select.value === 'in' ? 'inches' : 'cm'; return; }
-  if (select.value === 'in') { input.value = (val / 2.54).toFixed(1); input.placeholder = 'inches'; }
-  else { input.value = (val * 2.54).toFixed(1); input.placeholder = 'cm'; }
-}
-
-export async function saveChatLocation() {
-  const country = textControlById('chat-onboard-country')?.value?.trim();
-  if (country == null) return false;
-  try {
-    if (!await setProfileLocation(state.currentProfile, country, '')) return false;
-  } catch {
-    return false;
-  }
-  const el = document.getElementById('chat-onboard-lat');
-  if (!el) return true;
-  if (!country) { el.textContent = ''; return true; }
-
-  // Check the legacy/coarse cache first. Country-only onboarding does not
-  // send anything to a geocoder; postal refinement happens in Profile.
-  const cacheKey = (country + '|').toLowerCase();
-  const rawCached = getLocationCache()[cacheKey];
-  const cached = Number.isFinite(rawCached) ? Number(rawCached) : Number(((rawCached as LocationCacheEntry | undefined))?.lat ?? ((rawCached as LocationCacheEntry | undefined))?.latitude);
-  if (Number.isFinite(cached)) {
-    const band = latitudeToBand(cached);
-    el.style.color = 'var(--green)';
-    el.textContent = '\u2713 ' + Math.abs(Math.round(cached)) + '\u00b0' + (cached >= 0 ? 'N' : 'S') + ' \u2014 ' + LATITUDE_BANDS[band];
-    return true;
-  }
-  // Hardcoded fallback
-  const latStr = getLatitudeFromLocation();
-  if (latStr) {
-    el.style.color = 'var(--green)';
-    el.textContent = '\u2713 ' + latStr;
-  } else {
-    el.textContent = '';
-  }
-  // No country-only network lookup: a country band is sufficient here,
-  // and Profile can resolve an optional postal area later.
-  if (_chatLocTimer) clearTimeout(_chatLocTimer);
-  return true;
-}
-
-export async function saveChatProfile(advance?: boolean) {
-  const nameEl = textControlById('chat-onboard-name');
-  const dobEl = textControlById('chat-onboard-dob');
-  const name = nameEl?.value?.trim();
-  const dob = dobEl?.value;
-  try {
-    if (name && !await renameProfile(state.currentProfile, name)) return false;
-    if (dob) {
-      const dobYear = parseInt(dob.slice(0, 4));
-      if (dobYear >= 1900 && dobYear <= new Date().getFullYear()) {
-        if (!await setProfileDob(state.currentProfile, dob)) return false;
-        state.profileDob = dob;
-      }
-      // Silently ignore invalid DOB — user can fix before clicking Continue
-    }
-    // Save height
-    const heightRaw = parseFloat(textControlById('chat-onboard-height')?.value || '');
-    const heightUnit = selectById('chat-onboard-height-unit')?.value || 'cm';
-    if (heightRaw) {
-      const heightCm = heightUnit === 'in' ? Math.round(heightRaw * 2.54 * 10) / 10 : heightRaw;
-      if (!await setProfileHeight(state.currentProfile, heightCm, heightUnit)) return false;
-    }
-    // Save weight as first biometric entry
-    const weightRaw = parseFloat(textControlById('chat-onboard-weight')?.value || '');
-    const weightUnit = selectById('chat-onboard-weight-unit')?.value || 'kg';
-    if (weightRaw) {
-      if (!state.importedData!.biometrics) state.importedData!.biometrics = { weight: [], bp: [], pulse: [] };
-      const today = new Date().toISOString().slice(0, 10);
-      const w = state.importedData!.biometrics.weight || [];
-      state.importedData!.biometrics.weight = w.filter(e => e.date !== today);
-      state.importedData!.biometrics.weight.push({ date: today, value: weightRaw, unit: weightUnit, source: 'manual' });
-      state.importedData!.biometrics.weight.sort((a, b) => a.date.localeCompare(b.date));
-      if (!await saveImportedData()) return false;
-    }
-    if (!await saveChatLocation()) return false;
-  } catch {
-    return false;
-  }
-  renderProfileButton();
-  _updateOnboardNextBtn();
-  if (advance && name && state.profileSex) {
-    const shouldContinueOnboarding = !state.importedData?.entries?.length && !isAIPaused();
-    if (sessionStorage.getItem(forcedStepKey()) === 'profile' && shouldContinueOnboarding) {
+const profileOnboarding = createChatProfileOnboarding({
+  height: setProfileHeight,
+  saved(advance) {
+    renderProfileButton();
+    _updateOnboardNextBtn();
+    if (!advance) return;
+    if (!state.importedData?.entries?.length && !isAIPaused()) {
       goToOnboardingStep(hasChatResponseBackend() ? 3 : 2);
-      return true;
+      return;
     }
-    if (shouldContinueOnboarding) {
-      goToOnboardingStep(hasChatResponseBackend() ? 3 : 2);
-      return true;
-    }
-    // Profile complete — advance to next stage
     clearForcedOnboardingStep();
     updateChatNudge();
     renderChatMessages();
-  }
-  return true;
-}
+  },
+});
+
+export function _updateOnboardNextBtn() { profileOnboarding.updateNext(); }
+export function setChatProfileSex(sex: string | null, source?: Element) { return profileOnboarding.setSex(sex, source); }
+export function onboardHeightUnitChanged(source?: Element) { profileOnboarding.heightUnitChanged(source); }
+export function saveChatLocation(source?: Element) { return profileOnboarding.saveLocation(source); }
+export function saveChatProfile(advance?: boolean, source?: Element) { return profileOnboarding.saveProfile(advance, source); }
 
 export function showCycleNoMensesOptions() {
   const options = document.getElementById('chat-onboard-cycle-options');
@@ -454,10 +356,10 @@ export function _updatePeriodBtn() {
     const fmt = (d: Date) => d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
     if (days <= 10) {
       preview.textContent = `→ ${fmt(s)} – ${fmt(e)} (${days} day${days !== 1 ? 's' : ''})`;
-      preview.style.color = 'var(--text-muted)';
+      preview.style.color = tsStateStyles.mutedColor;
     } else {
       preview.textContent = `→ ${fmt(s)} – ${fmt(e)} (${days} days) — that seems long, double-check?`;
-      preview.style.color = 'var(--yellow)';
+      preview.style.color = tsStateStyles.cautionColor;
     }
   } else if (preview) {
     preview.textContent = '';
@@ -534,137 +436,15 @@ function _refreshDashboardCycle() {
   }
 }
 
-function getOnboardingProgressMeta(currentStep: number) {
-  const providerConnected = hasChatResponseBackend();
-  const labels: Record<number, string> = {
-    1: 'Basics',
-    2: 'AI setup',
-    3: 'Add-ons',
-    4: 'Context',
-  };
-  if (providerConnected && currentStep === 1) {
-    return {
-      step: 1,
-      total: 3,
-      label: labels[1]!,
-    };
-  }
-  if (providerConnected && currentStep >= 3) {
-    return {
-      step: currentStep - 1,
-      total: 3,
-      label: labels[currentStep] || 'Setup',
-    };
-  }
-  return {
-    step: currentStep,
-    total: 4,
-    label: labels[currentStep] || 'Setup',
-  };
-}
-
-// Thin progress strip shown at the top of each onboarding chat message.
-// AI-connected users skip the AI setup phase, so the displayed progress is
-// mapped to a 3-step path while navigation still uses the internal 4 routes.
+/** Displayed progress skips provider setup when a response backend is already connected. */
 export function _renderOnboardCrumbs(currentStep: number) {
-  const progress = getOnboardingProgressMeta(currentStep);
-  const dots = Array.from({ length: progress.total }, (_, i) => `<span class="chat-onboard-crumb${i + 1 <= progress.step ? ' active' : ''}"></span>`).join('');
-  const previousStep = currentStep === 3 && hasChatResponseBackend() ? 1 : currentStep - 1;
-  const back = currentStep > 1
-    ? `<button type="button" class="chat-onboard-back-btn" ${chatOnboardingActionAttrs('go-onboarding-step', { step: previousStep })} aria-label="Back to previous onboarding step" title="Previous step">&larr;</button>`
-    : '';
-  return `<div class="chat-onboard-crumbs" aria-label="Onboarding step ${progress.step} of ${progress.total}: ${escapeAttr(progress.label)}">
-    <span class="chat-onboard-crumbs-main">${back}<span class="chat-onboard-crumbs-label">Step ${progress.step} of ${progress.total} &middot; ${escapeHTML(progress.label)}</span></span>
-    <span class="chat-onboard-crumbs-dots" aria-hidden="true">${dots}</span>
-  </div>`;
+  return renderProgressHTML({ progress: projectOnboardingProgress(currentStep, hasChatResponseBackend()) });
 }
 
-// Plain-language provider branches. Session state survives refreshes, while a new session starts at the root.
+/** Extension-owned quiz HTML keeps its established slot/action contract. */
 export function _renderProviderQuiz(branch: string, name: string) {
-  const safeName = escapeHTML(name);
   const extensionQuiz = renderAppExtensionOnboardingSlot('provider-quiz', { actionAttrs: chatOnboardingActionAttrs, branch, name });
-  if (extensionQuiz) return extensionQuiz;
-  if (branch === 'cli') {
-    return `<div class="chat-provider-quiz"><button type="button" class="chat-quiz-back" ${chatOnboardingActionAttrs('back-to-provider-quiz')} aria-label="Back to provider options">&larr; Back</button>
-      <p><strong>Use an existing AI account &rarr; CLI agents</strong></p><p style="font-size:13px">getbased scans this computer for configured agents such as Codex, OpenCode, Hermes, Grok, and OpenClaw. You need a supported CLI installed and signed in, plus getbased Companion. We’ll check for an existing Companion connection first and guide you through any missing setup.</p><button type="button" class="chat-setup-btn" ${chatOnboardingActionAttrs('open-provider-settings', { provider: 'cli' })}>Find my installed agents &rarr;</button><p style="font-size:11px;color:var(--text-muted);margin-top:10px">Choose any ready agent, then pick its model and reasoning level directly in getbased. Health-data changes always remain reviewable drafts.</p></div>`;
-  }
-  if (branch === 'card') {
-    return `<div class="chat-provider-quiz"><button type="button" class="chat-quiz-back" ${chatOnboardingActionAttrs('back-to-provider-quiz')} aria-label="Back to provider options">&larr; Back</button>
-      <p><strong>Pay with a card &rarr; OpenRouter</strong></p>
-      <p style="font-size:13px">Click below &mdash; log in with Google or email, top up with your card, you&rsquo;re done. You&rsquo;ll come right back here.</p>
-      <button type="button" class="or-oauth-btn" ${chatOnboardingActionAttrs('start-openrouter-oauth')}>Connect with OpenRouter</button>
-      <div style="font-size:11px;color:var(--text-muted);margin-top:10px;text-align:center">
-        <button type="button" class="chat-quiz-link" ${chatOnboardingActionAttrs('open-provider-settings', { provider: 'openrouter' })}>or paste a key manually</button>
-      </div></div>`;
-  }
-  if (branch === 'local') {
-    return `<div class="chat-provider-quiz"><button type="button" class="chat-quiz-back" ${chatOnboardingActionAttrs('back-to-provider-quiz')} aria-label="Back to provider options">&larr; Back</button>
-      <p><strong>Runs on your computer &rarr; Local AI</strong></p>
-      <p style="font-size:13px">Install <a href="https://ollama.com" target="_blank" rel="noopener" style="color:var(--accent)">Ollama</a>, <a href="https://lmstudio.ai" target="_blank" rel="noopener" style="color:var(--accent)">LM Studio</a>, or <a href="https://jan.ai" target="_blank" rel="noopener" style="color:var(--accent)">Jan</a> on your computer &mdash; they run AI models locally. Nothing leaves your machine, free forever. After install, point getbased at it.</p>
-      <button type="button" class="chat-setup-btn" ${chatOnboardingActionAttrs('open-provider-settings', { provider: 'ollama' })}>Open Local AI setup &rarr;</button></div>`;
-  }
-  if (branch === 'bitcoin') {
-    return `<div class="chat-provider-quiz"><button type="button" class="chat-quiz-back" ${chatOnboardingActionAttrs('back-to-provider-quiz')} aria-label="Back to provider options">&larr; Back</button>
-      <p><strong>Pay with Bitcoin &rarr; 2 options</strong></p>
-      <div class="chat-quiz-options" style="margin-top:8px">
-        <button type="button" class="chat-quiz-option" ${chatOnboardingActionAttrs('open-provider-settings', { provider: 'routstr' })}>
-          <span class="chat-quiz-body">
-            <strong>Routstr</strong>
-            <span>Lightning + Cashu eCash. No account. Top up with a QR code.</span>
-          </span>
-          <span class="chat-quiz-arrow" aria-hidden="true">&rarr;</span>
-        </button>
-        <button type="button" class="chat-quiz-option" ${chatOnboardingActionAttrs('open-provider-settings', { provider: 'ppq' })}>
-          <span class="chat-quiz-body">
-            <strong>PPQ</strong>
-            <span>300+ models. Pay with BTC, Lightning, Monero, or Litecoin.</span>
-          </span>
-          <span class="chat-quiz-arrow" aria-hidden="true">&rarr;</span>
-        </button>
-      </div></div>`;
-  }
-  // Root question
-  return `<div class="chat-provider-quiz"><p>Welcome, ${safeName}! Next, pick how you want to power the AI:</p>
-    <div class="chat-quiz-options">
-      <button type="button" class="chat-quiz-option chat-quiz-recommended" ${chatOnboardingActionAttrs('set-provider-branch', { 'provider-branch': 'card' })}>
-        <span class="chat-quiz-icon" aria-hidden="true">&#128179;</span>
-        <span class="chat-quiz-body">
-          <strong>Easiest &mdash; pay with a card</strong>
-          <span>One-click login through OpenRouter. <em class="chat-quiz-rec">Recommended</em></span>
-        </span>
-        <span class="chat-quiz-arrow" aria-hidden="true">&rarr;</span>
-      </button>
-      <button type="button" class="chat-quiz-option" ${chatOnboardingActionAttrs('set-provider-branch', { 'provider-branch': 'cli' })}>
-        <span class="chat-quiz-icon" aria-hidden="true"><svg width="28" height="28" viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4.5" y="6.5" width="23" height="19" rx="4.5"/><path d="m10 12 4 4-4 4M17 20h5"/></svg></span><span class="chat-quiz-body"><strong>Use an AI subscription I already have</strong><span>Requires an installed CLI, sign-in, and getbased Companion.</span></span><span class="chat-quiz-arrow" aria-hidden="true">&rarr;</span>
-      </button>
-      <button type="button" class="chat-quiz-option" ${chatOnboardingActionAttrs('set-provider-branch', { 'provider-branch': 'local' })}>
-        <span class="chat-quiz-icon" aria-hidden="true">&#128274;</span>
-        <span class="chat-quiz-body">
-          <strong>Most private &mdash; runs on my computer</strong>
-          <span>No internet calls, free forever. Needs a desktop app.</span>
-        </span>
-        <span class="chat-quiz-arrow" aria-hidden="true">&rarr;</span>
-      </button>
-      <button type="button" class="chat-quiz-option" ${chatOnboardingActionAttrs('set-provider-branch', { 'provider-branch': 'bitcoin' })}>
-        <span class="chat-quiz-icon" aria-hidden="true">&#8383;</span>
-        <span class="chat-quiz-body">
-          <strong>No account &mdash; pay with Bitcoin</strong>
-          <span>Anonymous. Top up with sats or eCash.</span>
-        </span>
-        <span class="chat-quiz-arrow" aria-hidden="true">&rarr;</span>
-      </button>
-      <button type="button" class="chat-quiz-option" ${chatOnboardingActionAttrs('open-ai-settings')}>
-        <span class="chat-quiz-icon" aria-hidden="true">&#128273;</span>
-        <span class="chat-quiz-body">
-          <strong>Advanced: I have an API key</strong>
-          <span>Skip ahead to AI settings to paste it.</span>
-        </span>
-        <span class="chat-quiz-arrow" aria-hidden="true">&rarr;</span>
-      </button>
-    </div>
-    <div class="chat-quiz-skip">
-      <button type="button" class="chat-quiz-skip-btn" ${chatOnboardingActionAttrs('skip-provider-setup')}>Try the app first &mdash; I&rsquo;ll connect AI later</button>
-    </div></div>`;
+  return extensionQuiz || renderProviderHTML({ branch, name });
 }
 
 export function setProviderQuizBranch(branch: string) {
