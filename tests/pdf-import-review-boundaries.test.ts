@@ -2,7 +2,7 @@
 
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { closeImportModal, getExcludedImportIndices, showImportPreview } from '../js/pdf-import-review.js';
+import { closeImportModal, getExcludedImportIndices, showImportPreview, revealImportReviewErrors, setImportReviewFilter, toggleImportRow } from '../js/pdf-import-review.js';
 import { closeModalOverlay, openAppendedModalOverlay, openModalOverlay, removeModalOverlay } from '../js/modal-lifecycle.js';
 
 const ownedOverlays: HTMLElement[] = [];
@@ -94,4 +94,30 @@ describe('PDF import review boundaries', () => {
     expect(debugNote?.querySelector('img')).toBeNull();
     expect(debugNote?.textContent).toContain('<img src=x onerror=alert(1)>');
   });
+});
+
+it('reveals every duplicate row and clears errors immediately after correction or exclusion', () => {
+  document.body.innerHTML = '<div id="import-modal-overlay"><div id="import-modal"></div></div>';
+  const preview = {date: '2026-07-31', fileName: 'safe.pdf', markers: [
+    {rawName: 'first', matched: true, mappedKey: 'iron.ferritin', value: 12, unit: 'ng/ml'},
+    {rawName: 'second', matched: false, suggestedKey: 'iron.ferritin', value: 13, unit: 'ng/ml'},
+  ]};
+  showImportPreview(preview);
+  const matched = document.querySelector<HTMLElement>('[data-filter="matched"]')!;
+  setImportReviewFilter(matched);
+  const rows = [...document.querySelectorAll<HTMLElement>('tr[data-import-idx]')];
+  expect(rows.map(row => row.hidden)).toEqual([false, true]);
+  revealImportReviewErrors();
+  expect(rows.map(row => row.hidden)).toEqual([false, false]);
+  expect(rows.map(row => row.getAttribute('aria-invalid'))).toEqual(['true', 'true']);
+  toggleImportRow(rows[1]!.querySelector<HTMLElement>('.import-exclude-btn')!);
+  expect(rows.every(row => !row.hasAttribute('aria-invalid'))).toBe(true);
+  toggleImportRow(rows[1]!.querySelector<HTMLElement>('.import-exclude-btn')!);
+  expect(rows.every(row => row.getAttribute('aria-invalid') === 'true')).toBe(true);
+  preview.markers[1]!.suggestedKey = 'custom.second';
+  const input = rows[1]!.querySelector<HTMLInputElement>('.import-value-input')!;
+  input.value = '15';
+  input.dispatchEvent(new Event('change', {bubbles: true}));
+  expect(rows.every(row => !row.hasAttribute('aria-invalid'))).toBe(true);
+  expect(rows.map(row => row.querySelector('.import-row-number')?.textContent)).toEqual(['1', '2']);
 });

@@ -1759,7 +1759,9 @@ test('PDF import covers extraction errors drop zone setup and batch retry', asyn
       dropZone.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
       outcomes.setupDropZoneClickRoutesToPdfInput = inputClicks >= 1;
 
-      dropZone.dispatchEvent(new DragEvent('dragover', { bubbles: true, cancelable: true }));
+      const fileDrag = new DataTransfer();
+      fileDrag.items.add(invalidPdf);
+      dropZone.dispatchEvent(new DragEvent('dragover', { bubbles: true, cancelable: true, dataTransfer: fileDrag }));
       const dragClassAdded = dropZone.classList.contains('drag-over');
       dropZone.dispatchEvent(new DragEvent('dragleave', { bubbles: true, cancelable: true }));
       outcomes.setupDropZoneDragEventsToggleClass = dragClassAdded

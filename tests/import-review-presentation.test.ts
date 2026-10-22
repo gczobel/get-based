@@ -25,6 +25,7 @@ it('preserves prepared row order and original indexes with status-specific initi
   expect(rows.map(row => row.dataset.importIdx)).toEqual(['2', '0', '1']);
   expect(rows.map(row => row.dataset.importStatus)).toEqual(['matched', 'new', 'unmatched']);
   expect(rows.map(row => row.querySelector('.import-status-dot')?.getAttribute('aria-label'))).toEqual(['Matched', 'New', 'Unmatched']);
+  expect(rows.map(row => row.querySelector('.import-row-number')?.textContent)).toEqual(['3', '1', '2']);
   expect(rows[0]!.querySelector<HTMLInputElement>('.import-value-input')?.value).toBe('0');
   expect(rows[0]!.querySelector('.import-map-cell')?.textContent).toBe('iron.ferritin');
   expect(rows[0]!.querySelector('.import-map-picker-btn')).toBeNull();

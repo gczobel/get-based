@@ -28,21 +28,23 @@ export async function isPdfByMagic(file: File) {
 // routed to the import pipeline instead of silently rejected.
 export async function classifyImportFiles(files: File[] | FileList | null | undefined, deps: ImportFileClassifierDeps = {}) {
   const fileList = Array.from(files || []);
-  const jsonCandidates = fileList.filter(f => f.name.endsWith('.json') || f.type === 'application/json');
+  const jsonCandidates = fileList.filter(f => /\.json$/i.test(f.name) || f.type === 'application/json');
   const jsonFiles: File[] = [];
   const cycleFiles: File[] = [];
   for (const file of jsonCandidates) {
     if (deps.isCycleImportFile && await deps.isCycleImportFile(file)) cycleFiles.push(file);
     else jsonFiles.push(file);
   }
-  const pdfFiles = fileList.filter(f => f.name.endsWith('.pdf') || f.type === 'application/pdf');
+  const pdfFiles = fileList.filter(f => /\.pdf$/i.test(f.name) || f.type === 'application/pdf');
   const imageFiles = fileList.filter(f => /\.(jpe?g|png|webp)$/i.test(f.name) || f.type?.startsWith('image/'));
-  const dnaFiles = fileList.filter(f => deps.isDNAFile && deps.isDNAFile(f));
+  const dnaFiles = fileList.filter(f => !jsonCandidates.includes(f) && !pdfFiles.includes(f) && !imageFiles.includes(f)
+    && deps.isDNAFile && deps.isDNAFile(f));
   const textFiles: File[] = [];
   const unmatched = fileList.filter(f => !jsonCandidates.includes(f) && !pdfFiles.includes(f) && !imageFiles.includes(f) && !dnaFiles.includes(f));
   for (const f of unmatched) {
     if (/\.(txt|csv)$/i.test(f.name)) {
       if (deps.isDNAFileByContent && await deps.isDNAFileByContent(f)) dnaFiles.push(f);
+      else if (deps.isCycleImportFile && await deps.isCycleImportFile(f)) cycleFiles.push(f);
       else textFiles.push(f);
     } else if (isXlsxFile(f)) {
       textFiles.push(f);

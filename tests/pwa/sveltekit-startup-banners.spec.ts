@@ -17,6 +17,14 @@ const sheets=['css/app-shell.css','css/redesign-shell.css','css/modal-shared.css
 type Artifact=Awaited<ReturnType<typeof artifactInputs>>;
 interface EventRow {action:string;trusted:boolean;type:string;key:string|null;pointerType:string|null}
 interface ProbeWindow extends Window {startupBannersPwaEvents:EventRow[];startupBannersPwaCsp(value:string):Promise<void>}
+// Assert the document already loaded by reload; calling ready() would navigate again.
+async function currentDocumentReady(page:Page){
+  await expect(page.locator('html[data-app-ready][data-shell-framework="sveltekit"]')).toBeAttached({timeout:30000});
+  await page.evaluate(()=>navigator.serviceWorker.ready.then(()=>true));
+  await expect.poll(()=>page.evaluate(()=>!!navigator.serviceWorker.controller)).toBe(true);
+  // Desktop returning-user Chat starts on its own timer, after networkidle can fire.
+  await expect(page.locator('body')).not.toHaveClass(/\bchat-autostart-reserved\b/);
+}
 async function preference(page:Page){return page.evaluate(()=>({seen:localStorage.getItem('labcharts-analytics-consent-seen'),disabled:localStorage.getItem('labcharts-analytics-disabled'),
   fullStorage:Object.fromEntries(Object.keys(localStorage).sort().map(key=>[key,localStorage.getItem(key)]))}));}
 async function rawUpdateCache(page:Page,artifact:Artifact,required:string[]){
@@ -90,9 +98,9 @@ test('static startup banner first construction offline and two zero-page cold la
   const phases:unknown[]=[],boundaries:unknown[]=[];
   try{
     await ready(page,server.origin);
-    // Settle this document's native imports before deliberately navigating it
-    // again; Firefox reports aborted imports from the retired page as pageerrors.
-    await page.waitForLoadState('networkidle');await ready(page,server.origin);
+    // Keep the first warm document and settle the actual delayed Chat startup.
+    // A redundant navigation can abort its module import even after networkidle.
+    await page.waitForLoadState('networkidle');await currentDocumentReady(page);
     const close=page.getByRole('button',{name:'Close chat',exact:true});if(await close.isVisible())await activate(page,close);
     await expect(page.locator('#analytics-consent-banner,#version-update-banner')).toHaveCount(0);
     const before=await profile(page,artifact.state),beforePreference=await preference(page),cache=await cacheReceipt(page,artifact),raw=await rawUpdateCache(page,artifact,requiredRaw);
@@ -103,10 +111,11 @@ test('static startup banner first construction offline and two zero-page cold la
     const armed=await preference(page);expect(armed.seen).toBeNull();expect(armed.disabled).toBe('false');
     await server.close();stopped=true;await expect(fetch(server.origin+'/index.html')).rejects.toThrow();
     await page.waitForLoadState('networkidle');await page.reload({waitUntil:'load'});
-    await page.waitForLoadState('networkidle');await ready(page,server.origin);
+    await page.waitForLoadState('networkidle');await currentDocumentReady(page);
     for(let phase=0;phase<3;phase++){
       const beforeNewPage=phase?context.pages().length:null;
       if(phase){expect(beforeNewPage).toBe(0);page=await context.newPage();expect(context.pages()).toHaveLength(1);await ready(page,server.origin);}
+      await currentDocumentReady(page);
       const closeChat=page.getByRole('button',{name:'Close chat',exact:true});if(await closeChat.isVisible())await activate(page,closeChat);
       expect(await profile(page,artifact.state)).toEqual(before);
       if(phase===0)await expect(page.locator('#analytics-consent-banner')).toBeVisible({timeout:10000});

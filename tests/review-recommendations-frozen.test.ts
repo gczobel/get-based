@@ -104,11 +104,23 @@ function structure(html: string): unknown {
   }
   return [...root.children].map(element);
 }
+// Keep the migration receipt immutable. The issue1663 feature adds exactly one original-index column.
+function expectedWithRowNumbers(sample: Sample): string {
+  if (!sample.kind.startsWith('review')) return sample.html;
+  const root = document.createElement('div'); root.innerHTML = sample.html;
+  const heading = document.createElement('th'); heading.scope = 'col'; heading.title = 'Original import row'; heading.textContent = 'Row';
+  root.querySelector('.import-table thead tr')!.prepend(heading);
+  for (const row of root.querySelectorAll<HTMLElement>('.import-table tbody tr[data-import-idx]')) {
+    const cell = document.createElement('td'); cell.className = 'import-row-number'; cell.dataset.label = 'Row';
+    cell.title = 'Original import row'; cell.textContent = String(Number(row.dataset.importIdx) + 1); row.prepend(cell);
+  }
+  return root.innerHTML;
+}
 it.each(fixture.samples)('preserves original $kind/$name complete structure, control state and literal text', sample => {
   const frozen = JSON.stringify(sample), current = authored(sample);
-  expect(structure(current)).toEqual(structure(sample.html));
+  expect(structure(current)).toEqual(structure(expectedWithRowNumbers(sample)));
   expect(JSON.stringify(sample)).toBe(frozen);
-  const before = document.createElement('div'); before.innerHTML = sample.html;
+  const before = document.createElement('div'); before.innerHTML = expectedWithRowNumbers(sample);
   const after = document.createElement('div'); after.innerHTML = current;
   const originals = [...before.querySelectorAll('*')], actuals = [...after.querySelectorAll('*')];
   expect(actuals.length).toBe(originals.length);

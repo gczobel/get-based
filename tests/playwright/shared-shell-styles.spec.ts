@@ -22,6 +22,10 @@ test(`shared Shell Tailwind preserves native header/footer geometry, colors, con
   localStorage.setItem('labcharts-changelog-seen',version);
  },appVersion);
  const errors:string[]=[];page.on('pageerror',error=>errors.push(error.message));
+ async function settleShellTransitions(){
+  await expect.poll(()=>page.locator('.header,.app-footer').evaluateAll(roots=>roots.flatMap(root=>root.getAnimations({subtree:true}))
+   .filter(animation=>animation instanceof CSSTransition&&animation.playState!=='finished'&&animation.playState!=='idle').length)).toBe(0);
+ }
  async function snapshots(){
   await page.goto('/app');await page.evaluate(()=>document.fonts.ready);
   const values=[];
@@ -36,7 +40,7 @@ test(`shared Shell Tailwind preserves native header/footer geometry, colors, con
     await page.evaluate(()=>{if(document.activeElement instanceof HTMLElement)document.activeElement.blur();});
     // The transition duration is part of the byte-exact CSS assertion. Wait
     // until actual visual properties settle before comparing both sources.
-    await page.waitForTimeout(350);
+    await page.waitForTimeout(350);await settleShellTransitions();
     const normal=await page.evaluate(()=>{
      const properties=['display','position','box-sizing','width','height','min-width','max-width','padding','margin','border','border-radius','background','color','font-family','font-size','font-weight','line-height','gap','align-items','justify-content','overflow','visibility','opacity','transform','outline','box-shadow','z-index'];
      return [...document.querySelectorAll<HTMLElement>('.header,.header *,.app-footer,.app-footer *')].map(node=>{
@@ -44,7 +48,7 @@ test(`shared Shell Tailwind preserves native header/footer geometry, colors, con
       return {tag:node.tagName,attributes:[...node.attributes].map(a=>[a.name,a.value]),text:node.childElementCount?null:node.textContent,rect:[rect.x,rect.y,rect.width,rect.height],style:properties.map(property=>[property,style.getPropertyValue(property)])};
      });
     });
-    await page.locator('.settings-btn').focus();await page.waitForTimeout(350);
+    await page.locator('.settings-btn').focus();await page.waitForTimeout(350);await settleShellTransitions();
     const focus=await page.locator('.settings-btn').evaluate(node=>{const style=getComputedStyle(node);return{focused:document.activeElement===node,outline:style.outline,shadow:style.boxShadow,color:style.color,background:style.background};});
     expect(focus.focused).toBe(true);expect(normal.length).toBeGreaterThan(20);
     values.push({theme,width,normal,focus});

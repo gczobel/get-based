@@ -7,6 +7,7 @@ import {fileURLToPath} from 'node:url';
 import {createTestPlan, baseAssetInventories, planningSourceFiles, testCommands, type TestPlan} from './pr-test-scope.mjs';
 import {readVendorManifest} from './project-owned-vendor.mjs';
 import {headlessBrowserEnvironment} from './headless-browser-environment.js';
+import {runtimePath} from './source-files.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const projects = ['kit-chromium', 'kit-firefox', 'kit-webkit', 'kit-mobile-webkit'] as const;
@@ -15,10 +16,22 @@ export interface NativeLane {id: string; suite: NativeSuite; engine: 'chromium' 
 export const KIT_OPFS_FILE = 'tests/pwa/sveltekit-knowledge-base.spec.ts';
 export interface KitLane {id: string; project: typeof projects[number]; engine: 'chromium' | 'firefox' | 'webkit'; shard: string; runner: 'ubuntu-latest' | 'macos-15'; caseScope: 'all' | 'webkit-standard' | 'webkit-opfs'}
 export interface CiPlan {
-  schemaVersion: 1; full: boolean; affected: TestPlan | null;
+  schemaVersion: 2; full: boolean; affected: TestPlan | null;
+  deferred: {native: string[]; kitProjects: string[]};
   unit: boolean; performance: boolean; native: boolean; kit: boolean;
   nativeMatrix: {include: NativeLane[]}; kitMatrix: {include: KitLane[]};
   jobs: {prepare: true; unit: true; native: boolean; kit: boolean; performance: boolean; coverage: boolean};
+}
+/** Shipping Chromium is the per-change browser gate. Keep native-only behavior,
+ * explicitly edited native cases and native harness changes on the same head.
+ * Other native regressions and cross-engine shipping acceptance run nightly/full. */
+function nativeSelection(affected: TestPlan): TestPlan {
+  const changed = new Set(affected.changedFiles.map(runtimePath));
+  const nativeHarness = [...changed].some(file => /^(?:playwright(?:\.(?:firefox|pwa|display-pilot))?\.config\.js|dev-server\.js|scripts\/(?:headless-browser-environment\.js|ci-workers\.mjs))$/.test(file));
+  if (!affected.kit.length || nativeHarness) return affected;
+  const required = new Set(affected.nativeRequired || []);
+  const explicit = (files: string[]) => files.filter(file => changed.has(runtimePath(file)) || required.has(file));
+  return {...affected, browser: explicit(affected.browser), firefox: explicit(affected.firefox), pwa: explicit(affected.pwa)};
 }
 /** Keep stateful browser suites serial within a lane; isolated runners provide
  * parallelism. Only independent Chromium cases share a runner's worker pool. */
@@ -26,20 +39,21 @@ export function createCiPlan(full: boolean, affected: TestPlan | null): CiPlan {
   assert(typeof full === 'boolean', 'An explicit full-suite decision');
   assert(full ? affected === null : affected !== null, 'Affected selection is required only for PR scope');
   if (affected) assert.equal(affected.uncovered.length, 0, 'Every changed runtime must have test scope');
+  const selectedNative = affected ? nativeSelection(affected) : null;
   const native: NativeLane[] = [];
   const add = (suite: NativeSuite, engine: NativeLane['engine'], shards = 1) => {
     for (let shard = 1; shard <= shards; shard++) native.push({id: `${suite}-${shard}-of-${shards}`, suite, engine, shard: `${shard}/${shards}`, coverage: full && suite === 'browser'});
   };
-  if (full || affected!.browser.length) add('browser', 'chromium', full ? 4 : Math.min(4, affected!.browser.length));
-  if (full || affected!.firefox.length) add('firefox', 'firefox');
-  if (full || affected!.pwa.length) add('pwa', 'all');
-  if (full || affected!.browser.some(file => /(?:^|\/)settings-display-pilot\.spec\.[jt]s$/.test(file)) || affected!.pwa.some(file => /(?:^|\/)settings-display-pilot\.spec\.[jt]s$/.test(file))) add('display', 'all');
+  if (full || selectedNative!.browser.length) add('browser', 'chromium', full ? 4 : Math.min(4, selectedNative!.browser.length));
+  if (full || selectedNative!.firefox.length) add('firefox', 'firefox');
+  if (full || selectedNative!.pwa.length) add('pwa', 'all');
+  if (full || selectedNative!.browser.some(file => /(?:^|\/)settings-display-pilot\.spec\.[jt]s$/.test(file)) || selectedNative!.pwa.some(file => /(?:^|\/)settings-display-pilot\.spec\.[jt]s$/.test(file))) add('display', 'all');
   const kit: KitLane[] = [];
-  for (const project of projects) {
+  for (const project of full ? projects : ['kit-chromium'] as const) {
     const webkit = project === 'kit-webkit' || project === 'kit-mobile-webkit';
     const selected = affected?.kit || [];
     const standardCount = webkit ? selected.filter(file => file !== KIT_OPFS_FILE).length : selected.length;
-    const shards = full ? 2 : Math.min(2, standardCount);
+    const shards = full ? 2 : Math.min(4, standardCount);
     for (let shard = 1; shard <= shards; shard++) kit.push({
       id: `${project}-${shard}-of-${shards}`, project,
       engine: project === 'kit-chromium' ? 'chromium' : project === 'kit-firefox' ? 'firefox' : 'webkit',
@@ -52,12 +66,16 @@ export function createCiPlan(full: boolean, affected: TestPlan | null): CiPlan {
     });
   }
   return {
-    schemaVersion: 1, full, affected,
+    schemaVersion: 2, full, affected,
+    deferred: {
+      native: affected ? (['browser', 'firefox', 'pwa'] as const).flatMap(suite => affected[suite].filter(file => !selectedNative![suite].includes(file))) : [],
+      kitProjects: !full && affected!.kit.length ? projects.filter(project => project !== 'kit-chromium') : [],
+    },
     unit: true,
     performance: full || affected!.performance,
     native: native.length > 0, kit: kit.length > 0,
     nativeMatrix: {include: native}, kitMatrix: {include: kit},
-    jobs: {prepare: true, unit: true, native: native.length > 0, kit: kit.length > 0, performance: full || affected!.performance, coverage: full},
+    jobs: {prepare: true, unit: true, native: native.length > 0, kit: kit.length > 0, performance: full, coverage: full},
   };
 }
 export function ciPlanOutputs(plan: CiPlan): Record<string, string> {
@@ -69,7 +87,7 @@ export function ciPlanOutputs(plan: CiPlan): Record<string, string> {
 export function qualifiedPlan(value: unknown): CiPlan {
   assert(value && typeof value === 'object', 'A CI plan object');
   const plan = value as CiPlan;
-  assert.equal(plan.schemaVersion, 1, 'Known CI plan schema');
+  assert.equal(plan.schemaVersion, 2, 'Known CI plan schema');
   assert.deepEqual(plan, createCiPlan(plan.full, plan.affected), 'Exact derived CI scheduling plan');
   return plan;
 }
@@ -81,7 +99,7 @@ export function nativeLaneCommand(planValue: CiPlan, id: string): {command: stri
   if (lane.suite === 'display') command = ['playwright', 'test', '--config=playwright.display-pilot.config.js'];
   else if (plan.full) command = ['playwright', 'test', ...(lane.suite === 'browser' ? [] : [`--config=playwright.${lane.suite}.config.js`])];
   else {
-    const commands = testCommands(plan.affected!, lane.suite, file => file, {});
+    const commands = testCommands(nativeSelection(plan.affected!), lane.suite, file => file, {});
     assert.equal(commands.length, 1, 'Exactly one selected native browser command');
     command = commands[0]!;
   }
@@ -121,6 +139,7 @@ export function kitCollectionCommand(planValue: CiPlan): {command: string[]; env
     ? ['playwright', 'test', '--config=playwright.sveltekit.config.js']
     : testCommands(plan.affected!, 'kit', file => file, {})[0];
   assert(command, 'Selected Kit collection command');
+  if (!plan.full) command.push('--project=kit-chromium');
   return {command: [...command, '--list'], environment: {
     GETBASED_KIT_ACCEPTANCE_GUARD: '1',
     GETBASED_KIT_CASE_SCOPE: 'all',
@@ -172,6 +191,16 @@ function main() {
   const plan = createCiPlan(full, affected);
   fs.mkdirSync(path.dirname(output), {recursive: true}); fs.writeFileSync(output, JSON.stringify(plan, null, 2) + '\n');
   if (affected) fs.writeFileSync(path.join(path.dirname(output), 'affected.json'), JSON.stringify(affected, null, 2) + '\n');
+  const summary = [
+    '## CI execution scope',
+    `- Mode: ${full ? 'full regression and coverage' : 'affected merge gate'}`,
+    `- Browser jobs: ${plan.nativeMatrix.include.length + plan.kitMatrix.include.length}`,
+    `- Active test jobs: ${3 + plan.nativeMatrix.include.length + plan.kitMatrix.include.length + Number(plan.jobs.performance) + Number(plan.jobs.coverage)}`,
+  ];
+  summary.push(`- Native files deferred to nightly/full: ${plan.deferred.native.length}`);
+  summary.push(`- Shipping projects deferred to nightly/full: ${plan.deferred.kitProjects.join(', ') || 'none'}`);
+  summary.push('- Full regression remains available through manual Tests dispatch and release verification.');
+  if (process.env['GITHUB_STEP_SUMMARY']) fs.appendFileSync(process.env['GITHUB_STEP_SUMMARY'], summary.join('\n') + '\n');
   const outputs = ciPlanOutputs(plan);
   if (process.env['GITHUB_OUTPUT']) fs.appendFileSync(process.env['GITHUB_OUTPUT'], Object.entries(outputs).map(([key, value]) => `${key}=${value}\n`).join(''));
   process.stdout.write(JSON.stringify(outputs, null, 2) + '\n');

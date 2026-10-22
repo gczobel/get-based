@@ -46,6 +46,7 @@ import {
 import {
   closeImportModal,
   getExcludedImportIndices,
+  revealImportReviewErrors,
   getPendingImport,
   resolveImportPreviewBatch,
   showImportPreview,
@@ -258,6 +259,7 @@ export async function confirmImport() {
   const excludedIdxs = getExcludedImportIndices();
   const prepared = prepareImportCommit(result, excludedIdxs, state.importedData.customMarkers);
   if (prepared.error) {
+    revealImportReviewErrors();
     showNotification(prepared.error, 'error', 12000);
     if (confirmBtn) confirmBtn.disabled = false;
     return;

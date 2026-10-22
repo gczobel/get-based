@@ -42,10 +42,10 @@ describe('isolated CI matrix selection', () => {
       expect(environment['PLAYWRIGHT_SUITE_COVERAGE']).toBe('0');
     }
   });
-  it('selects all four Kit projects with one nonempty shard for a single affected acceptance file', () => {
+  it('selects one Chromium shipping job for a single affected acceptance file', () => {
     const file = 'tests/pwa/sveltekit-wearable-detail.spec.ts';
     const plan = createCiPlan(false, affected({kit: [file], performance: true}));
-    expect(plan.nativeMatrix.include).toEqual([]); expect(plan.kitMatrix.include).toHaveLength(4); expect(plan.performance).toBe(true);
+    expect(plan.nativeMatrix.include).toEqual([]); expect(plan.kitMatrix.include).toHaveLength(1); expect(plan.performance).toBe(true);
     expect(plan.kitMatrix.include.every(lane => lane.shard === '1/1')).toBe(true);
     for (const lane of plan.kitMatrix.include) expect(kitLaneCommand(plan, lane.id).command).toEqual(['playwright', 'test', file, '--config=playwright.sveltekit.config.js', `--project=${lane.project}`, `--shard=${lane.shard}`]);
   });
@@ -103,18 +103,18 @@ it('collects the same complete or affected Kit union without applying a matrix f
   expect(full.command).toEqual(['playwright', 'test', '--config=playwright.sveltekit.config.js', '--list']);
   const files = ['tests/pwa/sveltekit.spec.ts', 'tests/pwa/sveltekit-wearable-detail.spec.ts'];
   const selected = kitCollectionCommand(createCiPlan(false, affected({kit: files})));
-  expect(selected.command).toEqual(['playwright', 'test', ...files, '--config=playwright.sveltekit.config.js', '--list']);
+  expect(selected.command).toEqual(['playwright', 'test', ...files, '--config=playwright.sveltekit.config.js', '--project=kit-chromium', '--list']);
   expect(selected.environment['GETBASED_KIT_ACCEPTANCE_GUARD']).toBe('1');
   expect(selected.environment['GETBASED_KIT_CASE_SCOPE']).toBe('all');
   expect(selected.environment['GETBASED_KIT_GUARD_REPORT']).toBe(path.join(process.cwd(), '.local-notes/ci/kit-collection.json'));
   expect(() => kitCollectionCommand(createCiPlan(false, affected()))).toThrow('Kit collection requires selected acceptance cases');
 });
 
-it('bounds affected Kit shards by selected file groups while preserving every selected file and project', () => {
-  for (const count of [1, 2, 3]) {
+it('bounds affected Chromium shards while preserving every selected shipping file', () => {
+  for (const count of [1, 2, 3, 4, 8]) {
     const files = Array.from({length: count}, (_, index) => `tests/pwa/sveltekit-feature-${index}.spec.ts`);
     const plan = createCiPlan(false, affected({kit: files}));
-    expect(plan.kitMatrix.include).toHaveLength(4 * Math.min(2, count));
+    expect(plan.kitMatrix.include).toHaveLength(Math.min(4, count));
     for (const lane of plan.kitMatrix.include) {
       expect(kitLaneCommand(plan, lane.id).command).toEqual(['playwright', 'test', ...files, '--config=playwright.sveltekit.config.js', `--project=${lane.project}`, `--shard=${lane.shard}`]);
     }
@@ -137,12 +137,13 @@ describe('native Cocoa shipping acceptance placement', () => {
       if (lane.engine !== 'webkit') expect(lane.caseScope).toBe('all');
     }
   });
-  it.each([[], ['tests/pwa/sveltekit.spec.ts'], ['tests/pwa/sveltekit.spec.ts', 'tests/pwa/sveltekit-wearable-detail.spec.ts']].map(companions => ({companions})))('partitions KB and $companions without dropping a browser identity', ({companions}) => {
+  it.each([[], ['tests/pwa/sveltekit.spec.ts'], ['tests/pwa/sveltekit.spec.ts', 'tests/pwa/sveltekit-wearable-detail.spec.ts']].map(companions => ({companions})))('retains KB and $companions in the Chromium merge gate, with Cocoa deferred explicitly', ({companions}) => {
     const files = [KIT_OPFS_FILE, ...companions];
     const plan = createCiPlan(false, affected({kit: files}));
     const cocoa = plan.kitMatrix.include.filter(lane => lane.caseScope === 'webkit-opfs');
-    expect(cocoa).toHaveLength(2);
-    for (const project of ['kit-chromium', 'kit-firefox', 'kit-webkit', 'kit-mobile-webkit']) {
+    expect(cocoa).toHaveLength(0);
+    expect(plan.deferred.kitProjects).toEqual(['kit-firefox', 'kit-webkit', 'kit-mobile-webkit']);
+    for (const project of ['kit-chromium']) {
       const lanes = plan.kitMatrix.include.filter(lane => lane.project === project);
       expect(lanes.length).toBeGreaterThan(0);
       const groups = new Map(lanes.map(lane => [lane.caseScope, kitLaneCommand(plan, lane.id).command.filter(arg => arg.endsWith('.spec.ts'))]));
@@ -169,4 +170,59 @@ describe('native Cocoa shipping acceptance placement', () => {
       expect(() => kitLaneCommand(corrupted, corrupted.kitMatrix.include[0]!.id)).toThrow('Exact derived CI scheduling plan');
     }
   });
+});
+
+
+describe('small merge gate and complete scheduled verification', () => {
+  const shipping = ['tests/pwa/sveltekit.spec.ts', KIT_OPFS_FILE, 'tests/pwa/sveltekit-wallet.spec.ts', 'tests/pwa/sveltekit-light.spec.ts'];
+  const browser = Array.from({length: 100}, (_, index) => `tests/playwright/feature-${index}.spec.ts`);
+  it('reduces broad UI changes to seven active test jobs and records all deferred native cases', () => {
+    const plan = createCiPlan(false, affected({changedFiles: ['css/theme.css'], kit: shipping, browser, performance: true}));
+    expect(plan.nativeMatrix.include).toEqual([]);
+    expect(plan.kitMatrix.include).toHaveLength(4);
+    expect(plan.kitMatrix.include.every(lane => lane.project === 'kit-chromium' && lane.runner === 'ubuntu-latest')).toBe(true);
+    expect(plan.deferred.native).toEqual(browser);
+    // prepare, unit, four shipping shards with inline resource budgets, and required aggregate.
+    expect(3 + plan.nativeMatrix.include.length + plan.kitMatrix.include.length + Number(plan.jobs.performance)).toBe(7);
+    expect(kitCollectionCommand(plan).command).toContain('--project=kit-chromium');
+  });
+  it('executes directly edited native regressions instead of treating them as deferred', () => {
+    const edited = browser[0]!;
+    const plan = createCiPlan(false, affected({changedFiles: [edited], browser, kit: shipping}));
+    expect(plan.nativeMatrix.include).toHaveLength(1);
+    expect(nativeLaneCommand(plan, plan.nativeMatrix.include[0]!.id).command).toEqual(['playwright', 'test', edited, '--shard=1/1']);
+    expect(plan.deferred.native).toEqual(browser.slice(1));
+  });
+  it.each(['playwright.config.ts', 'playwright.pwa.config.ts', 'dev-server.ts', 'scripts/headless-browser-environment.ts'])('retains native affected acceptance for changed harness %s', file => {
+    const plan = createCiPlan(false, affected({changedFiles: [file], browser, kit: shipping}));
+    expect(plan.nativeMatrix.include).toHaveLength(4);
+    expect(plan.deferred.native).toEqual([]);
+    for (const lane of plan.nativeMatrix.include) expect(nativeLaneCommand(plan, lane.id).command).toEqual(['playwright', 'test', ...browser, `--shard=${lane.shard}`]);
+  });
+  it('keeps native-only behavior on the current head even with no shipping acceptance counterpart', () => {
+    const plan = createCiPlan(false, affected({changedFiles: ['js/feature.ts'], browser}));
+    expect(plan.nativeMatrix.include).toHaveLength(4);
+    expect(plan.deferred).toEqual({native: [], kitProjects: []});
+  });
+  it('retains explicitly edited Firefox and PWA regressions alongside shipping Chromium', () => {
+    const firefox = 'tests/firefox/offline.spec.ts', pwa = 'tests/pwa/lifecycle.spec.ts';
+    const plan = createCiPlan(false, affected({changedFiles: [firefox, pwa], browser, firefox: [firefox], pwa: [pwa], kit: shipping}));
+    expect(plan.nativeMatrix.include.map(lane => lane.suite)).toEqual(['firefox', 'pwa']);
+    expect(plan.deferred.native).toEqual(browser);
+  });
+  it('defers nothing in full regression and retains the original complete matrix and coverage', () => {
+    const plan = createCiPlan(true, null);
+    expect(plan.deferred).toEqual({native: [], kitProjects: []});
+    expect(plan.nativeMatrix.include).toHaveLength(7);
+    expect(plan.kitMatrix.include).toHaveLength(10);
+    expect(plan.jobs.coverage).toBe(true);
+  });
+});
+
+it('retains native-only runtime coverage in a mixed shipping PR', () => {
+  const required = 'tests/playwright/native-only.spec.ts', deferred = 'tests/playwright/shared.spec.ts';
+  const plan = createCiPlan(false, affected({changedFiles: ['js/native-only.ts', 'js/shipping.ts'], nativeRequired: [required], browser: [required, deferred], kit: ['tests/pwa/sveltekit.spec.ts']}));
+  expect(plan.nativeMatrix.include).toHaveLength(1);
+  expect(nativeLaneCommand(plan, plan.nativeMatrix.include[0]!.id).command).toEqual(['playwright', 'test', required, '--shard=1/1']);
+  expect(plan.deferred.native).toEqual([deferred]);
 });

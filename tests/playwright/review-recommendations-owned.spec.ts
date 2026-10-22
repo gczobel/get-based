@@ -17,7 +17,7 @@ const originalCSS = frozen.styleBlocks.map(block => {
  const tree = postcss.parse(block.css);
  tree.walkRules(rule => {rule.selector = rule.selectors.map(selector => `:where([data-original]) ${selector}`).join(',');});
  return block.atRules.reduceRight((css, at) => `@${at.name} ${at.params}{${css}}`, tree.toString());
-}).join('\n');
+}).join('\n') + '\n:where([data-original]) .import-row-number{font-family:var(--font-mono);color:var(--text-muted)}';
 const widths = [320, 480, 767, 768, 769, 1100, 1440];
 const themes = ['default', 'dark', 'light', 'glass', 'synth-sunrise', 'neuromancer', 'cyberterm'];
 const properties = [
@@ -89,7 +89,18 @@ async function mountPairs(page: Page, samples: Sample[]) {
     const wrapper = document.createElement('div');
     if (sample.kind === 'review') wrapper.className = 'modal-overlay show';
     else {wrapper.style.cssText = 'display:contents'; if (sideKind === 'current' && !sample.kind.startsWith('recommendation')) wrapper.dataset.importReviewView = '';}
-    wrapper.innerHTML = html!; side.append(wrapper); pair.append(side);
+    wrapper.innerHTML = html!;
+    // The historical receipt stays immutable. Its expected copy adds only the
+    // approved original-index column and the two new-cell style properties.
+    if (sideKind === 'original' && sample.kind === 'review') {
+     const heading = document.createElement('th'); heading.scope = 'col'; heading.title = 'Original import row'; heading.textContent = 'Row';
+     wrapper.querySelector('.import-table thead tr')!.prepend(heading);
+     for (const row of wrapper.querySelectorAll<HTMLElement>('.import-table tbody tr[data-import-idx]')) {
+      const cell = document.createElement('td'); cell.className = 'import-row-number'; cell.dataset.label = 'Row';
+      cell.title = 'Original import row'; cell.textContent = String(Number(row.dataset.importIdx) + 1); row.prepend(cell);
+     }
+    }
+    side.append(wrapper); pair.append(side);
    }
    host.pairs.push(pair);
   }
@@ -137,7 +148,7 @@ for (const owner of ['review', 'controls', 'recommendations'] as const) {
    await page.setViewportSize({width, height: 1000});
    for (const theme of themes) {await setTheme(page, theme); await page.mouse.move(0, 0); expect(await compareAll(page), `${owner}/${width}/${theme}`).toEqual([]); comparisons += samples.length;}
   }
-  fs.writeFileSync(info.outputPath(`review-recs-${owner}-geometry.json`), JSON.stringify({owner, comparisons, samples: samples.length, widths, themes, properties}, null, 2));
+  fs.writeFileSync(info.outputPath(`review-recs-${owner}-geometry.json`), JSON.stringify({owner, featureDelta: owner === 'review' ? 'original-row-number-column' : null, comparisons, samples: samples.length, widths, themes, properties}, null, 2));
  });
 }
 

@@ -9,6 +9,10 @@ interface ServiceWorkerRuntimeConfig {
   resolveCacheName: () => Promise<string>;
   shouldUseNetworkOnly: (url: URL, sameOrigin: boolean) => boolean;
 }
+interface InstallCache {
+  match(url: string): Promise<Response | undefined>;
+  put(url: string, response: Response): Promise<void>;
+}
 interface ServiceWorkerGlobalScope {
   GetBasedServiceWorkerRuntime?: { install: typeof installServiceWorkerRuntime };
   GetBasedServiceWorkerAssets?: readonly string[];
@@ -114,17 +118,25 @@ function installServiceWorkerRuntime({
       statusText: response.statusText, headers});
   }
 
-  async function annotateRetryChunks(cache: Cache) {
+  class RetryCacheIntegrityError extends Error {
+    readonly canonical: string;
+    constructor(message: string, canonical: string) {
+      super(message);
+      this.canonical = canonical;
+    }
+  }
+
+  async function annotateRetryChunks(cache: InstallCache) {
     for (const [canonical, expectedHash] of verifiedRetryChunks) {
       const response = await cache.match(canonical);
-      if (response?.status !== 200) throw new Error('Missing successful retry canonical body');
+      if (response?.status !== 200) throw new RetryCacheIntegrityError('Missing successful retry canonical body', canonical);
       const bytes = await response.clone().arrayBuffer();
-      if (await retryBodyHash(bytes) !== expectedHash) throw new Error('Retry canonical body hash mismatch');
+      if (await retryBodyHash(bytes) !== expectedHash) throw new RetryCacheIntegrityError('Retry canonical body hash mismatch', canonical);
       // A terminated installation may leave an already annotated matching entry.
       // It is safe to resume only the exact same build/path/body declaration.
       if (response.headers.has(RETRY_PROOF_HEADER)) {
         if (retryProof(response, canonical, buildId) !== expectedHash) {
-          throw new Error('Conflicting cached retry chunk proof');
+          throw new RetryCacheIntegrityError('Conflicting cached retry chunk proof', canonical);
         }
         continue;
       }
@@ -166,7 +178,7 @@ function installServiceWorkerRuntime({
     return 'network error';
   }
 
-  async function cacheAppShellEntry(cache: Cache, url: string) {
+  async function cacheAppShellEntry(cache: InstallCache, url: string) {
     const existing = await cache.match(url);
     if (existing) {
       // Resume only producer-owned annotations. Declared entries are rechecked
@@ -192,7 +204,7 @@ function installServiceWorkerRuntime({
     throw new Error(`Failed to precache ${url}: ${errorMessage(lastError)}`);
   }
 
-  async function precacheAppShell(cache: Cache) {
+  async function precacheAppShell(cache: InstallCache) {
     let nextIndex = 0;
     let cachedCount = 0;
     const failures: string[] = [];
@@ -264,14 +276,34 @@ function installServiceWorkerRuntime({
   scope.addEventListener('install', (event) => {
     event.waitUntil((async () => {
       const name = await resolveCacheName();
+      const existing = !!buildId && (await caches.keys()).includes(name);
+      // Imported-script changes can reinstall the same BUILD_ID. Keep only
+      // changed/missing responses in memory until this attempt is verified;
+      // existing bodies stay in the installed cache. An interrupted worker
+      // therefore leaves neither mutations nor an orphaned persistent cache.
+      const candidate = new Map<string, Response>();
       try {
         await verifyDeployment();
-        const cache = await caches.open(name);
+        const installed = await caches.open(name);
+        const cache: InstallCache = existing ? {
+          match: async url => candidate.get(url)?.clone() || installed.match(url),
+          put: async (url, response) => {
+            // Complete the body before the final deployment check, retaining
+            // the original Response URL, status and headers for publication.
+            await response.clone().arrayBuffer();
+            candidate.set(url, response);
+          },
+        } : installed;
         await precacheAppShell(cache);
         await annotateRetryChunks(cache);
         await verifyDeployment();
+        for (const [url, response] of candidate) await installed.put(url, response);
       } catch (error) {
-        if (buildId) await caches.delete(name);
+        // Invalid cached producer proof still invalidates that cache. A failed
+        // candidate or deployment probe cannot delete an existing valid build.
+        if (buildId && (!existing || (error instanceof RetryCacheIntegrityError && !candidate.has(error.canonical)))) {
+          await caches.delete(name);
+        }
         throw error;
       }
     })());

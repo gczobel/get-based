@@ -6,6 +6,8 @@ on:
     branches: [main]
   push:
     branches: [main]
+  schedule:
+    - cron: '17 2 * * *'
   workflow_dispatch:
     inputs:
       diagnostic:
@@ -24,7 +26,7 @@ permissions:
   contents: read
 concurrency:
   group: tests-${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}-${{ inputs.full_suite == true && 'full' || 'scoped' }}${{ github.event_name == 'workflow_dispatch' && inputs.diagnostic == 'webkit-lens-wearable' && '-webkit-diagnostic' || '' }}${{ github.event_name == 'workflow_dispatch' && inputs.diagnostic == 'webkit-pwa-routstr' && '-webkit-pwa-routstr-diagnostic' || '' }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' && inputs.full_suite != true }}
+  cancel-in-progress: ${{ (github.event_name == 'pull_request' || github.event_name == 'push') && inputs.full_suite != true }}
 env:
   GETBASED_KIT_ARTIFACT: ${{ github.workspace }}/dist
   CI_TEST_PLAN: .local-notes/ci/plan.json
@@ -73,9 +75,11 @@ jobs:
       - name: Select full or affected execution and bounded browser matrices
         id: plan
         env:
-          FULL: ${{ github.event_name != 'pull_request' || inputs.full_suite == true }}
-          BASE: ${{ github.event.pull_request.base.sha }}
+          FULL: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || inputs.full_suite == true }}
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
         run: |
+          # An initial push or missing history must fall back to full verification.
+          if [ "$FULL" = false ] && { [[ ! "$BASE" =~ ^[a-f0-9]{40}$ ]] || [[ "$BASE" == 0000000000000000000000000000000000000000 ]] || ! git cat-file -e "$BASE^{commit}"; }; then FULL=true; fi
           args=(--full "$FULL" --output "$CI_TEST_PLAN")
           if [ "$FULL" = false ]; then args+=(--base "$BASE"); fi
           node scripts/ci-plan.mjs "${args[@]}"
@@ -147,6 +151,20 @@ jobs:
         run: npm ci
       - name: Verify exact shipping bytes and current authored sources
         run: node scripts/ci-artifact.mjs verify --artifact dist --transport .local-notes/ci/transport --github-env
+      - name: Install Chromium for resource budgets without shipping cases
+        if: needs.prepare.outputs.full != 'true' && needs.prepare.outputs.performance == 'true' && needs.prepare.outputs.kit != 'true'
+        run: npx --no-install playwright install --with-deps chromium
+      - name: Enforce resource budgets before affected unit tests
+        if: needs.prepare.outputs.full != 'true' && needs.prepare.outputs.performance == 'true' && needs.prepare.outputs.kit != 'true'
+        run: node scripts/sveltekit-performance-budget.mjs --artifact "$GETBASED_KIT_ARTIFACT" --output .local-notes/ci/performance
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        if: always() && needs.prepare.outputs.full != 'true' && needs.prepare.outputs.performance == 'true' && needs.prepare.outputs.kit != 'true'
+        with:
+          name: shipping-performance-budget
+          path: .local-notes/ci/performance
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
       - name: Full unit coverage and unchanged critical behavior floors
         if: needs.prepare.outputs.full == 'true'
         run: |
@@ -166,6 +184,7 @@ jobs:
           if-no-files-found: error
           retention-days: 14
   native:
+    name: Native (${{ matrix.id }})
     needs: prepare
     if: needs.prepare.outputs.native == 'true'
     runs-on: ubuntu-latest
@@ -242,6 +261,7 @@ jobs:
           include-hidden-files: true
           if-no-files-found: error
   kit:
+    name: Shipping (${{ matrix.id }})
     needs: prepare
     if: needs.prepare.outputs.kit == 'true'
     runs-on: ${{ matrix.runner }}
@@ -287,6 +307,17 @@ jobs:
           else
             npx --no-install playwright install --with-deps "$ENGINE"
           fi
+      - name: Enforce resource budgets before the first shipping shard
+        if: needs.prepare.outputs.full != 'true' && needs.prepare.outputs.performance == 'true' && startsWith(matrix.shard, '1/')
+        run: node scripts/sveltekit-performance-budget.mjs --artifact "$GETBASED_KIT_ARTIFACT" --output .local-notes/ci/performance
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        if: always() && needs.prepare.outputs.full != 'true' && needs.prepare.outputs.performance == 'true' && startsWith(matrix.shard, '1/')
+        with:
+          name: shipping-performance-budget
+          path: .local-notes/ci/performance
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
       - name: Qualify the native Chart font before exact canvas acceptance
         if: runner.os == 'Linux'
         run: |
@@ -372,7 +403,7 @@ jobs:
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         if: always()
         with:
-          name: kit-receipt-${{ matrix.id }}
+          name: kit-receipt-${{ matrix.id }}-attempt-${{ github.run_attempt }}
           path: .local-notes/ci/kit-receipts
           include-hidden-files: true
           if-no-files-found: error
@@ -389,7 +420,7 @@ jobs:
           retention-days: 14
   performance:
     needs: prepare
-    if: needs.prepare.outputs.performance == 'true'
+    if: needs.prepare.outputs.full == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -491,6 +522,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
+      - name: Require successful preparation before restoring evidence
+        env:
+          PREPARE_RESULT: ${{ needs.prepare.result }}
+        run: test "$PREPARE_RESULT" = success
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
@@ -520,7 +555,7 @@ jobs:
         with:
           pattern: kit-receipt-*
           path: .local-notes/ci/kit-receipts
-          merge-multiple: true
+          merge-multiple: false
       - name: Prove every selected shipping case executed exactly once across all shards
         if: needs.prepare.outputs.kit == 'true'
         run: node scripts/ci-results.mjs kit --collection .local-notes/ci/kit-collection.json --reports .local-notes/ci/kit-receipts --output .local-notes/ci/kit-completeness.json

@@ -81,6 +81,7 @@ const importLoaderSrc = read('js/import-loader.js');
 const importFileInputSrc = read('js/import-file-input.js');
 const importDropZoneSrc = read('js/import-drop-zone.js');
 const importDropZoneRuntimeSrc = read('js/import-drop-zone-runtime.js');
+const importDispatchSrc = read('js/import-dispatch.js');
 const commitHashSrc = read('js/commit-hash.js');
 const commitLinkPresentationSrc = read('js/footer-commit-link-presentation.ts');
 const commitLinkComponentSrc = read('js/components/FooterCommitLink.svelte');
@@ -294,22 +295,28 @@ assert('PDF import lazy loader is shared by file input and import-drop-zone.js',
   importDropZoneSrc.includes("from './import-loader.js'") &&
   importLoaderSrc.includes("import('./pdf-import.js')") &&
   importLoaderSrc.includes('export async function loadImportUI()') &&
-  importFileInputSrc.includes('await loadImportUI()') &&
-  importDropZoneSrc.includes('await loadImportUI()'),
+  importFileInputSrc.includes('dispatchImportFiles(files, loadImportUI)') &&
+  importDropZoneSrc.includes("dispatchImportFiles(files, loadImportUI, 'drop-zone')") &&
+  importDispatchSrc.includes('await loadImportUI()'),
   'separate per-module promise caches can issue duplicate first-use imports');
 assert('file input shares import browser-runtime adapter with drop zone',
   importFileInputSrc.includes("from './import-drop-zone-runtime.js'") &&
-  importFileInputSrc.includes('detectImportDNAFileRuntime') &&
-  importFileInputSrc.includes('handleImportDNAFileRuntime') &&
+  importFileInputSrc.includes("from './import-dispatch.js'") &&
+  importDropZoneSrc.includes("from './import-dispatch.js'") &&
+  importDispatchSrc.includes("from './import-drop-zone-runtime.js'") &&
+  importDispatchSrc.includes('detectImportDNAFileRuntime') &&
+  importDispatchSrc.includes('handleImportDNAFileRuntime') &&
+  !/\bwindow(?:\.|\s*\[)/.test(importDispatchSrc) &&
   !/\bwindow(?:\.|\s*\[)/.test(importFileInputSrc) &&
   importDropZoneRuntimeSrc.includes('export function isDropZoneImportRunning'),
   'file-picker import path should not keep a parallel set of window global lookups');
 assert('Import UI lazy-load failure notifies after clearing the initiating selection',
-  /const files = Array\.from\(e\.target\.files\);[\s\S]{0,160}e\.target\.value\s*=\s*''[\s\S]*?importMod\s*=\s*await loadImportUI\(\);/.test(importFileInputSrc)
-  && /catch\s*\(err\)\s*{[\s\S]{0,320}Could not load import UI\. Reload the app to finish updating, then try again\./.test(importFileInputSrc),
+  /const files = Array\.from\(e\.target\.files \|\| \[\]\);[\s\S]{0,160}e\.target\.value\s*=\s*''[\s\S]*?return dispatchImportFiles\(files, loadImportUI\)/.test(importFileInputSrc)
+  && /catch\s*\(err\)\s*{[\s\S]{0,320}Could not load import UI\. Reload the app to finish updating, then try again\./.test(importDispatchSrc),
   'file-picker should clear its selection before awaiting and report load failures without clearing newer selections');
 assert('Import UI lazy-load failure notifies from drop zone',
-  /try\s*{\s*importMod\s*=\s*await loadImportUI\(\);[\s\S]{0,320}catch\s*\(err\)\s*{[\s\S]{0,320}Could not load import UI\. Reload the app to finish updating, then try again\./.test(importDropZoneSrc),
+  importDropZoneSrc.includes("dispatchImportFiles(files, loadImportUI, 'drop-zone')") &&
+  /try\s*{\s*importMod\s*=\s*await loadImportUI\(\);[\s\S]{0,320}catch\s*\(err\)\s*{[\s\S]{0,320}Could not load import UI\. Reload the app to finish updating, then try again\./.test(importDispatchSrc),
   'drop-zone import path should fail loudly');
 assert('analytics consent remains deferred after first paint and behind legal gate',
   /const showAnalyticsConsent = \(\) => \{\s*startupUIDeps\.maybeShowAnalyticsConsent\?\.\(\);\s*\};/.test(startupUiSrc)

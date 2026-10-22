@@ -42,6 +42,7 @@ import {
 import {
   resultImportId,
   looksLikeClueCycleJson,
+  looksLikeDripCycleCsv,
   looksLikeNaturalCyclesCsv,
   parseClueCycleJson,
   parseDripCycleCsv,
@@ -232,11 +233,11 @@ export const CYCLE_IMPORT_ADAPTERS = Object.freeze<CycleImportAdapter[]>([
   {
     id: 'natural_cycles',
     sourceLabel: 'Natural Cycles',
-    detect: context => context.kind === 'csv'
+    detect: context => (context.kind === 'csv' || context.kind === 'text')
       ? looksLikeNaturalCyclesCsv(context.text!, context.file.name)
       : context.kind === 'zip' && naturalCyclesArchiveEntries(context).length > 0,
     parse: async context => {
-      if (context.kind === 'csv') return parseNaturalCyclesCsv(context.text!, context.file.name || 'tracking_data.csv');
+      if (context.kind === 'csv' || context.kind === 'text') return parseNaturalCyclesCsv(context.text!, context.file.name || 'tracking_data.csv');
       const files: Array<{ name: string | undefined; text: string }> = [];
       for (const entry of naturalCyclesArchiveEntries(context)) {
         files.push({ name: entry.name, text: await entry.async('text') });
@@ -255,8 +256,13 @@ export const CYCLE_IMPORT_ADAPTERS = Object.freeze<CycleImportAdapter[]>([
 export async function isCycleImportFile(file: File) {
   const kind = cycleFileKind(file);
   if (kind === 'xml' || kind === 'zip' || String(file?.name || '').toLowerCase().endsWith('.cluedata')) return true;
-  if (kind !== 'json') return false;
-  try { return looksLikeClueCycleJson(await file.text()); } catch { return false; }
+  try {
+    if (kind === 'json') return looksLikeClueCycleJson(await file.text());
+    // Sniff a bounded local prefix before the lab-report confirmation. The
+    // actual adapter still owns full parsing, preview and accepted commits.
+    const prefix = await file.slice(0, 64 * 1024).text();
+    return looksLikeNaturalCyclesCsv(prefix, file.name) || looksLikeDripCycleCsv(prefix);
+  } catch { return false; }
 }
 
 export async function parseCycleImportFile(file: File | null | undefined) {

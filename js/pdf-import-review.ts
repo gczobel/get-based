@@ -2,6 +2,9 @@ import type { ImportReviewMarker, PendingImport } from './pdf-import-review-runt
 
 // Import review modal rendering and interaction state
 import { state } from './state.js';
+import { prepareImportCommit } from './import-commit-validation.js';
+
+let failedReview: PendingImport | null = null;
 import { formatCost } from './schema.js';
 import { showNotification, isDebugMode } from './utils.js';
 import { shouldHideAppExtensionAIUsage } from './app-extension-runtime.js';
@@ -59,6 +62,7 @@ import {
 import { finishImportBenchmark } from './import-benchmarks.js';
 import { normalizeLabFastingStatus, normalizeLabSampleTime } from './lab-entry.js';
 function clearPendingImport() {
+  failedReview = null;
   clearPendingImportRuntime();
   clearImportReviewDraft();
 }
@@ -88,6 +92,7 @@ function persistImportReviewDraftForState(parseResult = getPendingImport()) {
 }
 
 function persistCurrentImportReviewDraft() {
+  if (failedReview === getPendingImport()) refreshImportReviewErrors();
   persistImportReviewDraftForState();
 }
 
@@ -377,6 +382,7 @@ function prepareImportReviewRow(m: ImportReviewMarker, origIdx: number, status: 
 }
 
 export function showImportPreview(parseResult: PendingImport) {
+  failedReview = null;
   const { date, markers, fileName } = parseResult;
   const modal = document.getElementById('import-modal');
   const overlay = document.getElementById('import-modal-overlay');
@@ -504,7 +510,7 @@ function applyImportMarkerMapping(controlEl: HTMLElement, key: string) {
   marker.matched = !!key;
   const row = controlEl.closest('tr');
   if (row) {
-    const statusCell = row.querySelector('td:first-child');
+    const statusCell = row.querySelector('.import-status-cell');
     const unitCell = row.querySelector('td[data-label="Unit"]');
     const mapCell = row.querySelector('.import-map-cell');
     const actionCell = row.querySelector('.import-row-action');
@@ -634,6 +640,32 @@ export function toggleImportRow(btn: HTMLElement) {
   updateImportConfirmCount();
   applyImportReviewFilters();
   persistCurrentImportReviewDraft();
+}
+
+/** Validation indices always refer to the original input, even after regrouping/filtering. */
+function refreshImportReviewErrors() {
+  const result = getPendingImport();
+  const indices = result ? prepareImportCommit(result, getExcludedImportIndices(), state.importedData.customMarkers).errorRows : [];
+  const invalid = new Set(indices);
+  for (const row of document.querySelectorAll<HTMLElement>('#import-modal tr[data-import-idx]')) {
+    if (invalid.has(Number(row.dataset.importIdx))) row.setAttribute('aria-invalid', 'true');
+    else row.removeAttribute('aria-invalid');
+  }
+}
+
+export function revealImportReviewErrors() {
+  failedReview = getPendingImport();
+  refreshImportReviewErrors();
+  const rows = Array.from(document.querySelectorAll<HTMLElement>('#import-modal tr[aria-invalid="true"]'));
+  if (rows.some(row => row.hidden)) {
+    const search = document.getElementById('import-review-search') as HTMLInputElement | null;
+    if (search) search.value = '';
+    for (const button of document.querySelectorAll<HTMLElement>('#import-modal .import-filter-btn')) {
+      button.classList.toggle('active', button.dataset.filter === 'all');
+    }
+    applyImportReviewFilters();
+  }
+  rows[0]?.scrollIntoView?.({block: 'nearest', behavior: 'smooth'});
 }
 
 export function getExcludedImportIndices() {

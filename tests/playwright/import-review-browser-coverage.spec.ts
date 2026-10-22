@@ -77,7 +77,17 @@ test('import file input and drop zone route browser file types and busy states',
         new File(['{"ok":true}'], 'profile.json', { type: 'application/json' }),
         new File(['MTDNA raw data'], 'maternal.dna.txt', { type: 'text/plain' }),
       );
-      await fileInput.handleImportInputChange({ target: input! });
+      const selection = fileInput.handleImportInputChange({ target: input! });
+      const confirmed = new Promise<void>(resolve => {
+        const observer = new MutationObserver(() => {
+          const button = document.getElementById('confirm-ok');
+          if (!button) return;
+          outcomes.mixedSelectionWaitsForConsent = !calls.some(call => call[0] === 'json' || call[0] === 'mtdna');
+          button.click(); observer.disconnect(); resolve();
+        });
+        observer.observe(document.body, {subtree: true, childList: true});
+      });
+      await confirmed; await selection;
       outcomes.inputRoutesJsonAndMtDna = calls.some(call => call[0] === 'json' && call[1] === 'profile.json')
         && calls.some(call => call[0] === 'mtdna' && call[1] === 'maternal.dna.txt');
 
@@ -103,7 +113,8 @@ test('import file input and drop zone route browser file types and busy states',
         && !calls.slice(beforeBusyDrop).some(call => call[0] === 'json');
 
       importRunning = false;
-      const dragOver = new DragEvent('dragover', { bubbles: true, cancelable: true });
+      const fileDrag = new DataTransfer(); fileDrag.items.add(new File(['{}'], 'profile.json'));
+      const dragOver = new DragEvent('dragover', { bubbles: true, cancelable: true, dataTransfer: fileDrag });
       dropZone.dispatchEvent(dragOver);
       outcomes.dragOverAddsClass = dropZone.classList.contains('drag-over');
       dropZone.dispatchEvent(new DragEvent('dragleave', { bubbles: true, cancelable: true }));

@@ -16,3 +16,5 @@
 @source "../js/components/ImportExcludeContent.svelte";
 @source "../js/components/ImportReviewStatus.svelte";
 @source "../js/components/ImportUnitMenu.svelte";
+
+@source "../js/components/ImportPageDrop.svelte";

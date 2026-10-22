@@ -13,7 +13,7 @@ import { projectOwnedVendorSources, readVendorManifest } from './project-owned-v
 type BrowserSuite = 'browser' | 'firefox' | 'pwa' | 'kit';
 type ValidationCheck = 'vendor:check' | 'vendor:evolu8:check' | 'marker-schema:check';
 export interface TestPlan {
-  changedFiles: string[]; reasons: string[]; unit: string[]; legacy: string[];
+  changedFiles: string[]; reasons: string[]; unit: string[]; legacy: string[]; nativeRequired?: string[];
   browser: string[]; firefox: string[]; pwa: string[]; kit: string[]; performance: boolean; sync: boolean; uncovered: string[]; checks: ValidationCheck[];
 }
 
@@ -257,7 +257,7 @@ export function createTestPlan(sources: Map<string, string>, changedFiles: strin
   if (additions) reasons.push('Additive precache modules: retain asset graph contracts and select each added module behavior.');
   if ([...affected].some(file => runtimePath(file) === 'js/main.js')) {
     for (const file of all) if (runtimePath(file) === 'tests/pwa/sveltekit-app-shell.spec.js') affected.add(file);
-    reasons.push('Shared application initialization: retain actual four-engine AppShell hydration acceptance.');
+    reasons.push('Shared application initialization: select actual AppShell hydration; the execution tier determines shipping browser projects.');
   }
   if (roots.some(file => /^(?:js|vendor)\//.test(file))) {
     for (const file of all) if (['tests/service-worker-app-shell.test.js', 'tests/production-build.test.js'].includes(runtimePath(file))) affected.add(file);
@@ -320,6 +320,32 @@ export function createTestPlan(sources: Map<string, string>, changedFiles: strin
     }
     return true;
   });
+  // A mixed PR must not hide native-only behavior behind an unrelated shipping
+  // case. Retain each changed runtime's native cases when its dependency graph
+  // has no selected shipping consumer. Runnable test entries remain graph sinks.
+  const nativeRequired = new Set<string>();
+  for (const file of roots) {
+    const nativeHelper = /^tests\/(?:helpers\/|(?:playwright|firefox|pwa)\/.*(?:fixture|helper|server|support)[^/]*\.[cm]?js$)/.test(runtimePath(file)) && !isTestEntry(file);
+    if (!nativeHelper && !/^(js\/|lib\/|api\/|server\/|scripts\/).*\.(?:[cm]?[jt]s|svelte)$/.test(file) && !ownedVendor.has(file)) continue;
+    const visited = new Set<string>(), pending = [file], native = new Set<string>();
+    let shipping = false;
+    while (pending.length) {
+      const current = pending.pop()!;
+      if (visited.has(current)) continue;
+      visited.add(current);
+      if (selected.has(current)) {
+        if (isKit(current)) shipping = true;
+        if (isBrowser(current) || isFirefox(current) || isPwa(current)) native.add(current);
+        if (isTestEntry(current)) continue;
+      }
+      // AppShell is selected explicitly above when initialization is reached;
+      // browser journeys load the assembled artifact instead of importing main.
+      if (runtimePath(current) === 'js/main.js' && kit.some(test => runtimePath(test) === 'tests/pwa/sveltekit-app-shell.spec.js')) shipping = true;
+      for (const consumer of reverse.get(current) || []) if (runtimePath(consumer) !== LEGACY) pending.push(consumer);
+    }
+    if (!shipping || nativeHelper) native.forEach(test => nativeRequired.add(test));
+  }
+  if (nativeRequired.size) plan.nativeRequired = [...nativeRequired].sort();
   return plan as TestPlan;
 }
 
@@ -411,7 +437,7 @@ function main(): void {
     .map(file => [file, fs.readFileSync(path.join(ROOT, file), 'utf8')]));
   const plan = createTestPlan(sources, changedFiles, baseAssetInventories(base!));
   fs.writeFileSync(output, JSON.stringify(plan, null, 2) + '\n');
-  const summary = ['## Affected PR tests', ...['unit', 'legacy', 'browser', 'firefox', 'pwa', 'kit'].map(suite => `- ${suite}: ${plan[suite as BrowserSuite].length}`), `- shipping transfer budget: ${plan.performance}`, `- mandatory validation: ${plan.checks.join(', ') || 'none'}`, ...plan.reasons.map(reason => `- ${reason}`), '\nFull coverage runs on main, manual dispatch, and explicit release verification.'].join('\n');
+  const summary = ['## Affected PR tests', ...['unit', 'legacy', 'browser', 'firefox', 'pwa', 'kit'].map(suite => `- ${suite}: ${plan[suite as BrowserSuite].length}`), `- shipping transfer budget: ${plan.performance}`, `- mandatory validation: ${plan.checks.join(', ') || 'none'}`, ...plan.reasons.map(reason => `- ${reason}`), '\nFull coverage runs nightly, on manual dispatch, and during explicit release verification.'].join('\n');
   console.log(summary);
   if (process.env.GITHUB_STEP_SUMMARY) fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, summary + '\n');
   if (process.env.GITHUB_OUTPUT) fs.appendFileSync(process.env.GITHUB_OUTPUT, ['browser', 'firefox', 'pwa', 'kit'].map(suite => `${suite}=${Boolean(plan[suite as BrowserSuite].length)}\n`).join('') + `sync=${plan.sync}\nperformance=${plan.performance}\n`);

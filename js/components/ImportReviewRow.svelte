@@ -8,6 +8,7 @@
   let {view}: {view: ImportReviewRowView} = $props();
 </script>
 <tr class={classes('import-review-row')} data-import-idx={view.index} data-import-status={view.status}>
+  <td class={classes('import-row-number')} data-label="Row" title="Original import row">{view.index + 1}</td>
   <td class={classes(`import-status-cell ${view.status === 'new' ? 'new-marker' : view.status}`)} data-label="Status"><ImportReviewStatus status={view.status}/></td>
   <td class={classes('import-name-cell')} data-label="Test name">{view.rawName}</td>
   <td class={classes('import-review-cell')} data-label="Value"><input type="number" step="any" class={classes('import-value-input')} data-marker-idx={view.index} value={view.value} data-import-review-action="edit-value" aria-label={`Value for ${view.rawName}`}></td>

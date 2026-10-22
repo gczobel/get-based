@@ -7,8 +7,14 @@ import {startKitServer} from './kit-server.js';
 import {lightDeviceCatalogRoute} from '../helpers/light-device-catalog-fixture.js';
 import {installDiscussionFixture} from '../helpers/chat-discussion-fixture.js';
 import {readComparisonAcceptanceProfile} from '../helpers/nutrition-comparison-fixture.js';
-import {installOfflineStartupDiagnostics} from '../helpers/offline-launch-diagnostics.js';
+import {installOfflineStartupDiagnostics,captureOfflineRouteFailureDiagnostics} from '../helpers/offline-launch-diagnostics.js';
 import {readyLightArtifact as ready,openLightArtifact as openLight} from '../helpers/light-artifact-navigation.js';
+// Observe native worker/cache state only after failure; keep the original
+// readiness requirement, complete assertions and test deadlines unchanged.
+test.afterEach(async({context},info)=>{
+ if(info.status===info.expectedStatus)return;
+ for(const page of context.pages())await captureOfflineRouteFailureDiagnostics(page,info,[]);
+});
 type API=Pick<typeof import('../../js/recommendations.js'),'renderChannelDeficitDeviceRecs'|'loadCatalog'|'isProductRecsEnabled'>;
 // The renderer is a maintained public module contract, not an automatic Light
 // page insertion. Locate its real bundled namespace from the exact artifact.

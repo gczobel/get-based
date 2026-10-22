@@ -9,6 +9,8 @@ export interface ProfileFieldExpectation {
 export interface ProfileSaveOptions {
   baseData?: Partial<ImportedDataRecord> | undefined;
   expectedData?: string | null | undefined;
+  /** Background snapshot upgrades may retry a rejected CAS without a user-edit conflict toast. */
+  notifyOnStaleSnapshot?: boolean;
   expectedContextNotes?: string;
   expectedContextField?: ProfileFieldExpectation;
   expectedContextFields?: readonly ProfileFieldExpectation[];

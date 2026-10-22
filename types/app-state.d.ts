@@ -31,6 +31,12 @@ export interface ProfileNote {
   [key: string]: unknown;
 }
 
+export interface ManualBodyReading {
+  value: number | string | string[] | null;
+  updatedAt: number;
+  [key: string]: unknown;
+}
+
 export interface ProfileData {
   entries: LabEntry[];
   notes: ProfileNote[];
@@ -61,8 +67,8 @@ export interface ProfileData {
   changeHistory: any[];
   importSnapshots: any[];
   biometrics?: Biometrics | null;
+  manualBodyReadings?: Record<string, ManualBodyReading>;
   manualMetricTombstones?: Record<string, number>;
-  manualBodyReadings?: Record<string, unknown>;
   manualValues?: Record<string, any>;
   sunSessions?: any[];
   deviceSessions?: any[];

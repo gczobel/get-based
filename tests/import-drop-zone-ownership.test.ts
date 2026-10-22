@@ -19,7 +19,7 @@ beforeEach(() => {
   handlers = {};
   node = { dataset: {}, classList: { add: vi.fn(), remove: vi.fn() }, addEventListener: vi.fn((name: string, handler: (event: DropFixture) => Promise<unknown>) => { handlers[name] = handler; }) };
   vi.stubGlobal('document', { getElementById: () => node });
-  mocks.load.mockResolvedValue({ classifyImportFiles: mocks.classify, handleTextFile: mocks.text });
+  mocks.load.mockResolvedValue({ classifyImportFiles: mocks.classify, confirmImportSelection: async () => true, handleTextFile: mocks.text });
   mocks.classify.mockResolvedValue(buckets());
   setupDropZone();
 });
@@ -27,7 +27,7 @@ afterEach(() => vi.unstubAllGlobals());
 const drop = () => handlers.drop!({ preventDefault: vi.fn(), dataTransfer: { files: [file] } });
 it.each(['load', 'classify'].flatMap(boundary => ['profile', 'data'].map(kind => [boundary, kind])))('rejects %s completion after %s replacement', async (boundary, kind) => {
   const replace = () => { if (kind === 'profile') state.currentProfile = 'other'; else (state as { importedData: unknown }).importedData = {}; };
-  if (boundary === 'load') mocks.load.mockImplementationOnce(async () => { replace(); return { classifyImportFiles: mocks.classify, handleTextFile: mocks.text }; });
+  if (boundary === 'load') mocks.load.mockImplementationOnce(async () => { replace(); return { classifyImportFiles: mocks.classify, confirmImportSelection: async () => true, handleTextFile: mocks.text }; });
   else mocks.classify.mockImplementationOnce(async () => { replace(); return buckets(); });
   await drop(); expect(mocks.text).not.toHaveBeenCalled();
 });
@@ -44,7 +44,7 @@ it('does not load for an empty drop', async () => {
 it.each(['load', 'classify', 'text'])('rejects overlapping drops while %s is pending, then accepts a new drop', async boundary => {
   let release: (() => void) | undefined;
   const gate = new Promise<void>(resolve => { release = resolve; });
-  const result = boundary === 'load' ? { classifyImportFiles: mocks.classify, handleTextFile: mocks.text }
+  const result = boundary === 'load' ? { classifyImportFiles: mocks.classify, confirmImportSelection: async () => true, handleTextFile: mocks.text }
     : boundary === 'classify' ? buckets() : undefined;
   mocks[boundary as keyof typeof mocks].mockImplementationOnce(async () => { await gate; return result; });
   const first = drop();
@@ -60,7 +60,8 @@ it.each(['load', 'classify', 'text'])('rejects overlapping drops while %s is pen
 
 it.each(['classify', 'text'])('releases the drop lock after a %s failure', async boundary => {
   mocks[boundary as keyof typeof mocks].mockRejectedValueOnce(new Error('Synthetic import failure'));
-  await expect(drop()).rejects.toThrow('Synthetic import failure');
+  await drop();
+  expect(mocks.notify).toHaveBeenCalledWith('Import failed - check the file and try again.', 'error');
   await drop();
   expect(mocks.load).toHaveBeenCalledTimes(2);
   expect(mocks.text).toHaveBeenLastCalledWith(file);

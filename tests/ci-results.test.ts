@@ -2,7 +2,7 @@ import {afterEach, describe, expect, it, vi} from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import {createCoverageInventory, qualifyCoverageUnion, qualifyJobs, qualifyKitUnion} from '../scripts/ci-results.mjs';
+import {createCoverageInventory, qualifyCoverageUnion, qualifyJobs, qualifyKitUnion, readKitReports} from '../scripts/ci-results.mjs';
 
 afterEach(() => {vi.restoreAllMocks();});
 
@@ -45,6 +45,71 @@ describe('complete disjoint Kit execution qualification', () => {
     const first = fixtureCase('first'), collection = report([first], false), accepted = report([first], true);
     for (const corrupt of [{...accepted, execution: false}, {...accepted, status: 'failed'}, {...accepted, issues: ['guard error']}, {...accepted, tests: [{...accepted.tests[0], status: 'skipped'}]}, {...accepted, tests: [{...accepted.tests[0], attemptCount: 2}]}, {...accepted, tests: [{...accepted.tests[0], declaredExpectedStatus: 'skipped'}]}, {...accepted, tests: [{...accepted.tests[0], status: undefined}]}]) expect(() => qualifyKitUnion(collection, [corrupt])).toThrow();
   });
+});
+describe('bounded hosted Kit job reruns', () => {
+  const current = {commit: 'a'.repeat(40), runId: '42', runAttempt: '2'};
+  const hosted = (tests: ReturnType<typeof fixtureCase>[], execution: boolean, runAttempt = '1') =>
+    ({...report(tests, execution), context: {...current, runAttempt}});
+  it('reuses earlier successful shards and selects only the newer identical shard, preserving failed history', () => {
+    const first = fixtureCase('first'), second = fixtureCase('second'), collection = hosted([first, second], false);
+    const failed = {...hosted([first], true), status: 'failed', issues: ['original timeout'], tests: [{...hosted([first], true).tests[0], status: 'timedOut'}]};
+    const receipts = [failed, hosted([second], true), hosted([first], true, '2')];
+    expect(qualifyKitUnion(collection, receipts, current)).toMatchObject({status: 'passed', collected: 2, executed: 2, reports: 2,
+      provenance: {...current, collectionAttempt: '1', selectedAttempts: [1, 2], supersededReports: 1}});
+    expect(qualifyKitUnion(collection, [...receipts].reverse(), current)).toMatchObject({status: 'passed', reports: 2});
+    expect(() => qualifyKitUnion(collection, receipts)).toThrow();
+    expect(failed.status).toBe('failed');
+  });
+  it('rejects stale revisions/runs, future or malformed attempts, incomplete contexts and forged context fields', () => {
+    const first = fixtureCase('first'), collection = hosted([first], false), accepted = hosted([first], true);
+    const contexts = [{...current, commit: 'b'.repeat(40)}, {...current, runId: '43'}, {...current, runAttempt: '3'},
+      {...current, runAttempt: '0'}, {...current, runAttempt: '01'}, {...current, runAttempt: '9007199254740992'},
+      {...current, runAttempt: 2}, {...current, extra: true}, {commit: current.commit}];
+    for (const context of contexts) expect(() => qualifyKitUnion(collection, [{...accepted, context}], current)).toThrow();
+    expect(() => qualifyKitUnion(hosted([first], false, '2'), [accepted], current)).toThrow();
+    expect(() => qualifyKitUnion(hosted([first], false, '3'), [accepted], current)).toThrow();
+    expect(() => qualifyKitUnion(collection, [accepted], {...current, runId: '43'})).toThrow();
+    expect(() => qualifyKitUnion(collection, [accepted], {...current, commit: 'b'.repeat(40)})).toThrow();
+    expect(() => qualifyKitUnion(collection, [accepted], {...current, runAttempt: null})).toThrow();
+  });
+  it('never falls back from a failed latest receipt or accepts a native case retry', () => {
+    const first = fixtureCase('first'), collection = hosted([first], false), accepted = hosted([first], true);
+    expect(() => qualifyKitUnion(collection, [accepted, {...hosted([first], true, '2'), status: 'failed'}], current)).toThrow();
+    const retried = {...hosted([first], true, '2'), tests: [{...accepted.tests[0], attemptCount: 2}]};
+    expect(() => qualifyKitUnion(collection, [accepted, retried], current)).toThrow();
+  });
+  it('rejects ambiguous, overlapping, missing, uncollected and altered declarations even in superseded receipts', () => {
+    const first = fixtureCase('first'), second = fixtureCase('second'), collection = hosted([first, second], false);
+    const accepted = hosted([first], true), secondReceipt = hosted([second], true);
+    for (const receipts of [[accepted, accepted, secondReceipt], [accepted, hosted([first], true, '2'), accepted, secondReceipt], [accepted], [hosted([first, first], true), secondReceipt],
+      [hosted([first, second], true), accepted], [hosted([fixtureCase('unknown')], true), hosted([first, second], true, '2')],
+      [{...accepted, tests: [{...accepted.tests[0], declaredAnnotations: [{type: 'skip'}]}]}, hosted([first], true, '2'), secondReceipt]]) {
+      expect(() => qualifyKitUnion(collection, receipts, current)).toThrow();
+    }
+  });
+  it('keeps immutable attempt directories separate and checks their declared file/attempt owners', () => temp(directory => {
+    const first = fixtureCase('first'), collection = hosted([first], false);
+    for (const attempt of ['1', '2']) {
+      const target = path.join(directory, `kit-receipt-kit-chromium-1-of-1-attempt-${attempt}`); fs.mkdirSync(target);
+      fs.writeFileSync(path.join(target, 'kit-chromium-1-of-1.json'), JSON.stringify(hosted([first], true, attempt)));
+    }
+    expect(qualifyKitUnion(collection, readKitReports(directory), current)).toMatchObject({reports: 1, provenance: {supersededReports: 1}});
+    const target = path.join(directory, 'kit-receipt-kit-chromium-1-of-1-attempt-2', 'kit-chromium-1-of-1.json');
+    fs.writeFileSync(target, JSON.stringify(hosted([first], true)));
+    expect(() => readKitReports(directory)).toThrow('attempt differs');
+    fs.writeFileSync(target, JSON.stringify(hosted([first], true, '2'))); fs.renameSync(target, target + '.json');
+    expect(() => readKitReports(directory)).toThrow('contents');
+  }));
+  it('rejects symbolic receipt bodies and unknown artifact directory owners', () => temp(directory => {
+    const artifact = path.join(directory, 'kit-receipt-kit-chromium-1-of-1-attempt-1'); fs.mkdirSync(artifact);
+    const outside = path.join(directory, 'outside.txt'); fs.writeFileSync(outside, '{}');
+    fs.symlinkSync(outside, path.join(artifact, 'kit-chromium-1-of-1.json'));
+    expect(() => readKitReports(directory)).toThrow();
+    fs.rmSync(artifact, {recursive: true}); fs.symlinkSync(directory, artifact);
+    expect(() => readKitReports(directory)).toThrow('Symbolic');
+    fs.unlinkSync(artifact); fs.mkdirSync(path.join(directory, 'unqualified-artifact'));
+    expect(() => readKitReports(directory)).toThrow('artifact directory');
+  }));
 });
 describe('coverage shard transport qualification', () => {
   it('qualifies every independently hashed readable browser shard and genuine unit coverage', () => temp(directory => {

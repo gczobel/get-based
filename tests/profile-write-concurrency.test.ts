@@ -1093,3 +1093,14 @@ it('rebases an installed profile object during a pending shell hook after the pu
     }
   }
 });
+
+it('quiet background snapshot rejection still prevents every stale write', async () => {
+  const before = await crypto.encryptedGetItem(key);
+  const base = structuredClone(state.importedData), draft = structuredClone(base);
+  draft.contextNotes = 'Stale background draft';
+  const write = vi.spyOn(crypto, 'encryptedSetItem');
+  expect(await saveImportedDataForProfile(profileId, draft, {baseData: base, expectedData: 'stale snapshot', notifyOnStaleSnapshot: false})).toBe(false);
+  expect(write).not.toHaveBeenCalled();
+  expect(await crypto.encryptedGetItem(key)).toBe(before);
+  expect(state.importedData.contextNotes).toBe('original');
+});

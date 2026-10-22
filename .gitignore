@@ -1,6 +1,16 @@
 # Local task progress, checkpoints, and audit logs
 /.local-notes/
 
+# Generated method-aware body measurement runtime
+/js/body-measurement-model.js
+/js/body-measurement-cycle.js
+/tests/body-measurement-cycle.test.js
+/tests/body-measurement-cycle.test.js.map
+/js/body-measurement-loader.js
+/js/body-measurement-modal.js
+/tests/body-measurement.test.js
+/tests/body-measurement.test.js.map
+
 .claude/
 *.pdf
 !data/import-benchmark-reference-us-v2.pdf
@@ -674,7 +684,6 @@ deploy/profile-share/data/
 /js/wearables-disconnect-recovery.js
 /js/wearables-connect.js
 /js/wearables-manual.js
-/js/wearables-manual-sync.js
 /js/wearable-persistence-types.js
 /js/brand-assets.js
 /js/wearables-apple-health.js
@@ -3636,6 +3645,21 @@ tests/pwa/sveltekit-island-ownership.spec.js.map
 /tests/helpers/native-tab-key.js
 /tests/helpers/native-tab-key.js.map
 
+/js/wearables-manual-sync.js
+
+# Generated exact manual-Sync Wearables receipt expectations
+/tests/helpers/wearable-manual-sync-expectations.js
+/tests/helpers/wearable-manual-sync-expectations.js.map
+/tests/wearable-manual-sync-expectations.test.js
+/tests/wearable-manual-sync-expectations.test.js.map
+# Community import workflow canonical TypeScript output
+/js/import-dispatch.js
+/js/import-drop-zone-events.js
+/js/import-page-drop.js
+/js/import-page-drop-view.js
+/js/import-selection-confirmation.js
+/js/import-stylesheet.js
+
 /js/sync-relay-self-service.js
 
 # Verified CI compiler-output transport
@@ -3649,7 +3673,3 @@ tests/pwa/sveltekit-island-ownership.spec.js.map
 # Explicit external catalog input for Light acceptance
 /tests/helpers/light-device-catalog-fixture.js
 /tests/helpers/light-device-catalog-fixture.js.map
-
-# Generated manual-Sync Wearables receipt expectations
-/tests/helpers/wearable-manual-sync-expectations.js
-/tests/helpers/wearable-manual-sync-expectations.js.map

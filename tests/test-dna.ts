@@ -442,15 +442,18 @@ assert('app-feature-modules.js lazy-loads health data modules',
   appFeatureModulesSrc.includes("'./health-data-loader.js'")
     && healthDataLoaderSrc.includes("import('./dna.js')"));
 assert('app-health-data-modules.js imports dna.js', appHealthDataModulesSrc.includes("'./dna.js'"));
-// DNA detection in the file-input path is now delegated to
-// classifyImportFiles (pdf-import.js); import-file-input.js consumes the returned
-// dnaFiles bucket. The downstream isDNAFile check still lives in the
-// classifier and is asserted below.
+// Both picker and drop zone delegate classification and DNA handling to the
+// shared dispatcher, which consumes the classifier's DNA bucket.
 const importFileInputSrc = await fetchWithRetry('js/import-file-input.js');
-assert('import-file-input.js routes DNA files via classifier', importFileInputSrc.includes('classifyImportFiles') && importFileInputSrc.includes('dnaFiles'));
+const importDispatchSrc = await fetchWithRetry('js/import-dispatch.js');
+assert('import-file-input.js routes DNA files via classifier',
+  importFileInputSrc.includes("from './import-dispatch.js'") &&
+  importFileInputSrc.includes('dispatchImportFiles(files, loadImportUI)') &&
+  importDispatchSrc.includes('classifyImportFiles') && importDispatchSrc.includes('dnaFiles'));
 assert('import-file-input.js routes DNA handling through runtime adapter',
-  importFileInputSrc.includes('handleImportDNAFileRuntime') &&
-  importFileInputSrc.includes("from './import-drop-zone-runtime.js'"));
+  importFileInputSrc.includes('dispatchImportFiles(files, loadImportUI)') &&
+  importDispatchSrc.includes('handleImportDNAFileRuntime') &&
+  importDispatchSrc.includes("from './import-drop-zone-runtime.js'"));
 
 const pdfSrc = await fetchWithRetry('js/pdf-import.js');
 assert('pdf-import.js checks isDNAFile in drop', pdfSrc.includes('isDNAFile'));

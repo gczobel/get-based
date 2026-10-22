@@ -49,16 +49,79 @@ function kitReport(value: unknown, execution: boolean): {context: unknown; tests
   assert(!issues.length, issues.join('\n'));
   return {context: report['context'] ?? null, tests};
 }
+interface KitRunContext {commit: string; runId: string; runAttempt: string}
+function kitRunContext(value: unknown): KitRunContext {
+  const context = object(value, 'Kit run context');
+  assert(same(Object.keys(context).sort(), ['commit', 'runAttempt', 'runId']), 'Unexpected Kit run context fields');
+  assert(typeof context['commit'] === 'string' && /^[a-f0-9]{40}$/.test(context['commit']), 'Invalid Kit source revision');
+  assert(typeof context['runId'] === 'string' && /^[1-9]\d*$/.test(context['runId']), 'Invalid Kit run identity');
+  assert(typeof context['runAttempt'] === 'string' && /^[1-9]\d*$/.test(context['runAttempt'])
+    && Number.isSafeInteger(Number(context['runAttempt'])), 'Invalid Kit run attempt');
+  return context as unknown as KitRunContext;
+}
+/** Retry receipts may replace only the exact same declared shard in this run. */
+function latestKitReports(collection: ReturnType<typeof kitReport>, reports: readonly unknown[], currentValue: unknown) {
+  const current = kitRunContext(currentValue), collected = kitRunContext(collection.context);
+  assert(current.commit === collected.commit && current.runId === collected.runId
+    && Number(current.runAttempt) >= Number(collected.runAttempt), 'Kit collection differs from current run');
+  const expected = new Map(collection.tests.map(test => [test.id, test]));
+  const shards = new Map<string, {attempt: number; value: unknown}>(), attempts = new Set<string>();
+  for (const value of reports) {
+    const report = object(value, 'Kit report'), context = kitRunContext(report['context']);
+    assert(report['schemaVersion'] === 1 && report['execution'] === true, 'Incompatible Kit execution report');
+    assert(context.commit === collected.commit && context.runId === collected.runId
+      && Number(context.runAttempt) >= Number(collected.runAttempt)
+      && Number(context.runAttempt) <= Number(current.runAttempt), 'Kit report context differs from current run');
+    assert(Array.isArray(report['tests']) && report['tests'].length > 0, 'Missing Kit shard cases');
+    const ids = report['tests'].map(value => {
+      const test = object(value, 'Kit case'), declaration = expected.get(String(test['id']));
+      assert(declaration && test['id'] === declaration.id, 'Uncollected Kit retry case');
+      assert(test['declaredExpectedStatus'] === declaration.declaredExpectedStatus
+        && same(test['declaredAnnotations'], declaration.declaredAnnotations), 'Changed Kit retry declaration');
+      return declaration.id;
+    }).sort();
+    assert(new Set(ids).size === ids.length, 'Duplicate Kit retry case');
+    const identity = JSON.stringify(ids), attempt = Number(context.runAttempt), prior = shards.get(identity);
+    const receiptIdentity = JSON.stringify([identity, attempt]);
+    assert(!attempts.has(receiptIdentity), 'Ambiguous Kit reports for the same shard and attempt');
+    attempts.add(receiptIdentity);
+    if (!prior || attempt > prior.attempt) shards.set(identity, {attempt, value});
+  }
+  return {reports: [...shards.values()].map(shard => shard.value), provenance: {
+    ...current, collectionAttempt: collected.runAttempt,
+    selectedAttempts: [...new Set([...shards.values()].map(shard => shard.attempt))].sort((a, b) => a - b),
+    supersededReports: reports.length - shards.size,
+  }};
+}
+/** Keep immutable per-attempt artifact directories separate until qualification. */
+export function readKitReports(directory: string): unknown[] {
+  const reports = jsonFiles(directory).map(file => json(path.join(directory, file)));
+  for (const name of fs.readdirSync(directory).sort()) {
+    const target = path.join(directory, name);
+    const stat = fs.lstatSync(target);
+    assert(!stat.isSymbolicLink(), 'Symbolic Kit receipt artifact');
+    if (!stat.isDirectory()) continue;
+    const match = /^kit-receipt-([a-z][a-z0-9-]*)-attempt-([1-9]\d*)$/.exec(name);
+    assert(match, 'Unexpected Kit receipt artifact directory');
+    const files = jsonFiles(target);
+    assert(files.length === 1 && files[0] === `${match[1]}.json`, 'Unexpected Kit receipt artifact contents');
+    const value = object(json(path.join(target, files[0]!)), 'Kit report');
+    assert(object(value['context'], 'Kit run context')['runAttempt'] === match[2], 'Kit artifact attempt differs from report');
+    reports.push(value);
+  }
+  return reports;
+}
 /** A shard can never replace, duplicate or silently omit an intended case. */
-export function qualifyKitUnion(collection: unknown, reports: readonly unknown[]) {
+export function qualifyKitUnion(collection: unknown, reports: readonly unknown[], currentContext?: unknown) {
   const expected = kitReport(collection, false);
+  const selected = currentContext === undefined ? {reports} : latestKitReports(expected, reports, currentContext);
   const byId = new Map(expected.tests.map(test => [test.id, test]));
   const observed = new Set<string>();
   let executed = 0;
   assert(reports.length > 0, 'No Kit execution reports');
-  for (const value of reports) {
+  for (const value of selected.reports) {
     const report = kitReport(value, true);
-    assert(same(report.context, expected.context), 'Kit report context differs from collection');
+    if (currentContext === undefined) assert(same(report.context, expected.context), 'Kit report context differs from collection');
     for (const test of report.tests) {
       const declaration = byId.get(test.id);
       assert(declaration, `Uncollected Kit result: ${test.id}`);
@@ -70,7 +133,7 @@ export function qualifyKitUnion(collection: unknown, reports: readonly unknown[]
   const missing = expected.tests.filter(test => !observed.has(test.id));
   assert(!missing.length, `Missing ${missing.length} intended Kit cases: ${missing.map(test => test.id).join(', ')}`);
   assert(executed > 0, 'No SvelteKit acceptance case executed across selected shards');
-  return {schemaVersion: 1, status: 'passed', executed, collected: expected.tests.length, executedOrApprovedSkip: observed.size, reports: reports.length};
+  return {schemaVersion: 1, status: 'passed', executed, collected: expected.tests.length, executedOrApprovedSkip: observed.size, reports: selected.reports.length, ...('provenance' in selected ? {provenance: selected.provenance} : {})};
 }
 export interface CoverageFile {file: string; sha256: string; bytes: number; entries: number}
 export interface CoverageInventory {schemaVersion: 1; shard: {current: number; total: number}; files: CoverageFile[]}
@@ -175,7 +238,12 @@ async function main(): Promise<void> {
   const args = process.argv.slice(2), mode = args[0];
   const value = (flag: string) => {const index = args.indexOf(flag); assert(index >= 0 && args[index + 1], `Missing ${flag}`); return args[index + 1]!;};
   let result: unknown;
-  if (mode === 'kit') result = qualifyKitUnion(json(value('--collection')), jsonFiles(value('--reports')).map(file => json(path.join(value('--reports'), file))));
+  if (mode === 'kit') {
+    const environment = [process.env['GITHUB_SHA'], process.env['GITHUB_RUN_ID'], process.env['GITHUB_RUN_ATTEMPT']];
+    assert(environment.every(value => value) || environment.every(value => !value), 'Incomplete current Kit run identity');
+    const currentContext = environment[0] ? {commit: environment[0], runId: environment[1], runAttempt: environment[2]} : undefined;
+    result = qualifyKitUnion(json(value('--collection')), readKitReports(value('--reports')), currentContext);
+  }
   else if (mode === 'coverage-inventory') result = createCoverageInventory(value('--directory'), value('--shard'));
   else if (mode === 'coverage-verify') {
     const format = args.includes('--unit-format') ? value('--unit-format') : 'istanbul';

@@ -154,8 +154,9 @@ assert('app shell CSS loads after core CSS and before feature CSS',
 assert('index defers import CSS behind its ordered lazy-load anchor',
   !indexSrc.includes('href="css/import.css"') &&
   indexSrc.includes('data-import-stylesheet-anchor') &&
-  importLoaderAuditSrc.includes("new URL('../css/import.css', import.meta.url)") &&
-  importLoaderAuditSrc.includes('data-import-stylesheet-anchor'));
+  importLoaderAuditSrc.includes("from './import-stylesheet.js'") &&
+  read('js/import-stylesheet.js').includes("new URL('../css/import.css', import.meta.url)") &&
+  read('js/import-stylesheet.js').includes('data-import-stylesheet-anchor'));
 assert('shared import controls remain in the eager app shell',
   appShellCssAuditSrc.includes('.import-btn:not(:where([data-chat-empty-view] *)) {') &&
   appShellCssAuditSrc.includes('.header-icon-btn.header-import-btn {') &&

@@ -1,3 +1,7 @@
+import { bindImportDropZone } from './import-drop-zone-events.js';
+import { dispatchImportFiles } from './import-dispatch.js';
+import { confirmImportSelection } from './import-selection-confirmation.js';
+export { confirmImportSelection };
 import type { PdfImportDependencyOperations, PdfImportDependencies, RawAIImportReader, RawNormalizer, ParsedPDFResult, ParsePDFOptions, AIProgressCallback, BenchmarkPatch, PreviewReader, ImportAIResult, ProgressFactory, PerformanceWriter, FileClassifier } from '../types/pdf-import.js';
 import { configureRuntimeFunctions } from './runtime-callbacks.js';
 // pdf-import.js — PDF parsing pipeline, import preview, drop zone, batch import
@@ -38,8 +42,6 @@ import {
 } from './pdf-import-persistence.js';
 import {
   hideImportProgress,
-  importDispatch,
-  isImportRunning,
   showBatchImportProgress,
   updateImportProgressPct,
 } from './pdf-import-progress.js';
@@ -342,46 +344,10 @@ export async function classifyImportFiles(files: Parameters<typeof classifyImpor
 // ═══════════════════════════════════════════════
 // DROP ZONE
 export function setupDropZone() {
-  const dropZone = document.getElementById("drop-zone");
-  if (!dropZone || dropZone.dataset.lazyDropZoneBound === 'true') return;
-  dropZone.dataset.lazyDropZoneBound = 'true';
-  dropZone.addEventListener("click", () => { if (importDispatch.busy || isImportRunning()) return; document.getElementById('pdf-input')?.click(); });
-  dropZone.addEventListener("dragover", e => { e.preventDefault(); if (!importDispatch.busy && !isImportRunning()) dropZone.classList.add("drag-over"); });
-  dropZone.addEventListener("dragleave", e => { e.preventDefault(); dropZone.classList.remove("drag-over"); });
-  dropZone.addEventListener("drop", async e => {
-    e.preventDefault(); dropZone.classList.remove("drag-over");
-    if (importDispatch.busy || isImportRunning()) { showNotification("Import already in progress", "info"); return; }
-    const files = Array.from(e.dataTransfer?.files || []);
-    if (files.length === 0) return;
-    importDispatch.busy = true;
-    try {
-      const ownerProfile = state.currentProfile, ownerData = state.importedData;
-      const { jsonFiles, pdfFiles, imageFiles, dnaFiles, textFiles, cycleFiles = [], unsupportedCount } = await classifyImportFiles(files);
-      if (state.currentProfile !== ownerProfile || state.importedData !== ownerData) return;
-      if (unsupportedCount > 0 && [jsonFiles, pdfFiles, imageFiles, dnaFiles, textFiles, cycleFiles].every(files => !files.length)) {
-        showNotification("Unsupported file type. Use PDF, Excel, text, image, JSON, DNA raw data, or an Apple Health, Drip, Natural Cycles, or Clue export.", "error");
-        return;
-      }
-      for (const f of jsonFiles) { if (state.currentProfile !== ownerProfile) return; await pdfImportDeps.importDataJSON(f); }
-      for (const f of cycleFiles) { if (state.currentProfile !== ownerProfile) return; await handleCycleImportFile(f); }
-      for (const f of dnaFiles) {
-        if (state.currentProfile !== ownerProfile) return;
-        const headerData = state.importedData, header = await f.slice(0, 1500).text();
-        if (state.currentProfile !== ownerProfile || state.importedData !== headerData) return;
-        const fmt = getDnaModuleFunction('detectDNAFile')?.(header) || null;
-        const handleMtDNAFile = getDnaModuleFunction('handleMtDNAFile');
-        const handleDNAFile = getDnaModuleFunction('handleDNAFile');
-        if ((fmt === 'mtdna' || fmt === '23andme-mito') && handleMtDNAFile) await handleMtDNAFile(f);
-        else if (fmt === '23andme-y') { showNotification('Y-chromosome DNA files are not supported', 'info'); }
-        else if (handleDNAFile) await handleDNAFile(f);
-      }
-      for (const f of textFiles) { if (state.currentProfile !== ownerProfile) return; await handleTextFile(f); }
-      for (const f of imageFiles) { if (state.currentProfile !== ownerProfile) return; await handleImageFile(f); }
-      if (state.currentProfile !== ownerProfile) return;
-      if (pdfFiles.length === 1) await handlePDFFile(pdfFiles[0]!);
-      else if (pdfFiles.length > 1) await handleBatchPDFs(pdfFiles);
-    } finally { importDispatch.busy = false; }
-  });
+  bindImportDropZone(files => dispatchImportFiles(files, async () => ({
+    classifyImportFiles, confirmImportSelection, handleCycleImportFile, handleTextFile,
+    handleImageFile, handlePDFFile, handleBatchPDFs,
+  }), 'drop-zone', file => pdfImportDeps.importDataJSON(file)));
 }
 
 // ═══════════════════════════════════════════════

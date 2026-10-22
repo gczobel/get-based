@@ -66,3 +66,24 @@ it('round trips report timestamps and canonicalizes restored insulin aliases', (
   expect(restored.markers!['hormones.insulin']).toBeUndefined();
   expect(restored.markerSources!['diabetes.insulin']).toEqual({ at: 100, snapshotId: 'report', file: 'lab.pdf' });
 });
+
+it('locates both duplicate participants using original indices, including insulin aliases', () => {
+  const markers = [{ ...row }, { ...row, mappedKey: 'custom.other' }, { ...row }];
+  expect(prepareImportCommit({date, markers}, new Set()).errorRows).toEqual([0, 2]);
+  expect(prepareImportCommit({date, markers}, new Set([2])).errorRows).toEqual([]);
+  expect(prepareImportCommit({date, markers: [{...row, value: null}]}, new Set()).errorRows).toEqual([0]);
+  expect(prepareImportCommit({date, markers: [{...row, mappedKey: 'invalid'}]}, new Set()).errorRows).toEqual([0]);
+  expect(prepareImportCommit({date: 'invalid', markers}, new Set()).errorRows).toEqual([]);
+});
+
+it('adopts incoming units for a custom marker whose saved unit is empty or whitespace', () => {
+  const marker = { matched: false, suggestedKey: 'custom.analyte', value: 1, unit: 'g/l', refMin: 0.5, refMax: 2 };
+  for (const unit of ['', '   ']) {
+    const result = prepareImportCommit({date, markers: [marker]}, new Set(), {'custom.analyte': {unit}});
+    expect(result.error).toBeNull();
+    expect(result.markers).toEqual([marker]);
+  }
+  const incompatible = prepareImportCommit({date, markers: [marker]}, new Set(), {'custom.analyte': {unit: 'mmol/l'}});
+  expect(incompatible.error).toContain('cannot be converted');
+  expect(incompatible.errorRows).toEqual([0]);
+});

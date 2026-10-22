@@ -183,6 +183,7 @@ const classes: Record<string, string> = {
     "gb:review-ui:review-phone:[&_.dashboard-action-btn]:[min-height:42px]",
   ),
   'import-table': styles(
+    "gb:review-ui:[&_tr[aria-invalid=true]]:[outline:2px_solid_var(--red)] gb:review-ui:[&_tr[aria-invalid=true]]:[outline-offset:-2px]",
     "gb:review-ui:[width:100%] gb:review-ui:[border-collapse:collapse] gb:review-ui:[font-size:13px]",
     "gb:review-ui:[margin:0] gb:review-ui:[&_th]:[background:var(--bg-card)] gb:review-ui:[&_th]:[padding:8px_12px]",
     "gb:review-ui:[&_th]:[text-align:left] gb:review-ui:[&_th]:[font-size:11px] gb:review-ui:[&_th]:[text-transform:uppercase]",
@@ -214,6 +215,7 @@ const classes: Record<string, string> = {
     "gb:review-ui:review-phone:[&_td.import-map-cell::before]:[content:attr(data-label)] gb:review-ui:review-phone:[&_td[data-label=Unit]]:[grid-template-columns:minmax(0,_1fr)] gb:review-ui:review-phone:[&_td[data-label=Unit]]:[gap:5px]",
     "gb:review-ui:review-phone:[&_td[data-label=Unit]_.import-unit-input]:[min-height:42px] gb:review-ui:review-phone:[&_td[data-label=Unit]_.import-unit-input]:[font-size:13px] gb:review-ui:review-phone:[&_td[data-label=Unit]_.import-unit-picker-btn]:[min-height:42px]",
   ),
+  'import-row-number': 'gb:review-ui:[font-family:var(--font-mono)] gb:review-ui:[color:var(--text-muted)]',
   'import-state-heading': styles(
     "gb:review-ui:[width:30px] gb:review-ui:[text-align:center]",
   ),

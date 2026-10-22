@@ -489,8 +489,11 @@ test('Agent Access hydrates offline with masked persisted credentials, keyboard 
           probe.remove();
           return { match, themedButton, noOverflow: element.scrollWidth <= element.clientWidth };
         }), {message: `${theme} at ${viewport.width}px`}).toMatchObject({ match: true, themedButton: true, noOverflow: true });
-        const box = (await panel.locator('#messenger-token').boundingBox())!; const bounds = (await panel.boundingBox())!;
-        expect(box.x + box.width).toBeLessThanOrEqual(bounds.x + bounds.width + 1);
+        await expect.poll(() => panel.evaluate(element => {
+          const box = element.querySelector<HTMLElement>('#messenger-token')!.getBoundingClientRect();
+          const bounds = element.getBoundingClientRect();
+          return box.right - bounds.right;
+        }), {message: `${theme} token containment at ${viewport.width}px`}).toBeLessThanOrEqual(1);
       }
     }
     await page.close();

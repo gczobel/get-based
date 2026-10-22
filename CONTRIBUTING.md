@@ -95,11 +95,18 @@ jobs.
 This diagnostic run does not publish the normal `test` gate or release evidence;
 the default `off` choice retains the complete normal workflow.
 
-Pull requests select affected tests, while main and explicit release verification
-retain the exhaustive regression and combined-coverage matrix. Browser jobs run
-in bounded parallel lanes: compatibility checks can start alongside Chromium,
-and macOS WebKit can start alongside Linux. The final `test` check validates the
-selected jobs and their evidence; separate security checks remain visible.
+Pull requests and main pushes use the affected merge gate: compiler and build
+contracts, affected unit tests, up to four shipping Chromium shards, and applicable
+resource budgets. The budget runs before browser/unit execution on an existing
+runner; no extra PR budget runner is needed. Native-only behavior, directly edited
+native browser tests and native harness changes retain their affected native
+checks. Other native regressions and shipping Firefox/WebKit checks run in the nightly full matrix
+(02:17 UTC), manual Tests dispatch, and explicit release verification. Those full
+runs retain all coverage floors. The plan lists deferred native tests and browser
+projects; the final `test` check validates every selected job and shipping receipt.
+A passing merge gate does not establish cross-browser or full release acceptance.
+Superseded PR and main-push runs are cancelled; separate security checks remain
+visible.
 
 GitHub Actions owns the exhaustive browser and combined-coverage matrix by
 default. An exceptional local full run requires an explicit high-write opt-in:

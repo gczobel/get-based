@@ -419,9 +419,14 @@ console.log('=== Phase 3 A11y Tests ===\n');
 
   const importDropZoneSrc = read('/js/import-drop-zone.js');
   const importDropZoneRuntimeSrc = read('/js/import-drop-zone-runtime.js');
+  const importDropZoneEventsSrc = read('/js/import-drop-zone-events.js');
+  const importDispatchSrc = read('/js/import-dispatch.js');
   assert('import drop-zone browser hooks are isolated in runtime adapter',
-    importDropZoneSrc.includes("from './import-drop-zone-runtime.js'")
-      && !/\bwindow\b/.test(importDropZoneSrc)
+    importDropZoneSrc.includes("from './import-drop-zone-events.js'")
+      && importDropZoneSrc.includes("from './import-dispatch.js'")
+      && importDropZoneEventsSrc.includes("from './import-drop-zone-runtime.js'")
+      && importDispatchSrc.includes("from './import-drop-zone-runtime.js'")
+      && !/\bwindow\b/.test(importDropZoneSrc + importDropZoneEventsSrc + importDispatchSrc)
       && importDropZoneRuntimeSrc.includes('isDropZoneImportRunning')
       && importDropZoneRuntimeSrc.includes('handleDropZoneDNAFile'));
 

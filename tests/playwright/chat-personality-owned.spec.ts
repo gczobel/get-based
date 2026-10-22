@@ -33,6 +33,11 @@ test('owned personality picker and editor remain usable across themes and compac
     await page.evaluate(async theme=>{const t=await import('/js/theme.js');await t.loadExtraThemesStylesheet();t.setTheme(theme);},theme);
     for(const width of [1280,390,320]){
       await page.setViewportSize({width,height:900});const label=`${theme}/${width}`;
+      // The panel animates its width when crossing the compact breakpoint.
+      // Read the unchanged popup bounds only after that real transition settles.
+      await expect.poll(()=>page.locator('#chat-panel').evaluate(panel=>panel.getAnimations().filter(animation=>
+        animation instanceof CSSTransition&&['width','transform'].includes(animation.transitionProperty)
+        &&animation.playState!=='finished'&&animation.playState!=='idle').length),{message:label+' panel viewport transition settled'}).toBe(0);
       await page.locator('.chat-personality-current').click();
       await expect(page.locator('#chat-personality-options')).toBeVisible();
       expect(await page.locator('#chat-personality-options').evaluate(element=>{const b=element.getBoundingClientRect();return b.left>=0&&b.right<=innerWidth&&b.bottom<=innerHeight&&element.scrollWidth<=element.clientWidth+1;}),label).toBe(true);

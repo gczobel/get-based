@@ -47,10 +47,10 @@ const SW_BUNDLES_END = '  // PRODUCTION_BUNDLE_ASSETS_END';
 const LAZY_SYNC_CHUNK_MODULES = new Set([
   path.join(ROOT, 'js', 'routstr-balance-settlement.js'),
   path.join(ROOT, 'js', 'sync-apply.js'),
+  path.join(ROOT, 'js', 'wearables-manual-sync.js'),
   path.join(ROOT, 'js', 'sync-chat-merge.js'),
   path.join(ROOT, 'js', 'sync-evolu8-candidate.js'),
   path.join(ROOT, 'js', 'wearables-credential-vault.js'),
-  path.join(ROOT, 'js', 'wearables-manual-sync.js'),
 ]);
 
 function stripRetryQuery(id: string) {
@@ -118,8 +118,8 @@ function replaceMarkedSection(source: string, startMarker: string, endMarker: st
 async function validateBundlerLock() {
   const lock: LockReader = JSON.parse(await fs.readFile(path.join(ROOT, 'package-lock.json'), 'utf8'));
   const bundler = lock.packages?.['node_modules/rolldown'];
-  if (bundler?.version !== '1.2.5' || !bundler?.integrity) {
-    throw new Error('rolldown must be directly locked to 1.2.5 with integrity metadata');
+  if (bundler?.version !== '1.2.12' || !bundler?.integrity) {
+    throw new Error('rolldown must be directly locked to 1.2.12 with integrity metadata');
   }
 }
 

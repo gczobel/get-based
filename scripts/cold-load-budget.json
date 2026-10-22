@@ -5,7 +5,7 @@
   "maximums": {
     "requests": 337,
     "transferBytes": 1231000,
-    "decodedBytes": 3455000
+    "decodedBytes": 3454000
   },
   "reference": {
     "requests": 276,
@@ -47,10 +47,7 @@
     "immatureGranulocytesPctDecodedBytes": 3451503,
     "immatureGranulocytesPctSafetyRequests": 337,
     "immatureGranulocytesPctSafetyTransferBytes": 1230179,
-    "immatureGranulocytesPctSafetyDecodedBytes": 3452046,
-    "manualBodyReadingsSyncRequests": 337,
-    "manualBodyReadingsSyncTransferBytes": 1230735,
-    "manualBodyReadingsSyncDecodedBytes": 3454123
+    "immatureGranulocytesPctSafetyDecodedBytes": 3452046
   },
   "referenceCommit": "7747f1d7",
   "measuredAt": "2026-09-17"

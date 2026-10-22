@@ -2,6 +2,7 @@ import {describe, expect, it} from 'vitest';
 import fs from 'node:fs';
 import strictAssert from 'node:assert/strict';
 import {runInNewContext} from 'node:vm';
+import {execFileSync} from 'node:child_process';
 import {chromiumWorkers} from '../scripts/ci-workers.mjs';
 import {createCiPlan} from '../scripts/ci-plan.mjs';
 import {allowedKitSkip, validateKitCases, portableKitIdentity, KIT_PROJECTS, type KitCase} from '../scripts/kit-acceptance-reporter.mjs';
@@ -164,7 +165,7 @@ describe('manual WebKit diagnostic isolation', () => {
     const group = /^  group: (.+)$/m.exec(source)?.[1];
     expect(group).toContain("${{ inputs.full_suite == true && 'full' || 'scoped' }}${{ github.event_name == 'workflow_dispatch' && inputs.diagnostic == 'webkit-lens-wearable' && '-webkit-diagnostic' || '' }}");
     expect(group).toContain("${{ github.event_name == 'workflow_dispatch' && inputs.diagnostic == 'webkit-pwa-routstr' && '-webkit-pwa-routstr-diagnostic' || '' }}");
-    expect(source).toContain("cancel-in-progress: ${{ github.event_name == 'pull_request' && inputs.full_suite != true }}");
+    expect(source).toContain("cancel-in-progress: ${{ (github.event_name == 'pull_request' || github.event_name == 'push') && inputs.full_suite != true }}");
   }
   it('keeps every normal event and failed-prepare aggregator intact, including forged diagnostic inputs', () => verifyGates(workflow));
   it('rejects event bypass, missing always, default-on diagnostics and a misleading required check name', () => {
@@ -268,4 +269,52 @@ describe('manual WebKit diagnostic isolation', () => {
       {...report, execution: false}, {...report, status: 'failed'}, {...report, issues: ['scope failure']},
     ]) expect(() => check(value)).toThrow();
   });
+});
+
+
+describe('fast per-change events and explicit full verification', () => {
+  const workflow = fs.readFileSync('.github/workflows/test.yml', 'utf8');
+  const expression = /          FULL: \$\{\{ (.+) \}\}/.exec(workflow)?.[1];
+  it('runs the full matrix nightly, on dispatch and for release callers only', () => {
+    expect(expression).toBeDefined();
+    expect(workflow).toContain("schedule:\n    - cron: '17 2 * * *'");
+    for (const event of ['pull_request', 'push', 'schedule', 'workflow_dispatch', 'workflow_call']) for (const full of [false, true]) {
+      expect(runInNewContext(expression!, {github: {event_name: event}, inputs: {full_suite: full}}, {timeout: 100})).toBe(full || ['schedule', 'workflow_dispatch'].includes(event));
+    }
+    expect(workflow).toContain('BASE: ${{ github.event.pull_request.base.sha || github.event.before }}');
+  });
+  it('falls back to full verification for missing, initial or unavailable history', () => {
+    const fallback = /          (if \[ "\$FULL" = false \][^\n]+)\n/.exec(workflow)?.[1];
+    expect(fallback).toBeDefined();
+    const head = execFileSync('git', ['rev-parse', 'HEAD'], {encoding: 'utf8'}).trim();
+    for (const base of ['', '0'.repeat(40), 'f'.repeat(40), 'invalid', head]) {
+      const result = execFileSync('bash', ['-c', `${fallback}\nprintf '%s' "$FULL"`], {encoding: 'utf8', env: {...process.env, FULL: 'false', BASE: base}, stdio: ['ignore', 'pipe', 'ignore']});
+      expect(result).toBe(base === head ? 'false' : 'true');
+    }
+  });
+  it('fails the stable required check before artifact restoration after failed preparation', () => {
+    const gate = workflow.slice(workflow.indexOf('  test:\n'), workflow.indexOf('  webkit_diagnostics:'));
+    const guard = gate.indexOf('run: test "$PREPARE_RESULT" = success');
+    expect(guard).toBeGreaterThan(0);
+    expect(guard).toBeLessThan(gate.indexOf('uses: actions/checkout@'));
+    for (const result of ['failure', 'cancelled', 'skipped', '']) expect(() => execFileSync('bash', ['-c', 'test "$PREPARE_RESULT" = success'], {env: {...process.env, PREPARE_RESULT: result}})).toThrow();
+    expect(() => execFileSync('bash', ['-c', 'test "$PREPARE_RESULT" = success'], {env: {...process.env, PREPARE_RESULT: 'success'}})).not.toThrow();
+  });
+});
+
+it('requires exactly one unchanged resource-budget execution for every selected merge plan', () => {
+  const workflow = fs.readFileSync('.github/workflows/test.yml', 'utf8');
+  const unit = /      - name: Enforce resource budgets before affected unit tests\n        if: (.+)\n        run: (.+)/.exec(workflow);
+  const kit = /      - name: Enforce resource budgets before the first shipping shard\n        if: (.+)\n        run: (.+)/.exec(workflow);
+  expect(unit).toBeTruthy(); expect(kit).toBeTruthy();
+  const command = 'node scripts/sveltekit-performance-budget.mjs --artifact "$GETBASED_KIT_ARTIFACT" --output .local-notes/ci/performance';
+  expect(unit![2]).toBe(command); expect(kit![2]).toBe(command);
+  for (const shipping of [false, true]) for (const performance of [false, true]) for (const shards of [1, 4]) {
+    const needs = {prepare: {outputs: {full: 'false', kit: String(shipping), performance: String(performance)}}};
+    const evaluate = (expression: string, shard: string) => Boolean(runInNewContext(expression, {needs, matrix: {shard}, startsWith: (value: string, prefix: string) => value.startsWith(prefix)}, {timeout: 100}));
+    const executions = Number(evaluate(unit![1]!, '')) + (shipping ? Array.from({length: shards}, (_, index) => Number(evaluate(kit![1]!, `${index + 1}/${shards}`))).reduce((sum, value) => sum + value, 0) : 0);
+    expect(executions).toBe(Number(performance));
+  }
+  // Full verification still measures on its separate isolated runner.
+  expect(workflow).toMatch(/  performance:\n    needs: prepare\n    if: needs.prepare.outputs.full == 'true'/);
 });

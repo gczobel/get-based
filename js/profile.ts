@@ -158,7 +158,7 @@ function refreshProfileWearables(profileId: string, biometrics: Biometrics | nul
   });
 }
 
-async function waitForProfileWearables(profileId: string) {
+export async function waitForProfileWearables(profileId: string) {
   await pendingProfileWearableRefreshes.get(profileId);
 }
 

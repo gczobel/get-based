@@ -47,6 +47,19 @@ checks use the fixed inventory in
 
 ## Presentation and lifecycle contract
 
+`body-measurement-model.ts` owns method-specific waist/hip/SAD field identities
+and validated portable-mirror projection. `wearables-manual.ts` owns their paired
+numeric writes and deletion clocks through the existing encrypted manual-reading
+path. Overview tiles read this projection without pooling methods into a wearable
+baseline. The lazy body-measurement loader guards profile, route and modal
+ownership; its Svelte editor preserves drafts and compares only matching methods.
+Waist-to-height ratio is a display projection from canonical centimetre waist
+values and the current profile height; it does not rewrite measurement history.
+`body-measurement-cycle.ts` projects optional date-specific cycle context and
+rolling estimated comparison windows for this editor and the Cycle overview.
+Forecast dates never create observed periods, change raw measurements or infer
+an adjustment to fat mass.
+
 Svelte components own first-party markup. Pure presentation modules project
 readonly data; feature controllers retain calculations, provider requests,
 storage, navigation and delegated actions. Projections preserve observable getter,
@@ -482,11 +495,15 @@ the higher-layer behavior through a narrow runtime seam.
 - Secrets and sensitive rows use the existing encryption and IndexedDB paths.
   Do not introduce plaintext fallbacks for OAuth tokens, AI keys, wallet
   proofs, genetics, or health records.
-- Raw wearable and cycle stores remain device-local unless an explicit,
-  privacy-reviewed summary surface is added to sync. The one exception is
-  manual body readings (weight, blood pressure, pulse, with tags and notes):
-  they sync per field through `manualBodyReadings`, written only by explicit
-  log and delete actions, and applied back into the local store after a pull.
+- Raw vendor wearable and cycle stores remain device-local. Explicit user-entered
+  weight, blood pressure and pulse use the encrypted `manualBodyReadings` Sync
+  map, keyed by metric and date; source histories from vendors or file imports
+  are excluded. The local Reading store remains the display source of truth,
+  reconciled from this narrow map with deletion intent and guarded profile writes.
+  Row writes reread canonical deletion/field clocks inside their manual write
+  boundary. Portable manual restores drain prior profile-load wearable work
+  before copying fields, then materialize rows and refresh only manual-owned
+  projections before publishing their still-current import shell.
 - Supplement and medication status is derived from dated periods. Product-label
   facts, a user's regimen, inactive materials, and source quality evidence stay
   separate; AI consumers use the bounded projections in `supplement-context.js`.

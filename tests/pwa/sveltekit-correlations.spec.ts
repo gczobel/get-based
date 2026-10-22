@@ -113,7 +113,11 @@ test('static Correlations Selection and comparison Details first construct offli
  }finally{try{await info.attach('correlations-final-raw-diagnostics',{body:JSON.stringify({artifact,phases,events,errors,csp,external,requests,requestFailures,originStopped:stopped,lastPageClosed:page.isClosed(),lastPageDOM:page.isClosed()?null:await page.content().catch(error=>'DOM capture failed: '+String(error))},null,2),contentType:'application/json'});}finally{if(!stopped)await server.close();}}
 });
 
-async function workspaceControls(page:Page):Promise<ControlsReceipt>{return page.locator('#corr-therapy-results').evaluate(root=>{
+async function workspaceControls(page:Page):Promise<ControlsReceipt>{
+ // Selection persistence can finish while the actual lazy Chart runtime is
+ // still preparing this workspace, especially after a closed-client launch.
+ await expect(page.locator('#corr-therapy-results #corr-rangePreset')).toBeAttached();
+ return page.locator('#corr-therapy-results').evaluate(root=>{
  const text=(node:Element|null)=>node?.textContent?.trim()||'';
  const buttons=(nodes:NodeListOf<HTMLButtonElement>,attribute:string)=>[...nodes].map(node=>({id:node.id,value:node.getAttribute(attribute)||'',text:text(node),pressed:node.getAttribute('aria-pressed'),disabled:node.disabled,type:node.type,active:node.classList.contains('active')}));
  const group=(key:string)=>{const node=root.querySelector('#corr-'+key)!;return {hidden:node.parentElement!.hasAttribute('hidden'),label:node.getAttribute('aria-label'),buttons:buttons(node.querySelectorAll('button'),'data-corr-value')};};

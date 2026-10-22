@@ -2,8 +2,15 @@ import path from 'node:path';
 import { expect, test, type Page } from '@playwright/test';
 import { startKitServer } from './kit-server.js';
 import { openStaticSettings as settings } from './settings-entry.js';
+import { captureOfflineRouteFailureDiagnostics } from '../helpers/offline-launch-diagnostics.js';
 const artifact = process.env.GETBASED_KIT_ARTIFACT || path.resolve('.local-notes/sveltekit-build');
 async function ready(page: Page) { await expect(page.locator('html[data-app-ready][data-shell-framework="sveltekit"]')).toBeAttached({ timeout: 30_000 }); await page.evaluate(() => navigator.serviceWorker.ready.then(() => true)); await expect.poll(() => page.evaluate(() => !!navigator.serviceWorker.controller)).toBe(true); }
+// Retain bounded native registration/cache evidence if readiness fails. No retry
+// or change to the original success path, worker requirement or test deadline.
+test.afterEach(async({context},info)=>{
+  if(info.status===info.expectedStatus)return;
+  for(const page of context.pages())await captureOfflineRouteFailureDiagnostics(page,info,[]);
+});
 test('static Custom API verifies exact endpoint consent and encrypted key persistence through cached cold launch and removal', async ({ page, context }) => {
   test.setTimeout(150_000);
   await context.addInitScript(() => {
