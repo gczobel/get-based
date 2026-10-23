@@ -20,6 +20,8 @@ import {
 } from '../js/cycle-import-loader.js';
 import { createDefaultProfileData } from '../js/profile.js';
 import { state } from '../js/state.js';
+import {classifyImportFiles} from '../js/pdf-import-file-utils.js';
+import {isDNAFile, isDNAFileByContent} from '../js/dna-file-detection.js';
 import {
   clearCycleImport,
   countCycleSource,
@@ -443,3 +445,36 @@ describe('cycle import phase 1 primitives', () => {
 });
 
 export type PreservedOriginalImportSignatures = [typeof clearCycleImport, typeof CLUE_BACKUP];
+
+
+it.each([
+  ['Drip', 'drip-export.csv', 'cycle-drip-native.csv'],
+  ['Natural Cycles', 'tracking_data.csv', 'cycle-natural-cycles.csv'],
+])('keeps recognized %s CSV in the local cycle bucket before lab-report confirmation', async (_label, name, fixture) => {
+  const cycle = new File([cycleFixture(fixture!)], name!, {type: 'text/csv'});
+  const lab = new File(['date,marker,value,unit\n2026-01-01,Glucose,90,mg/dL'], 'report.csv');
+  const dna = new File(['#AncestryDNA\nrsid\tchromosome\tposition\tallele1\tallele2'], 'raw-data.txt');
+  const before = structuredClone(state.importedData);
+  const buckets = await classifyImportFiles([cycle, lab, dna], {isCycleImportFile, isDNAFile, isDNAFileByContent});
+  expect(buckets.cycleFiles).toEqual([cycle]); expect(buckets.textFiles).toEqual([lab]);
+  expect(buckets.dnaFiles).toEqual([dna]); expect(buckets.unsupportedCount).toBe(0);
+  expect(state.importedData).toEqual(before);
+});
+it('bounds cycle CSV recognition and treats an unreadable prefix as unrecognized text', async () => {
+  const file = new File(['date,bleeding.value\n2026-01-01,1'], 'drip.csv');
+  const slices: [number | undefined, number | undefined][] = [], original = file.slice.bind(file);
+  file.slice = (start, end, contentType) => {slices.push([start, end]); return original(start, end, contentType);};
+  expect(await isCycleImportFile(file)).toBe(true); expect(slices).toEqual([[0, 64 * 1024]]);
+  file.slice = () => {throw new Error('Synthetic unreadable file');};
+  expect(await isCycleImportFile(file)).toBe(false);
+});
+
+
+it('parses recognized Natural Cycles plain text through the same adapter as CSV', async () => {
+  const text = 'date,temperature,cycle day\n2026-01-01,36.5,1';
+  const file = new File([text], 'cycle-export.txt', {type: 'text/plain'});
+  const buckets = await classifyImportFiles([file], {isCycleImportFile, isDNAFile, isDNAFileByContent});
+  expect(buckets.cycleFiles).toEqual([file]); expect(buckets.textFiles).toEqual([]);
+  const parsed = await parseCycleImportFile(file);
+  expect(parsed).toMatchObject({source: 'natural_cycles', observations: [{date: '2026-01-01', bbtC: 36.5}]});
+});

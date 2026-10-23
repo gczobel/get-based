@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { JSDOM } from 'jsdom';
 import { readServiceWorkerSource } from '../scripts/service-worker-source.js';
 import { createLegacyAssertions } from './helpers/legacy-assertions.js';
 // test-light-env.js — Light Environment math + CRUD: rooms, screens,
@@ -358,8 +359,13 @@ const {
     emptyLoadHtml.includes('Generally aligned') &&
     !emptyLoadHtml.includes('Mixed signals') &&
     !emptyLoadHtml.includes('stale moderate verdict'));
+  const { projectReviewAI } = await import('../js/light-review-ai-presentation.js');
+  const { projectEnvironmentAI } = await import('../js/light-environment-ai-presentation.js');
   const restoredBurdenRenderer = configureLightEnv({
-    renderBurdenInterp: (b: { interp: unknown }) => `<p class="light-env-summary-interp injected-burden">${b.interp}</p>`,
+    getBurdenInterpretationView: (b: { interp: unknown }) => projectReviewAI({
+      kind: 'burden', status: 'idle', variant: 'heuristic', analysis: null,
+      actionOwner: 'fixture-burden', heuristic: `injected-burden ${String(b.interp)}`,
+    }),
   });
   const injectedLoadHtml = renderEnvironmentSection({ embedded: true });
   assert('Burden summary uses injected renderer instead of window lookup',
@@ -388,9 +394,9 @@ const {
   };
   const restoredRenderDeps = configureLightEnv({
     getMeasurementsForRoom: (roomId: unknown) => roomId === injectedRoom!.id ? [injectedMeasurement] : [],
-    renderMeasurementAIInline: (m: { id: unknown }) => `<div class="injected-measurement-ai">${m.id}</div>`,
-    renderRoomAIBlock: (r: { id: unknown }) => `<div class="injected-room-ai">${r.id}</div>`,
-    renderScreenAIBlock: (s: { id: unknown }) => `<div class="injected-screen-ai">${s.id}</div>`,
+    getMeasurementAIView: (m: { id: unknown }) => projectEnvironmentAI({ kind: 'measurement', status: 'ok', targetId: String(m.id), actionOwner: 'fixture-measurement', analysis: { tip: `injected-measurement-ai ${String(m.id)}`, detail: String(m.id) } }),
+    getRoomAIView: (r: { id: unknown }) => projectEnvironmentAI({ kind: 'room', status: 'ok', targetId: String(r.id), actionOwner: 'fixture-room', analysis: { tip: `injected-room-ai ${String(r.id)}`, detail: String(r.id) } }),
+    getScreenAIView: (screen: { id: unknown }) => projectEnvironmentAI({ kind: 'screen', status: 'ok', targetId: String(screen.id), actionOwner: 'fixture-screen', analysis: { tip: `injected-screen-ai ${String(screen.id)}`, detail: String(screen.id) } }),
   });
   const injectedRenderHtml = renderEnvironmentSection({ embedded: true });
   assert('Room measurement and AI renderers use injected Light environment deps',
@@ -512,14 +518,14 @@ const {
   auditModule.lightEnvAuditActionHandlers.setLightAuditsBlockOpen(true);
   const manuallyOpenAudits = auditModule.renderLightAuditsBlock();
   assert('Audit block can stay open without an expanded audit card',
-    manuallyOpenAudits.includes('class="light-env-block light-audits-block" open') &&
-    manuallyOpenAudits.includes('data-light-env-action="set-audits-block-open"') &&
+    new JSDOM(manuallyOpenAudits).window.document.querySelector('[data-light-env-action="toggle-audits-block"]')?.getAttribute('aria-expanded') === 'true' &&
+    !new JSDOM(manuallyOpenAudits).window.document.querySelector('.light-audits-body')?.hasAttribute('hidden') &&
     !manuallyOpenAudits.includes('ontoggle='));
   auditModule.lightEnvAuditActionHandlers.setLightAuditsBlockOpen(false);
   const manuallyClosedAudits = auditModule.renderLightAuditsBlock();
   assert('Audit block open state can be manually collapsed',
-    manuallyClosedAudits.includes('class="light-env-block light-audits-block"') &&
-    !manuallyClosedAudits.includes('class="light-env-block light-audits-block" open'));
+    new JSDOM(manuallyClosedAudits).window.document.querySelector('[data-light-env-action="toggle-audits-block"]')?.getAttribute('aria-expanded') === 'false' &&
+    new JSDOM(manuallyClosedAudits).window.document.querySelector('.light-audits-body')?.hasAttribute('hidden') === true);
 
   // ─── 11. Assessment surface renderers ───────────────────────────────
   console.log('%c 11. Assessment surface renderers ', 'font-weight:bold;color:#f59e0b');
@@ -531,12 +537,12 @@ const {
     !summaryHtml.includes('light-env-room-disclosure'));
   const fullHtml = renderEnvironmentSection();
   assert('Full environment section remains available for the assessment workspace',
-    fullHtml.includes('class="light-env-head"') &&
-    fullHtml.includes('light-env-room-disclosure'));
+    new JSDOM(fullHtml).window.document.querySelectorAll('.light-env-head').length === 1 &&
+    new JSDOM(fullHtml).window.document.querySelectorAll('.light-env-room-disclosure').length > 0);
   const embeddedHtml = renderEnvironmentSection({ embedded: true });
   assert('Embedded assessment section suppresses duplicate page header',
-    embeddedHtml.includes('light-env-section-embedded') &&
-    !embeddedHtml.includes('class="light-env-head"'));
+    new JSDOM(embeddedHtml).window.document.querySelector('.light-env-section')?.classList.contains('light-env-section-embedded') === true &&
+    new JSDOM(embeddedHtml).window.document.querySelectorAll('.light-env-head').length === 0);
   assert('Assessment modal functions stay module exports instead of window facade',
     typeof openLightEnvironmentAssessment === 'function' &&
     typeof closeLightEnvironmentAssessment === 'function' &&
@@ -552,78 +558,75 @@ const {
     (window as typeof window & { computeLightDeficitAxes?: unknown }).computeLightDeficitAxes === undefined);
 
   const beforeModalSyncData = state.importedData;
-  const originalCreateElement = document.createElement;
-  const originalGetElementById = document.getElementById;
-  const originalBodyAppendChild = document.body.appendChild;
+  const modalDOM = new JSDOM('<!doctype html><html><body></body></html>', { url: 'http://localhost/' });
+  const priorDOMGlobals = new Map<string, PropertyDescriptor | undefined>();
+  const modalGlobals = {
+    document: modalDOM.window.document,
+    HTMLElement: modalDOM.window.HTMLElement,
+    HTMLInputElement: modalDOM.window.HTMLInputElement,
+    HTMLTextAreaElement: modalDOM.window.HTMLTextAreaElement,
+  };
   try {
-    let storedOverlay: unknown = null;
-    let dirtyModal = false;
-    const modalEl = {
-      scrollTop: 33,
-      querySelector: () => null,
-      querySelectorAll: () => dirtyModal
-        ? [{ disabled: false, tagName: 'INPUT', type: 'text', value: 'local edit', defaultValue: '' }]
-        : [],
-    };
-    const overlayEl = {
-      id: '',
-      className: '',
-      style: {},
-      dataset: {},
-      _html: '',
-      classList: {
-        add(cls: string) { if (!overlayEl.className.includes(cls)) overlayEl.className += `${overlayEl.className ? ' ' : ''}${cls}`; },
-        remove(cls: string) { overlayEl.className = overlayEl.className.split(/\s+/).filter(x => x && x !== cls).join(' '); },
-        contains(cls: string) { return overlayEl.className.split(/\s+/).includes(cls); },
-      },
-      addEventListener: () => {},
-      removeEventListener: () => {},
-      querySelector: (sel: string) => sel === '.light-env-assessment-modal' ? modalEl : null,
-      querySelectorAll: () => [],
-      remove() { if (storedOverlay === overlayEl) storedOverlay = null; },
-      set innerHTML(value) { overlayEl._html = String(value); },
-      get innerHTML() { return overlayEl._html; },
-    };
-    (document as unknown as { createElement: (tag: string) => unknown }).createElement = tag => tag === 'div' ? overlayEl : originalCreateElement.call(document, tag);
-    (document.body as unknown as { appendChild: (el: unknown) => unknown }).appendChild = el => { storedOverlay = el; return el; };
-    (document as unknown as { getElementById: (id: string) => unknown }).getElementById = id => id === 'light-env-assessment-overlay' ? storedOverlay : originalGetElementById.call(document, id);
-
+    for (const [name, value] of Object.entries(modalGlobals)) {
+      priorDOMGlobals.set(name, Object.getOwnPropertyDescriptor(globalThis, name));
+      Object.defineProperty(globalThis, name, { configurable: true, writable: true, value });
+    }
     (state as { importedData: unknown }).importedData = {
-      lightEnvironment: { rooms: [{ id: 'sync-room', name: 'Office', hoursOccupiedPerDay: 8 }], screens: [] },
+      lightEnvironment: { rooms: [{ id: 'sync-room', name: 'Office', primarySource: 'unknown', hoursOccupiedPerDay: 8 }], screens: [] },
       lightMeasurements: [],
     };
     openLightEnvironmentAssessment();
+    const storedOverlay = document.getElementById('light-env-assessment-overlay');
+    if (!storedOverlay) throw new Error('Expected the real Light assessment overlay');
+    const { hasDirtyFormFields } = await import('../js/utils.js');
+    assert('Native Light assessment fixture starts with pristine form defaults', !hasDirtyFormFields(storedOverlay));
     const initialModalHtml = (storedOverlay as { innerHTML: string } | null)?.innerHTML || '';
     state.importedData.lightEnvironment!.rooms[0].name = 'Bedroom';
     (window.dispatchEvent as unknown as (event: Pick<Event, "type">) => ReturnType<typeof window.dispatchEvent>)({ type: 'labcharts-sync-applied' });
     assert('Open Light Environment modal refreshes clean content on sync',
-      initialModalHtml.includes('light-env-room-disclosure-name">Office') &&
-      (storedOverlay as { innerHTML: string } | null)?.innerHTML.includes('light-env-room-disclosure-name">Bedroom') &&
-      !(storedOverlay as { innerHTML: string } | null)?.innerHTML.includes('light-env-room-disclosure-name">Office'));
+      new JSDOM(initialModalHtml).window.document.querySelector('.light-env-room-disclosure-name')?.textContent === 'Office' &&
+      new JSDOM((storedOverlay as {innerHTML:string}).innerHTML).window.document.querySelector('.light-env-room-disclosure-name')?.textContent === 'Bedroom' &&
+      ![...new JSDOM((storedOverlay as {innerHTML:string}).innerHTML).window.document.querySelectorAll('.light-env-room-disclosure-name')].some(node=>node.textContent === 'Office'));
 
-    dirtyModal = true;
+    const modal = storedOverlay.querySelector('.light-env-assessment-modal');
+    if (!modal) throw new Error('Expected the real Light assessment modal');
+    const dirtyInput = document.createElement('input');
+    dirtyInput.type = 'text';
+    dirtyInput.value = 'local edit';
+    modal.appendChild(dirtyInput);
+    assert('Native Light assessment fixture detects the unsaved edit', hasDirtyFormFields(modal));
     const cleanSyncedHtml = (storedOverlay as { innerHTML: string }).innerHTML;
     state.importedData.lightEnvironment!.rooms[0].name = 'Kitchen';
     (window.dispatchEvent as unknown as (event: Pick<Event, "type">) => ReturnType<typeof window.dispatchEvent>)({ type: 'labcharts-sync-applied' });
     assert('Open Light Environment modal skips sync refresh while form is dirty',
       (storedOverlay as { innerHTML: string } | null)?.innerHTML === cleanSyncedHtml &&
-      !(storedOverlay as { innerHTML: string } | null)?.innerHTML.includes('light-env-room-disclosure-name">Kitchen'));
-    closeLightEnvironmentAssessment();
+      ![...new JSDOM((storedOverlay as {innerHTML:string}).innerHTML).window.document.querySelectorAll('.light-env-room-disclosure-name')].some(node=>node.textContent === 'Kitchen'));
   } finally {
-    document.createElement = originalCreateElement;
-    document.getElementById = originalGetElementById;
-    document.body.appendChild = originalBodyAppendChild;
-    (state as { importedData: unknown }).importedData = beforeModalSyncData;
+    try {
+      closeLightEnvironmentAssessment();
+    } finally {
+      (state as { importedData: unknown }).importedData = beforeModalSyncData;
+      try {
+        modalDOM.window.close();
+      } finally {
+        for (const [name, descriptor] of priorDOMGlobals) {
+          if (descriptor) Object.defineProperty(globalThis, name, descriptor);
+          else Reflect.deleteProperty(globalThis, name);
+        }
+      }
+    }
   }
 
   const fs = await import('node:fs/promises');
   const envSrc = await fs.readFile(new URL('../js/light-env.js', import.meta.url), 'utf8');
   const editorSrc = await fs.readFile(new URL('../js/light-env-editor.js', import.meta.url), 'utf8');
   const modelSrc = await fs.readFile(new URL('../js/light-env-model.js', import.meta.url), 'utf8');
+  const presentationSrc = await fs.readFile(new URL('../js/components/LightEnvironmentPresentation.svelte', import.meta.url), 'utf8');
   assert('Assessment modal uses user-facing indoor assessment copy',
-    envSrc.includes('Indoor Light Assessment') &&
-    envSrc.includes('Save snapshots before and after changes') &&
-    !envSrc.includes('The Light page keeps the summary'));
+    envSrc.includes('LightEnvironmentPresentation.svelte.html.js') &&
+    presentationSrc.includes('Indoor Light Assessment') &&
+    presentationSrc.includes('Save snapshots before and after changes') &&
+    !presentationSrc.includes('The Light page keeps the summary'));
   assert('Light environment deterministic model is isolated from rendering/storage',
     envSrc.includes("from './light-env-model.js'") &&
     modelSrc.includes('export function computeRoomSeverityForRoom') &&
@@ -707,24 +710,28 @@ const {
     aiSaveHooksSrc.includes("import { configureLightEnvAudits } from './light-env-audits.js';") &&
     aiSaveHooksSrc.includes("import { hasAssistantFeatureProvider } from './ai-feature-routing.js';") &&
     aiSaveHooksSrc.includes("import { openChatPanel } from './chat-loader.js';") &&
-    aiSaveHooksSrc.includes("import { maybeAnalyzeAuditAfterSave, renderAuditAIBlock, renderAuditAIDot } from './light-audit-ai-analysis.js';") &&
-    aiSaveHooksSrc.includes('configureLightEnvAudits({ hasAIProvider: hasAssistantFeatureProvider, maybeAnalyzeAuditAfterSave, renderAuditAIBlock, renderAuditAIDot, openChatPanel })') &&
+    aiSaveHooksSrc.includes("import { maybeAnalyzeAuditAfterSave, getAuditAIView, getAuditDotView } from './light-audit-ai-analysis.js';") &&
+    aiSaveHooksSrc.includes('configureLightEnvAudits({ hasAIProvider: hasAssistantFeatureProvider, maybeAnalyzeAuditAfterSave, getAuditAIView, getAuditDotView, openChatPanel })') &&
     appLightSunSrc.includes("import './light-ai-save-hooks.js';"));
   assert('Burden AI renderer routes through light-env configuration instead of window lookup',
     envSrc.includes('export function configureLightEnv') &&
-    envSrc.includes('renderBurdenInterp: null') &&
-    envSrc.includes('lightEnvDeps.renderBurdenInterp') &&
+    envSrc.includes('getBurdenInterpretationView: null') &&
+    envSrc.includes('lightEnvDeps.getBurdenInterpretationView') &&
     !envSrc.includes('globalThis.renderBurdenInterp') &&
     !burdenSrc.includes('Object.assign(window, {') &&
     !burdenSrc.includes('window.refreshBurdenAIAnalysis') &&
     !burdenSrc.includes('window.analyzeBurdenAI') &&
     !burdenSrc.includes('window.renderBurdenInterp') &&
     burdenSrc.includes("import { computeIndoorBurden, configureLightEnv, isActiveToday } from './light-env.js';") &&
-    burdenSrc.includes('configureLightEnv({ renderBurdenInterp });'));
+    burdenSrc.includes('configureLightEnv({ getBurdenInterpretationView });'));
+  const reviewProjectionSrc = await fs.readFile(new URL('../js/light-review-ai-presentation.ts', import.meta.url), 'utf8');
+  const weeklyComponentSrc = await fs.readFile(new URL('../js/components/LightWeeklyAI.svelte', import.meta.url), 'utf8');
   assert('Channel mix AI renderer routes through Light page wiring instead of window lookup',
     appLightSunSrc.includes("import './light-channels-ai-analysis.js';") &&
     channelAiSrc.includes('registerAIActionHandler') &&
-    channelAiSrc.includes("aiActionAttrs('refresh-channel-mix')") &&
+    channelAiSrc.includes("kind: 'weekly'") &&
+    reviewProjectionSrc.includes("weekly: 'refresh-channel-mix'") &&
+    weeklyComponentSrc.includes('data-ai-action={view.action}') &&
     !channelAiSrc.includes('Object.assign(window, {') &&
     !channelAiSrc.includes('window.refreshChannelMixAI') &&
     !channelAiSrc.includes('window.analyzeChannelMixAI') &&
@@ -732,25 +739,26 @@ const {
     !globalsSrc.includes('renderChannelMixVerdict'));
   assert('Room, measurement, and screen AI renderers route through Light environment configuration',
     envSrc.includes('getMeasurementsForRoom: null') &&
-    envSrc.includes('renderMeasurementAIInline: null') &&
-    envSrc.includes('renderRoomAIBlock: null') &&
-    envSrc.includes('renderScreenAIBlock: null') &&
+    envSrc.includes('getMeasurementAIView: null') &&
+    envSrc.includes('getRoomAIView: null') &&
+    envSrc.includes('getScreenAIView: null') &&
     envSrc.includes('lightEnvDeps.getMeasurementsForRoom') &&
-    envSrc.includes('lightEnvDeps.renderMeasurementAIInline') &&
-    envSrc.includes('lightEnvDeps.renderRoomAIBlock') &&
-    screenUiSrc.includes('opts.renderScreenAIBlock') &&
-    screenUiSrc.includes('renderScreenAIBlock(s)') &&
+    envSrc.includes('lightEnvDeps.getMeasurementAIView') &&
+    envSrc.includes('lightEnvDeps.getRoomAIView') &&
+    screenUiSrc.includes('opts.getScreenAIView') &&
+    screenUiSrc.includes('opts.getScreenAIView(screen)') &&
+    screenUiSrc.includes('readScreenCardView') &&
     aiSaveHooksSrc.includes("import { addRoom, configureLightEnv, getRooms, refreshLightEnvironmentAssessment, suggestRoomSourceFromSpectrum } from './light-env.js';") &&
     aiSaveHooksSrc.includes('configureLightTools,') &&
     aiSaveHooksSrc.includes('getMeasurementsForRoom,') &&
     aiSaveHooksSrc.includes("} from './light-tools.js';") &&
-    aiSaveHooksSrc.includes("import { maybeAnalyzeMeasurementAfterSave, renderMeasurementAIInline } from './light-tools-ai-analysis.js';") &&
-    aiSaveHooksSrc.includes("import { renderRoomAIBlock } from './light-env-ai-analysis.js';") &&
-    aiSaveHooksSrc.includes("import { renderScreenAIBlock } from './light-screen-ai-analysis.js';") &&
+    aiSaveHooksSrc.includes("import { maybeAnalyzeMeasurementAfterSave, getMeasurementAIView } from './light-tools-ai-analysis.js';") &&
+    aiSaveHooksSrc.includes("import { getRoomAIView } from './light-env-ai-analysis.js';") &&
+    aiSaveHooksSrc.includes("import { getScreenAIView } from './light-screen-ai-analysis.js';") &&
     aiSaveHooksSrc.includes('configureLightEnv({') &&
-    aiSaveHooksSrc.includes('renderMeasurementAIInline,') &&
-    aiSaveHooksSrc.includes('renderRoomAIBlock,') &&
-    aiSaveHooksSrc.includes('renderScreenAIBlock,') &&
+    aiSaveHooksSrc.includes('getMeasurementAIView,') &&
+    aiSaveHooksSrc.includes('getRoomAIView,') &&
+    aiSaveHooksSrc.includes('getScreenAIView,') &&
     !measurementAiSrc.includes('Object.assign(window, {') &&
     !measurementAiSrc.includes('window.refreshMeasurementAIAnalysis') &&
     !measurementAiSrc.includes('window.analyzeMeasurementAI') &&
@@ -771,7 +779,7 @@ const {
     !envSrc.includes('globalThis.getMeasurementsForRoom') &&
     !envSrc.includes('globalThis.renderMeasurementAIInline') &&
     !envSrc.includes('globalThis.renderRoomAIBlock') &&
-    !screenUiSrc.includes('globalThis.renderScreenAIBlock'));
+    !screenUiSrc.includes('globalThis.renderScreenAIBlock') && !screenUiSrc.includes('globalThis.getScreenAIView'));
   assert('Light assessment modal shell actions route through startup wiring instead of window lookup',
     appUiShellSrc.includes("import './light-env-shell-hooks.js';") &&
     lightEnvShellHooksSrc.includes("import { configureAppEventListeners } from './app-event-listeners.js';") &&
@@ -780,7 +788,7 @@ const {
     lightEnvShellHooksSrc.includes('loadLightSunUI,') &&
     !lightEnvShellHooksSrc.includes("from './light-tools.js'") &&
     lightEnvShellHooksSrc.includes("import { closeModalOverlay } from './modal-lifecycle.js';") &&
-    lightEnvShellHooksSrc.includes("import { navigate } from './views.js';") &&
+    lightEnvShellHooksSrc.includes("import { navigate } from './views-runtime.js';") &&
     lightEnvShellHooksSrc.includes('configureLightEnvironmentLoaderDeps({ navigate });') &&
     lightEnvShellHooksSrc.includes('.then(module => module.openLightEnvironmentAssessment())') &&
     lightEnvShellHooksSrc.includes('loadLightSunUI()') &&
@@ -798,10 +806,6 @@ const {
     !globalsSrc.includes('closeLightEnvironmentAssessment') &&
     !globalsSrc.includes('refreshLightEnvironmentAssessment'));
   const swSrc = await readServiceWorkerSource(relative => fs.readFile(new URL('../' + relative, import.meta.url), 'utf8'));
-  const cssSrc = [
-    await fs.readFile(new URL('../css/light-sun.css', import.meta.url), 'utf8'),
-    await fs.readFile(new URL('../css/light-env.css', import.meta.url), 'utf8'),
-  ].join('\n');
   assert('Service worker precaches the light environment model module',
     swSrc.includes("'/js/light-env-model.js'") &&
     swSrc.includes("'/js/light-env-screen-ui.js'") &&
@@ -815,10 +819,11 @@ const {
     navSrc.includes('lightAuditCount') &&
     navSrc.includes('lightRoomCount') &&
     !navSrc.includes('lightEnvItems'));
-  const modalCss = cssSrc.match(/\.light-env-assessment-modal\s*\{[^}]+\}/)?.[0] || '';
+  const roomClassesSrc=await fs.readFile(new URL('../js/light-environment-room-classes.ts',import.meta.url),'utf8');
   assert('Assessment modal owns vertical scrolling',
-    /max-height:\s*calc\(100dvh - 48px\)/.test(modalCss) &&
-    /overflow-y:\s*auto/.test(modalCss));
+    roomClassesSrc.includes('gb:environment-room:[max-height:calc(100dvh_-_48px)]') &&
+    roomClassesSrc.includes('gb:environment-room:overflow-y-auto'));
+
   const beforeEmptyAssessment = state.importedData;
   (state as { importedData: unknown }).importedData = {
     lightEnvironment: { rooms: [], screens: [] },
@@ -852,8 +857,12 @@ const {
   };
   const unmappedSummaryHtml = renderEnvironmentAssessmentSummary();
   const unmappedAssessmentHtml = renderEnvironmentSection({ embedded: true });
+  const summaryDocument = new JSDOM(unmappedSummaryHtml).window.document;
+  const readingMetrics = [...summaryDocument.querySelectorAll('.light-env-assessment-metric')]
+    .filter(metric => metric.querySelector('.light-env-assessment-metric-label')?.textContent === 'Readings');
   assert('Assessment summary counts only readings mapped to existing rooms',
-    /light-env-assessment-metric-label">Readings<\/span>\s*<strong>0<\/strong>/.test(unmappedSummaryHtml));
+    readingMetrics.length === 1 && readingMetrics[0]?.querySelectorAll('strong').length === 1 &&
+    readingMetrics[0]?.querySelector('strong')?.textContent === '0');
   assert('Assessment workspace hides unmapped portable readings',
     !unmappedAssessmentHtml.includes('Portable readings') &&
     !unmappedAssessmentHtml.includes('not matched to a room'));

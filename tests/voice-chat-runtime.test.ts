@@ -26,10 +26,12 @@ import {
   configureChatMessageActionDeps,
 } from '../js/chat-actions.js';
 import { closeChatPanel, configureChatPanel } from '../js/chat-panel.js';
+import { ensureChatMessageActions } from '../js/chat-message-actions-component.js';
 import {
   installVoiceSettingsPanel,
   renderVoiceSettingsPanel,
 } from '../js/settings-voice-panel.js';
+import { disposeVoiceSettingsPanel } from '../js/settings-voice-component.js';
 import { voiceProviderKeyStatus } from '../js/settings-voice-view.js';
 import { VoiceCaptureSession, preferredMimeType } from '../js/voice-capture.js';
 import { getVoiceSettings } from '../js/voice-settings-storage.js';
@@ -256,6 +258,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  disposeVoiceSettingsPanel();
   configureAppExtension(null);
   globalThis.fetch = realFetch;
   clearKeyCache();
@@ -896,6 +899,49 @@ describe('voice settings and chat controls', () => {
     expect(localStorage.getItem('labcharts-venice-voice')).toBe('bm_george');
   });
 
+  it.each(['venice', 'openrouter'])('hydrates a remounted %s view independently and discards the old reply', async provider => {
+    localStorage.setItem('labcharts-ai-provider', provider);
+    updateKeyCache(`labcharts-${provider}-key`, 'first-test-key');
+    const pending: { url: string; resolve(response: Response): void }[] = [];
+    globalThis.fetch = vi.fn<typeof realFetch>(url => new Promise<Response>(resolve => { pending.push({ url: String(url), resolve }); }));
+    const mountPanel = () => { document.body.innerHTML = `<main>${renderVoiceSettingsPanel(true)}</main>`; installVoiceSettingsPanel(document); };
+    const responseFor = (url: string, voice: string) => new Response(JSON.stringify({ data: provider === 'venice'
+      ? [{ id: 'tts-kokoro', type: 'tts', model_spec: { privacy: 'private', voices: [voice] } }]
+      : url.includes('transcription') ? [{ id: 'openai/whisper-large-v3' }]
+        : [{ id: 'hexgrad/kokoro-82m', supported_voices: [voice] }],
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    mountPanel();
+    const requestsPerMount = provider === 'venice' ? 1 : 2;
+    await vi.waitFor(() => expect(pending).toHaveLength(requestsPerMount));
+    const oldView = document.querySelector('[data-tab-panel="voice"]');
+    disposeVoiceSettingsPanel(); mountPanel();
+    await vi.waitFor(() => expect(pending).toHaveLength(requestsPerMount * 2));
+    for (const request of pending.slice(requestsPerMount)) request.resolve(responseFor(request.url, 'bm_george'));
+    const picker = document.querySelector<HTMLSelectElement>(`[data-voice-cloud-voices="${provider}"]`)!;
+    await vi.waitFor(() => expect(picker.value).toBe('bm_george'));
+    for (const request of pending.slice(0, requestsPerMount)) request.resolve(responseFor(request.url, 'af_sky'));
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(oldView?.isConnected).toBe(false);
+    expect([...picker.options].map(option => option.value)).toEqual(['bm_george']);
+    expect(localStorage.getItem(`labcharts-${provider}-voice`)).toBe('bm_george');
+  });
+
+  it('discards Venice catalogue results after the connection key changes', async () => {
+    localStorage.setItem('labcharts-ai-provider', 'venice');
+    updateKeyCache('labcharts-venice-key', 'old-test-key');
+    let release!: (response: Response) => void;
+    globalThis.fetch = vi.fn<typeof realFetch>(() => new Promise<Response>(resolve => { release = resolve; }));
+    document.body.innerHTML = `<main>${renderVoiceSettingsPanel(true)}</main>`;
+    installVoiceSettingsPanel(document);
+    await vi.waitFor(() => expect(globalThis.fetch).toHaveBeenCalledOnce());
+    updateKeyCache('labcharts-venice-key', 'replacement-test-key');
+    release(new Response(JSON.stringify({ data: [{ id: 'tts-kokoro', type: 'tts', model_spec: { voices: ['bm_george'] } }] }), { status: 200 }));
+    await new Promise(resolve => setTimeout(resolve, 0));
+    const picker = document.querySelector<HTMLSelectElement>('[data-voice-cloud-voices="venice"]')!;
+    expect([...picker.options].map(option => option.value)).not.toContain('bm_george');
+    expect(localStorage.getItem('labcharts-venice-voice')).toBeNull();
+  });
+
   it('discloses encrypted sync for cloud keys without claiming local-server sync', () => {
     expect(voiceProviderKeyStatus('xai', true)).toContain('included in encrypted sync');
     expect(voiceProviderKeyStatus('elevenlabs', true)).toContain('encrypted in this browser');
@@ -1034,6 +1080,38 @@ describe('voice settings and chat controls', () => {
     }
   });
 
+  it('retains model progress across remount, clears busy labels and trusts current cache readiness', async () => {
+    const worker = new ControlledVoiceWorker();
+    const previous = configureVoiceLocalEngine({ workerFactory: () => worker });
+    const mountPanel = () => { document.body.innerHTML = `<main>${renderVoiceSettingsPanel(true)}</main>`; installVoiceSettingsPanel(document); };
+    try {
+      mountPanel();
+      document.querySelector<HTMLButtonElement>('[data-voice-action="install-model"][data-kind="stt"]')!.click();
+      await vi.waitFor(() => expect(worker.request).not.toBeNull());
+      worker.respond({ type: 'progress', id: worker.request!.id, progress: { file: 'model.onnx' } });
+      disposeVoiceSettingsPanel(); mountPanel();
+      const button = document.querySelector<HTMLButtonElement>('[data-voice-action="install-model"][data-kind="stt"]')!;
+      const progress = document.querySelector<HTMLElement>('[data-voice-model-progress="stt"]')!;
+      expect(button.disabled).toBe(true);
+      expect(button.textContent).toBe('Downloading…');
+      expect(progress.hidden).toBe(false);
+      expect(progress.textContent).toContain('model.onnx');
+      worker.respond({ type: 'ready', id: worker.request!.id, backend: 'wasm' });
+      await vi.waitFor(() => expect(button.textContent).toBe('Ready'));
+      expect(progress.textContent).toContain('Download complete');
+      expect(document.querySelector<HTMLButtonElement>('[data-voice-action="remove-model"][data-kind="stt"]')!.disabled).toBe(false);
+      const model = getVoiceSettings().localSttModel;
+      localStorage.removeItem(`labcharts-voice-model-installed-stt-${encodeURIComponent(model)}`);
+      installVoiceSettingsPanel(document);
+      expect(button.disabled).toBe(false);
+      expect(button.textContent).toBe('Download');
+      expect(progress.hidden).toBe(true);
+    } finally {
+      terminateLocalVoiceWorker('stt');
+      configureVoiceLocalEngine(previous);
+    }
+  });
+
   it('renders Listen only on assistant messages and delegates its exact index', () => {
     const original = state.chatHistory;
     const called: unknown[] = [];
@@ -1094,6 +1172,7 @@ describe('voice settings and chat controls', () => {
     state.currentThreadId = 'kokoro-loading-state-test';
     state.chatHistory = [{ role: 'assistant', content: 'Read this sentence.' }];
     document.body.innerHTML = buildActionBar(0);
+    ensureChatMessageActions();
     const audioContext = new ManualAudioContext();
     const previousAudioContext = voicePlayer.audioContext;
     (voicePlayer as unknown as {audioContext: FakeAudioContext | null}).audioContext = audioContext;
@@ -1103,7 +1182,9 @@ describe('voice settings and chat controls', () => {
       controller = await import('../js/voice-controller.js');
       const reading = controller.readAssistantMessage(0);
       let button = document.getElementById('chat-listen-btn-0') as HTMLButtonElement | null;
+      expect(button!.getAttribute('data-chat-speech-owned')).toBe('');
       await vi.waitFor(() => expect(worker.request?.type).toBe('synthesize'));
+      expect(document.getElementById('chat-listen-btn-0')).toBe(button);
       expect(button!.classList.contains('busy')).toBe(true);
       expect(button!.textContent).toContain('Preparing…');
       expect(button!.disabled).toBe(false);
@@ -1128,10 +1209,13 @@ describe('voice settings and chat controls', () => {
       expect(button!.textContent).toContain('Still generating…');
 
       document.body.innerHTML = buildActionBar(0);
+      ensureChatMessageActions();
       button = document.getElementById('chat-listen-btn-0') as HTMLButtonElement | null;
+      expect(button!.getAttribute('data-chat-speech-owned')).toBe('');
       expect(button!.textContent).toContain('Listen');
       expect(controller.isVoicePlaybackActive()).toBe(true);
       expect(controller.restoreVoicePlaybackUi()).toBe(true);
+      expect(document.getElementById('chat-listen-btn-0')).toBe(button);
       expect(button!.textContent).toContain('Still generating…');
       expect(button!.getAttribute('aria-label')).toBe('Cancel speech generation');
 

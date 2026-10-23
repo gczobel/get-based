@@ -15,6 +15,7 @@ test('context cards browser coverage exercises notes save dots and tips', async 
   await page.goto('/app', { waitUntil: 'load' });
 
   const results = await page.evaluate(async ({ cardsUrl }) => {
+    const { contextStatusFixture, contextStatusElement } = await import('/tests/helpers/context-card-status-fixture.js');
     const [{ state }, cards, recommendationRuntime, contextCardsRuntime, health, cryptoStore] = await Promise.all([
       import('/js/state.js'),
       (import(cardsUrl) as Promise<unknown>) as Promise<Omit<Pick<typeof import('../../js/context-cards.js'), "applyDotColor" | "applyAISummary" | "refreshAllHealthDots" | "renderProfileContextCards" | "closeHealthGoals" | "saveAndRefresh" | "loadContextCardTips">, 'closeHealthGoals'> & {closeHealthGoals: (...args: Parameters<typeof import('../../js/context-cards.js')['closeHealthGoals']>) => unknown}>,
@@ -76,15 +77,15 @@ test('context cards browser coverage exercises notes save dots and tips', async 
 
       host = document.createElement('div');
       document.body.appendChild(host);
-      host.innerHTML = '<span id="ctx-dot-diet" class="ctx-health-dot"></span><span id="ctx-ai-diet"></span>';
+      contextStatusFixture(host, ['diet']);
 
       cards.applyDotColor('diet', 'red');
       cards.applyAISummary('diet', 'Needs more protein', 'red');
-      outcomes.facadeAppliesDotAndAISummary = document.getElementById('ctx-dot-diet')?.classList.contains('ctx-health-dot-red') === true
-        && document.getElementById('ctx-dot-diet')?.getAttribute('aria-label') === 'Concern'
-        && document.getElementById('ctx-ai-diet')?.classList.contains('ctx-ai-summary-visible') === true
-        && document.getElementById('ctx-ai-diet')?.classList.contains('ctx-ai-summary-red') === true
-        && document.getElementById('ctx-ai-diet')?.textContent.includes('Needs more protein');
+      outcomes.facadeAppliesDotAndAISummary = contextStatusElement('dot', 'diet')?.classList.contains('ctx-health-dot-red') === true
+        && contextStatusElement('health', 'diet')?.getAttribute('aria-label') === 'AI assessment: Concern'
+        && contextStatusElement('ai', 'diet')?.classList.contains('ctx-ai-summary-visible') === true
+        && contextStatusElement('ai', 'diet')?.classList.contains('ctx-ai-summary-red') === true
+        && contextStatusElement('ai', 'diet')?.textContent.includes('Needs more protein');
 
       cards.refreshAllHealthDots();
       outcomes.refreshAllHealthDotsRequiresProviderViaFacade = toasts().some(text => text.includes('Set up an AI provider first'));
@@ -93,7 +94,7 @@ test('context cards browser coverage exercises notes save dots and tips', async 
       host.innerHTML = cards.renderProfileContextCards();
       outcomes.profileContextCardsUseDelegatedActions =
         !!host.querySelector<HTMLElement>('[data-context-card-action="refresh-all-health-dots"], [data-context-card-action="open-editor"]')
-        && !!host.querySelector<HTMLTextAreaElement>('#ctx-notes-textarea[data-context-card-action="context-notes-input"]')
+        && !!host.querySelector<HTMLTextAreaElement>('.ctx-notes-textarea')
         && !host.innerHTML.includes('onclick=')
         && !host.innerHTML.includes('oninput=');
       host.style.width = '860px';
@@ -103,7 +104,6 @@ test('context cards browser coverage exercises notes save dots and tips', async 
       outcomes.loveLifeAndRelationshipsStaysAUnifiedCardTitle = !!loveLifeLabel
         && getComputedStyle(loveLifeLabel).whiteSpace === 'nowrap'
         && loveLifeLabel.getBoundingClientRect().height <= loveLifeLineHeight * 1.1;
-      host.style.width = '';
       const infoButton = host.querySelector<HTMLElement>('[data-context-card-action="toggle-explanation"]');
       const explanation = infoButton?.getAttribute('aria-controls')
         ? document.getElementById(infoButton.getAttribute('aria-controls')!)
@@ -115,24 +115,25 @@ test('context cards browser coverage exercises notes save dots and tips', async 
         && host.querySelectorAll<HTMLElement>('button.context-card-open[data-context-card-action="open-editor"]').length === 9
         && host.querySelectorAll<HTMLElement>('.context-card-icon svg').length === 9
         && host.querySelector<HTMLElement>('button.context-card-open')?.getAttribute('aria-label')?.includes('Health Goals')
-        && host.querySelector<HTMLLabelElement>('label[for="ctx-notes-textarea"]')?.textContent!.includes('Additional context')
+        && host.querySelector<HTMLLabelElement>('.ctx-notes-label')?.htmlFor === host.querySelector<HTMLTextAreaElement>('.ctx-notes-textarea')?.id
+        && host.querySelector<HTMLLabelElement>('.ctx-notes-label')?.textContent!.includes('Additional context')
         && infoButton?.getAttribute('aria-expanded') === 'true'
         && explanation?.hidden === false
         && !host.querySelector<HTMLElement>('.context-card-state, .diagnoses-edit-btn')
         && !host.querySelector<HTMLElement>('article.context-card[data-context-card-action="open-editor"]');
       cards.applyDotColor('diet', 'yellow');
       outcomes.profileContextCardsExposeTextForAIAssessment =
-        document.getElementById('ctx-health-diet')?.hidden === false
-        && !!document.getElementById('ctx-health-diet')?.closest('.context-card-title')
-        && document.getElementById('ctx-health-label-diet')?.textContent === 'Caution'
-        && document.getElementById('ctx-dot-diet')?.getAttribute('aria-hidden') === 'true';
+        contextStatusElement('health', 'diet')?.hidden === false
+        && !!contextStatusElement('health', 'diet')?.closest('.context-card-title')
+        && contextStatusElement('health-label', 'diet')?.textContent === 'Caution'
+        && contextStatusElement('dot', 'diet')?.getAttribute('aria-hidden') === 'true';
       cards.applyAISummary('healthGoals', 'Goal aligns with the current profile', 'green');
       cards.applyAISummary('diagnoses', 'History changes how borderline thyroid markers should be read', 'yellow');
       cards.applyAISummary('diet', 'Diet signals may affect nutrient interpretation', 'yellow');
       const firstRowInsightTops = ['healthGoals', 'diagnoses', 'diet']
-        .map(key => document.getElementById(`ctx-ai-${key}`)?.getBoundingClientRect().top || 0);
+        .map(key => contextStatusElement('ai', key)?.getBoundingClientRect().top || 0);
       const firstRowInsightsAlign = Math.max(...firstRowInsightTops) - Math.min(...firstRowInsightTops) < 1;
-      const dietInsight = document.getElementById('ctx-ai-diet');
+      const dietInsight = contextStatusElement('ai', 'diet');
       const dietContaminants = host.querySelector<HTMLElement>('.diet-contaminants');
       const dietPreDividerGap = dietInsight && dietContaminants
         ? dietInsight.getBoundingClientRect().top - dietContaminants.getBoundingClientRect().bottom
@@ -142,6 +143,9 @@ test('context cards browser coverage exercises notes save dots and tips', async 
         && dietInsight?.dataset.severity === 'Caution'
         && dietPreDividerGap >= 7
         && !!dietContaminants?.querySelector<HTMLElement>('svg');
+      // This assertion compares a three-column row; restore the real viewport
+      // layout before the accessibility and remaining interaction checks.
+      host.style.width = '';
       const accessibility = await (window as unknown as {axe: typeof import('axe-core')}).axe.run(host, {
         runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa'] },
       });
@@ -188,15 +192,15 @@ test('context cards browser coverage exercises notes save dots and tips', async 
         () => document.getElementById('detail-modal')?.getAttribute('aria-label') === 'Health Goals',
       );
       cards.closeHealthGoals();
-      const notes = document.getElementById('ctx-notes-textarea');
+      const notes = host.querySelector<HTMLTextAreaElement>('.ctx-notes-textarea');
       (notes as HTMLTextAreaElement).value = 'Extra context for AI';
       (notes)!.dispatchEvent(new InputEvent('input', { bubbles: true }));
-      outcomes.contextNotesShowsSavingState = document.getElementById('ctx-notes-status')?.textContent === 'Saving\u2026';
+      outcomes.contextNotesShowsSavingState = host.querySelector('.ctx-notes-status')?.textContent === 'Saving\u2026';
       await waitFor(() => state.importedData.contextNotes === 'Extra context for AI'
         && (state.importedData.changeHistory || []).some((entry: {field?:unknown}) => entry.field === 'contextNotes'));
       outcomes.delegatedContextNotesPersistsAndRecordsChange = state.importedData.contextNotes === 'Extra context for AI'
         && (state.importedData.changeHistory || []).some((entry: {field?:unknown}) => entry.field === 'contextNotes')
-        && document.getElementById('ctx-notes-status')?.textContent === 'Saved';
+        && host.querySelector('.ctx-notes-status')?.textContent === 'Saved';
 
       details = document.createElement('details');
       details.className = 'welcome-context-details';
@@ -234,7 +238,7 @@ test('context cards browser coverage exercises notes save dots and tips', async 
       });
       host.innerHTML = cards.renderProfileContextCards();
       await cards.loadContextCardTips();
-      const dietBadge = document.querySelector<HTMLElement>('#ctx-tips-diet .ctx-tips-badge');
+      const dietBadge = contextStatusElement('tips', 'diet')?.querySelector<HTMLElement>('.ctx-tips-badge');
       dietBadge?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
       await waitFor(() => document.getElementById('modal-overlay')?.classList.contains('show') === true);
       outcomes.cardTipsBadgeLoadsCatalogAndOpensModal = calls.some(call => call[0] === 'catalog')
@@ -302,14 +306,15 @@ test('environment to EMF workflow returns to the originating editor', async ({ p
       note: 'Keep this editor context',
     };
     state.importedData.emfAssessment = { assessments: [] };
+    if (!await (await import('/js/data.js')).saveImportedData()) throw new Error('Could not seed Environment');
     await contextCards.openEnvironmentEditor();
   });
 
   await expect(page.locator('#detail-modal')).toHaveAttribute('aria-label', 'Environment & Exposures');
-  await page.locator('#detail-modal details:has([data-context-card-action="open-emf-assessment"])').evaluate(details => {
+  await page.locator('#detail-modal details:has([data-context-emf-launcher])').evaluate(details => {
     (details as HTMLDetailsElement).open = true;
   });
-  await page.locator('#detail-modal [data-context-card-action="open-emf-assessment"]').click();
+  await page.locator('#detail-modal [data-context-emf-launcher]').click();
   await expect(page.locator('#detail-modal')).toContainText('Baubiologie EMF Assessment');
   await expect(page.locator('#detail-modal [data-emf-action="return-to-origin"]')).toHaveAttribute(
     'aria-label',
@@ -318,5 +323,5 @@ test('environment to EMF workflow returns to the originating editor', async ({ p
 
   await page.locator('#detail-modal [data-emf-action="return-to-origin"]').click();
   await expect(page.locator('#detail-modal')).toHaveAttribute('aria-label', 'Environment & Exposures');
-  await expect(page.locator('#detail-modal')).toContainText('Keep this editor context');
+  await expect(page.locator('#detail-modal').getByLabel('Notes', { exact: true })).toHaveValue('Keep this editor context');
 });

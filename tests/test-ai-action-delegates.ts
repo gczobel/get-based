@@ -79,8 +79,9 @@ assert('AI action helper escapes action and target attributes',
     helperSrc.includes('escapeAttr(String(targetId))'));
 assert('AI action helper handles row-level stop propagation',
   helperSrc.includes("action === 'stop-propagation'") &&
-    combined.includes("aiActionAttrs('stop-propagation')") &&
-    combined.includes('{ stopPropagation: true }'));
+    (combined.includes("aiActionAttrs('stop-propagation')") || fs.readFileSync(path.join(root, 'js/components/LightSessionAI.svelte'), 'utf8').includes('data-ai-action="stop-propagation"')) &&
+    (combined.includes('{ stopPropagation: true }') ||
+      fs.readFileSync(path.join(root, 'js/components/LightVerdictButton.svelte'), 'utf8').includes("stopPropagation ?? view.mode === 'inline'")));
 assert('AI action helper dispatches through registry instead of window globals',
   helperSrc.includes('registerAIActionHandler') &&
     helperSrc.includes('getRegisteredAIActionHandler') &&
@@ -90,8 +91,23 @@ assert('AI action helper dispatches through registry instead of window globals',
 for (const action of actions) {
   assert(`AI action ${action} is declared in helper`,
     helperSrc.includes(`'${action}'`));
+  const environmentKinds: Record<string, string> = { 'refresh-measurement': 'measurement', 'refresh-audit': 'audit', 'refresh-room': 'room', 'refresh-screen': 'screen' };
+  const kind = environmentKinds[action];
+  const environmentProjection = fs.readFileSync(path.join(root, 'js/light-environment-ai-presentation.ts'), 'utf8');
+  const authoredEnvironment = fs.readFileSync(path.join(root, 'js/components/LightEnvironmentAI.svelte'), 'utf8');
+  const authoredControl = fs.readFileSync(path.join(root, 'js/components/LightVerdictButton.svelte'), 'utf8');
+  const reviewKinds: Record<string, string> = { 'refresh-day': 'today', 'refresh-channel-mix': 'weekly', 'refresh-burden': 'burden' };
+  const reviewKind = reviewKinds[action];
+  const reviewProjection = fs.readFileSync(path.join(root, 'js/light-review-ai-presentation.ts'), 'utf8');
+  const reviewComponent = reviewKind ? fs.readFileSync(path.join(root, `js/components/Light${reviewKind === 'today' ? 'Today' : reviewKind === 'weekly' ? 'Weekly' : 'Burden'}AI.svelte`), 'utf8') : '';
+  const authoredOnboarding = fs.readFileSync(path.join(root, 'js/components/LightOnboardingAI.svelte'), 'utf8');
   assert(`AI action ${action} is rendered by target modules`,
-    combined.includes(`aiActionAttrs('${action}'`));
+    combined.includes(`aiActionAttrs('${action}'`) || sources[actionOwners[action]].includes(`action: '${action}'`) ||
+      (reviewKind && sources[actionOwners[action]].includes(`kind: '${reviewKind}'`) && reviewProjection.includes(`${reviewKind}: '${action}'`) &&
+        reviewComponent.includes('<LightVerdictButton') && authoredControl.includes('data-ai-action={view.action}')) ||
+      (action === 'refresh-onboarding' && authoredOnboarding.includes('data-ai-action="refresh-onboarding"')) ||
+      (kind && sources[actionOwners[action]].includes(`kind: '${kind}'`) && environmentProjection.includes(`${kind}: '${action}'`) &&
+        authoredEnvironment.includes('<LightVerdictButton') && authoredControl.includes('data-ai-action={view.action}')));
   assert(`AI action ${action} is registered by its owner module`,
     sources[actionOwners[action]].includes(`registerAIActionHandler('${action}'`));
 }

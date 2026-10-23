@@ -1,0 +1,39 @@
+/* Authored environment verdict styles at the established lazy stylesheet URL. */
+@import "tailwindcss/theme.css" layer(gb-theme) prefix(gb);
+@import "tailwindcss/utilities.css" prefix(gb) source(none);
+@import "./ui-tokens.tailwind.css";
+@custom-variant environment-ai (&:is([data-light-environment-ai], [data-light-environment-ai] *));
+@source "../js/components/LightEnvironmentAI.svelte";
+@source "../js/light-environment-ai-classes.ts";
+
+/* Shared screen editor and today control; model/store services keep their owners. */
+@custom-variant environment-editor (&:where([data-light-environment-room], [data-light-environment-room] *, [data-light-environment-screen], [data-light-environment-screen] *, [data-light-environment-today], [data-light-environment-today] *));
+@source "../js/components/LightEnvironmentScreen.svelte";
+@source "../js/components/LightEnvironmentTodayToggle.svelte";
+@source "../js/light-environment-screen-classes.ts";
+@custom-variant environment-mobile (@media (max-width: 600px));
+@custom-variant device-coarse (@media (pointer: coarse));
+
+/* Live assessment and burden summaries share a single authored owner. */
+@custom-variant environment-summary (&:is([data-light-environment-summary], [data-light-environment-summary] *));
+@custom-variant assessment-mobile (@media (max-width: 700px));
+@custom-variant assessment-narrow (@media (max-width: 420px));
+@source "../js/components/LightEnvironmentSummary.svelte";
+@source "../js/light-environment-summary-classes.ts";
+
+/* Room editor, section and assessment modal share explicit presentation ownership. */
+@custom-variant environment-room (&:is([data-light-environment-room], [data-light-environment-room] *, [data-light-environment-shell], [data-light-environment-shell] *));
+@source "../js/components/LightEnvironmentRoom.svelte";
+@source "../js/components/LightEnvironmentSection.svelte";
+@source "../js/components/LightEnvironmentPresentation.svelte";
+@source "../js/components/LightEnvironmentPicker.svelte";
+@source "../js/components/LightEnvironmentQuickPicks.svelte";
+@source "../js/light-environment-room-classes.ts";
+
+/* Historical audit cards own their presentation; snapshot services own data. */
+@custom-variant environment-audit (&:is([data-light-audit-card], [data-light-audit-card] *, [data-light-audit-block], [data-light-audit-block] *));
+@source "../js/components/LightAuditCard.svelte";
+@source "../js/components/LightAuditDetail.svelte";
+@source "../js/light-audit-classes.ts";
+@source "../js/components/LightAuditBlock.svelte";
+@source "../js/components/LightAuditCompare.svelte";

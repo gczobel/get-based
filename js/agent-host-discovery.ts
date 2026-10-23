@@ -8,12 +8,15 @@ import {
 
 export type DiscoveredAgent = ReturnType<typeof normalizeDiscoveredAgent>;
 export interface AgentDiscoveryOptions {
+  refresh?: boolean | undefined;
   signal?: AbortSignal | undefined;
   ports?: number[] | undefined;
   requiredTextFeatureTarget?: string | undefined;
   requiredAgentId?: string | undefined;
 }
 export interface AgentConnectionOptions {
+  /** Optional initiating-owner guard, checked before publishing a discovered credential. */
+  isCurrent?: (() => boolean) | undefined;
   signal?: AbortSignal | undefined;
   requiredCapabilities?: string[] | undefined;
   requiredTextFeatureTarget?: string | undefined;
@@ -67,19 +70,39 @@ export function normalizeDiscoveredAgent(agent: Record<string, unknown> | null |
   };
 }
 
-async function probeLoopbackAgentHost(endpoint: string, parentSignal: AbortSignal | undefined, normalizeEndpoint: (value: string) => string) {
+async function probeLoopbackAgentHost(endpoint: string, parentSignal: AbortSignal | undefined, normalizeEndpoint: (value: string) => string, refresh = false) {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), LOOPBACK_DISCOVERY_TIMEOUT_MS);
+  let timer = setTimeout(() => controller.abort(), LOOPBACK_DISCOVERY_TIMEOUT_MS);
   const abort = () => controller.abort(parentSignal?.reason);
   parentSignal?.addEventListener('abort', abort, { once: true });
   try {
-    const response = await fetch(`${endpoint}/v1/discovery`, {
-      cache: 'no-store', signal: controller.signal,
-      headers: { Accept: 'application/json' },
-    });
-    if (!response.ok) return [];
-    const payload = await response.json() as DiscoveryPayload;
-    if (payload?.service !== 'getbased-agent-host') return [];
+    const readDiscovery = async (query = '') => {
+      const response = await fetch(`${endpoint}/v1/discovery${query}`, {
+        cache: 'no-store', signal: controller.signal,
+        headers: { Accept: 'application/json' },
+      });
+      if (!response.ok) return null;
+      const payload = await response.json() as DiscoveryPayload;
+      const token = String(payload?.token || '');
+      return payload?.service === 'getbased-agent-host' && token.length >= 16 && token.length <= 256 ? payload : null;
+    };
+    let payload = await readDiscovery();
+    if (!payload) return [];
+    if (refresh) {
+      // Keep unused-port probes fast. Only an identified Companion gets the
+      // longer deadline needed for concurrent, bounded CLI version probes.
+      clearTimeout(timer);
+      timer = setTimeout(() => controller.abort(), 6_000);
+      const discovered = payload;
+      try { payload = await readDiscovery('?refresh=true'); }
+      catch { payload = null; }
+      if (!payload) {
+        if (parentSignal?.aborted) return [];
+        payload = { ...discovered, agents: Array.isArray(discovered.agents)
+          ? discovered.agents.map(agent => ({ ...agent, version: '' })) : [] };
+      }
+    }
+    if (parentSignal?.aborted) return [];
     const normalizedEndpoint = normalizeEndpoint(payload.endpoint || endpoint);
     const token = String(payload.token || '');
     if (token.length < 16 || token.length > 256) return [];
@@ -123,7 +146,7 @@ export async function discoverLoopbackAgentHostsRuntime(options: AgentDiscoveryO
   let legacyCompanion: DiscoveredAgent[] = [];
   for (const endpoint of endpoints) {
     if (options.signal?.aborted) return [];
-    const agents = await probeLoopbackAgentHost(endpoint, options.signal, options.normalizeEndpoint);
+    const agents = await probeLoopbackAgentHost(endpoint, options.signal, options.normalizeEndpoint, options.refresh);
     const allowedAgents = agents.filter(agent => isAgentAllowedForDeployment(agent.id));
     if (!allowedAgents.length) continue;
     if (options.requiredTextFeatureTarget) {
@@ -172,12 +195,16 @@ async function requireTextFeatureTarget(candidate: DiscoveredAgent, target: stri
 }
 
 export async function connectAgentHostCandidate(options: AgentConnectionOptions & {candidate: DiscoveredAgent; requiredCapabilities: string[]; attempts: number; normalizeEndpoint: (value: string) => string; onConnected: (settings: {endpoint: string; token: string}) => Promise<unknown>}) {
+  const current = () => options.isCurrent?.() !== false;
+  const obsolete = () => new Error('CLI connection request was superseded.');
+  if (!current()) throw obsolete();
   const endpoint = options.normalizeEndpoint(options.candidate.endpoint);
   if (options.candidate.token.length < 16 || options.candidate.token.length > 256) {
     throw new Error('CLI agent connection is not ready yet.');
   }
   let lastError: unknown = null;
   for (let attempt = 0; attempt < options.attempts; attempt += 1) {
+    if (!current()) throw obsolete();
     try {
       const status = await checkAgentHost({ endpoint, token: options.candidate.token, signal: options.signal });
       if (status?.paused === true || status?.state === 'paused') throw new Error('The getbased Companion is paused. Resume it in AI settings.');
@@ -185,6 +212,7 @@ export async function connectAgentHostCandidate(options: AgentConnectionOptions 
         throw agentHostUpgradeRequiredError(options.requiredCapabilities[0] || 'requested-feature');
       }
       if (options.requiredTextFeatureTarget) await requireTextFeatureTarget({ ...options.candidate, endpoint }, options.requiredTextFeatureTarget, options.signal);
+      if (!current()) throw obsolete();
       await options.onConnected({ endpoint, token: options.candidate.token });
       return normalizeDiscoveredAgent({
         ...options.candidate, ...status, endpoint, token: options.candidate.token,
@@ -192,6 +220,7 @@ export async function connectAgentHostCandidate(options: AgentConnectionOptions 
       });
     } catch (error) {
       lastError = error;
+      if (!current()) throw obsolete();
       if ((error as {code?: unknown} | null | undefined)?.code === 'agent_host_upgrade_required') throw error;
       if (attempt < options.attempts - 1) await new Promise(resolve => setTimeout(resolve, 200));
     }

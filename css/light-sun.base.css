@@ -1,0 +1,395 @@
+@import "tailwindcss" prefix(gb) source(none) reference;
+@utility light-layout-page-page-lens-page-header-h2 {
+  letter-spacing: 0;
+}
+@utility light-layout-page-page-lens-page-widgets {
+  width: 100%;
+}
+@utility light-layout-page-page-dashboard-widget-data-widget-id-light-dashboard-wi {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+}
+@utility light-layout-page-device-safety {
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--orange) 36%, var(--border));
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--orange-bg) 58%, var(--bg-card));
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.45;
+}
+@utility light-layout-page-device-safety-strong { color: var(--text-primary); }
+@utility light-layout-page-device-safety-is-over {
+  border-color: color-mix(in srgb, var(--red) 55%, var(--border));
+  background: color-mix(in srgb, var(--red-bg) 68%, var(--bg-card));
+}
+@utility light-layout-page-page-small-light-page-dashboard-widget-description-ligh { font-size: 12px; line-height: 1.45; }
+@utility light-layout-page-dashboard-widget-data-widget-id-light-today-dashboard-w {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+}
+@utility light-layout-page-dashboard-widget-data-widget-id-light-today-light-today {
+  margin: 0;
+}
+@utility light-layout-page-dashboard-widget-data-widget-id-light-today-light-today-2 {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+@utility light-layout-page-dashboard-widget-data-widget-id-light-live-session-ligh {
+  margin: 0;
+}
+@utility light-layout-page-page-dashboard-widget-data-widget-id-light-methods-dash {
+  gap: 0;
+}
+@utility light-layout-page-page-dashboard-widget-data-widget-id-light-session-log {
+  gap: 0;
+}
+@utility light-layout-page-dashboard-widget-data-widget-id-light-session-log-light {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+@utility light-layout-page-widget-prompt {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 16px;
+  border: 1px dashed color-mix(in srgb, var(--border) 88%, transparent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--bg-secondary) 60%, transparent);
+  min-width: 0;
+}
+@utility light-layout-page-widget-prompt-copy {
+  min-width: 0;
+}
+@utility light-layout-page-widget-prompt-copy-strong {
+  display: block;
+  color: var(--text-primary);
+  font-size: 13px;
+  margin-bottom: 3px;
+}
+@utility light-layout-page-widget-prompt-copy-p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+}
+@utility light-layout-page-widget-prompt-cta {
+  flex-shrink: 0;
+}
+@utility light-layout-page-active-session-pinned {
+  margin: 4px 0 14px;
+}
+@utility light-layout-page-summary-tally { color: var(--text-secondary); font-size: 13px; }
+@utility light-layout-page-recent-sessions-header {
+  margin-top: 24px;
+}
+@utility light-layout-page-section-title {
+  font-family: var(--font-display);
+  font-size: 15px; font-weight: 700; color: var(--text-primary); margin: 0 0 4px;
+}
+@utility light-layout-page-section-hint { font-size: 13px; color: var(--text-secondary); margin: 0 0 12px; }
+@utility light-layout-page-today-cta-sun-silhouette-region {
+    transition: none !important;
+    animation: none !important;
+    transform: none !important;
+  }
+@utility light-layout-page-context-label {
+  display: block;
+  font-size: 12px;
+  color: var(--text-muted);
+  font-weight: 500;
+  margin-bottom: 8px;
+}
+@utility light-layout-page-context-input-ctx-select {
+  width: 100%;
+  padding: 8px 10px;
+  margin-top: 4px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: 13px;
+  font-family: inherit;
+  box-sizing: border-box;
+}
+@utility light-layout-page-context-input-focus-ctx-select-focus {
+  border-color: var(--accent);
+  outline: none;
+}
+@utility light-layout-page-context-select {
+  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'><path d='M0 0l5 6 5-6z' fill='%238b8fa3'/></svg>");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  padding-right: 28px;
+}
+@utility light-layout-page-context-select-option {
+  background: var(--select-popup-surface);
+  color: var(--text-primary);
+}
+@utility light-layout-page-data-theme-light-ctx-select {
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'><path d='M0 0l5 6 5-6z' fill='%235a5e6e'/></svg>");
+}
+@utility light-layout-page-context-label-input-type-checkbox {
+  width: auto;
+  margin: 0 6px 0 0;
+  vertical-align: middle;
+}
+@utility light-layout-page-textarea-ctx-input { resize: vertical; min-height: 56px; }
+@utility light-layout-page-sun-detail-section { margin: 14px 0; }
+@utility light-layout-page-sun-detail-section-label {
+  font-size: 11px; color: var(--text-muted);
+  text-transform: uppercase; letter-spacing: 0.5px;
+  margin-bottom: 6px;
+}
+@utility light-layout-page-sun-detail-section-value {
+  font-size: 13px; color: var(--text-primary); line-height: 1.5;
+}
+@utility light-layout-page-sun-detail-disclosure {
+  margin: 12px 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--bg-secondary) 48%, transparent);
+  overflow: hidden;
+}
+@utility light-layout-page-sun-detail-disclosure-summary {
+  padding: 11px 13px;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 650;
+  cursor: pointer;
+  list-style-position: inside;
+}
+@utility light-layout-page-sun-detail-disclosure-open-summary { border-bottom: 1px solid var(--border); }
+@utility light-layout-page-sun-detail-disclosure-p { margin: 10px 12px; }
+@utility light-layout-page-sun-detail-disclosure-p-2 { color: var(--text-muted); font-size: 12px; line-height: 1.45; }
+@utility light-layout-page-sun-silhouette-hint {
+  font-family: 'EB Garamond', 'Cormorant Garamond', Georgia, serif;
+  font-size: 13px;
+  font-style: italic;
+  color: var(--fresco-cream);
+  opacity: 0.72;
+  text-align: center; line-height: 1.5;
+  margin: 6px 0 12px; min-height: 18px;
+  letter-spacing: 0.2px;
+}
+@utility light-layout-page-sun-silhouette-hint-error {
+  color: var(--red);
+  font-weight: 500;
+}
+@utility light-layout-page-touch-tooltip {
+  position: fixed; z-index: 10000;
+  max-width: min(280px, calc(100vw - 24px));
+  padding: 8px 12px;
+  background: var(--bg-elevated, #1f2330); color: var(--text-primary);
+  border: 1px solid var(--border); border-radius: 8px;
+  font-size: 13px; line-height: 1.4;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  opacity: 0; transform: translateY(4px);
+  transition: opacity 0.12s, transform 0.12s;
+  pointer-events: none; /* never blocks subsequent taps */
+  white-space: pre-wrap; word-wrap: break-word;
+}
+@utility light-layout-page-touch-tooltip-show { opacity: 1; transform: translateY(0); }
+@utility light-layout-page-sun-empty {
+  background: var(--bg-secondary); border: 1px dashed var(--border);
+  border-radius: 12px; padding: 24px; text-align: center; color: var(--text-secondary);
+}
+@utility light-layout-page-sun-empty-p { margin-bottom: 12px; }
+@utility light-layout-page-widget-prompt-2 {
+    flex-direction: column;
+    align-items: stretch;
+  }
+@utility light-layout-page-widget-prompt-cta-2 {
+    width: 100%;
+  }
+
+
+/* ═══════════════════════════════════════════════
+   LIGHT & SUN — Light Today strip + dedicated page
+   Mirrors the .wearable-strip token + structural conventions so the
+   two adjacent dashboard panels read as siblings.
+   Tokens used: --accent-gradient (CTA) · --orange/--orange-bg (warn) ·
+   --red/--red-bg (over) · --green (ok) · --shadow / --radius / --radius-sm.
+   ═══════════════════════════════════════════════ */
+
+/* Strip — matches .wearable-strip surface treatment */
+.light-page .lens-page-header h2 { @apply gb:light-layout-page-page-lens-page-header-h2; }
+.light-page .lens-page-widgets { @apply gb:light-layout-page-page-lens-page-widgets; }
+.light-page .dashboard-widget[data-widget-id^="light-"] .dashboard-widget-body { @apply gb:light-layout-page-page-dashboard-widget-data-widget-id-light-dashboard-wi; }
+.light-device-safety:not([data-light-detail-presentation] *) { @apply gb:light-layout-page-device-safety; }
+.light-device-safety strong:not([data-light-detail-presentation] *) { @apply gb:light-layout-page-device-safety-strong; }
+.light-device-safety.is-over:not([data-light-detail-presentation] *) { @apply gb:light-layout-page-device-safety-is-over; }
+
+@media (max-width: 720px) {
+  .light-page small,
+  .light-page .dashboard-widget-description,
+  .light-page .light-section-hint,
+  .light-page .dev-session-hint { @apply gb:light-layout-page-page-small-light-page-dashboard-widget-description-ligh; }
+}
+.dashboard-widget[data-widget-id="light-today"] .dashboard-widget-body { @apply gb:light-layout-page-dashboard-widget-data-widget-id-light-today-dashboard-w; }
+.dashboard-widget[data-widget-id="light-today"] .light-today-hero { @apply gb:light-layout-page-dashboard-widget-data-widget-id-light-today-light-today; }
+.dashboard-widget[data-widget-id="light-today"] .light-today-strip { @apply gb:light-layout-page-dashboard-widget-data-widget-id-light-today-light-today-2; }
+.dashboard-widget[data-widget-id="light-live-session"] .light-active-session-pinned,
+.light-page .dashboard-widget[data-widget-id="light-today"] .light-med-banner { @apply gb:light-layout-page-dashboard-widget-data-widget-id-light-live-session-ligh; }
+.light-page .dashboard-widget[data-widget-id="light-methods"] .dashboard-widget-body { @apply gb:light-layout-page-page-dashboard-widget-data-widget-id-light-methods-dash; }
+.light-page .dashboard-widget[data-widget-id="light-session-log"] .dashboard-widget-body { @apply gb:light-layout-page-page-dashboard-widget-data-widget-id-light-session-log; }
+.dashboard-widget[data-widget-id="light-session-log"] .light-quicklog-row { @apply gb:light-layout-page-dashboard-widget-data-widget-id-light-session-log-light; }
+.light-widget-prompt:not(:where([data-light-widget-prompt], [data-light-widget-prompt] *)) { @apply gb:light-layout-page-widget-prompt; }
+.light-widget-prompt-copy:not(:where([data-light-widget-prompt], [data-light-widget-prompt] *)) { @apply gb:light-layout-page-widget-prompt-copy; }
+.light-widget-prompt-copy strong:not(:where([data-light-widget-prompt], [data-light-widget-prompt] *)) { @apply gb:light-layout-page-widget-prompt-copy-strong; }
+.light-widget-prompt-copy p:not(:where([data-light-widget-prompt], [data-light-widget-prompt] *)) { @apply gb:light-layout-page-widget-prompt-copy-p; }
+.light-widget-prompt-cta:not(:where([data-light-widget-prompt], [data-light-widget-prompt] *)) { @apply gb:light-layout-page-widget-prompt-cta; }
+
+/* Strip footer — burn-risk gauge + CTA */
+
+/* Weekly vitamin D total — small line between pills and footer.
+   Approximate; tooltip explains the per-session-with-saturation
+   summing methodology. */
+
+/* CTA group — wraps one or more CTA buttons together so they sit
+   adjacent (8px gap) and the GROUP gets pushed right via margin-left:
+   auto. Previously each CTA had margin-left:auto individually, which
+   made multiple CTAs spread out across the foot row instead of
+   clustering. Single-button case still works (group of 1 → button
+   right-aligned as before). */
+/* CTA — active (mid-session) flips to red as a "stop" cue. */
+/* Secondary CTA used as a paired "🔴 Device" button next to the
+   primary "☀ Sun" — slightly subdued so the eye lands on the
+   solar-window CTA first when both are present. */
+
+/* Pinned active sun-session row — sits at the very top of the Light &
+   Sun page when a session is running, above Conditions / Setup / the
+   Stop CTA. Heavier visual treatment than ordinary rows so the live
+   readout reads as the page's focal point. */
+.light-active-session-pinned { @apply gb:light-layout-page-active-session-pinned; }
+/* Light & Sun page — quick-log row + section headings */
+.light-summary-tally { @apply gb:light-layout-page-summary-tally; }
+.light-recent-sessions-header { @apply gb:light-layout-page-recent-sessions-header; }
+.light-section-title { @apply gb:light-layout-page-section-title; }
+.light-section-hint { @apply gb:light-layout-page-section-hint; }
+
+/* Reduced motion — strip transforms + transitions for users with the OS
+   preference set. Hover lifts and tier-changed badge flashes feel disorienting
+   for vestibular-sensitive users. */
+@media (prefers-reduced-motion: reduce) {
+  .light-today-cta,
+  .sun-silhouette-region { @apply gb:light-layout-page-today-cta-sun-silhouette-region; }
+}
+
+/* Touch tap-target sizing — coarse pointer (touchscreen) gets 44×44 minimum
+   per WCAG 2.5.5 / WAI Mobile guidance. Mouse-only sessions stay compact. */
+
+/* Generic .ctx-* form controls — used by the Light feature (sun setup,
+   past-session modal, device dialogs, light-environment survey, light
+   tools). Mirrors the supp-form-field pattern so dropdowns + inputs
+   match the rest of the app's dark/light themes instead of the browser
+   defaults. */
+.ctx-label { @apply gb:light-layout-page-context-label; }
+.ctx-input,
+.ctx-select { @apply gb:light-layout-page-context-input-ctx-select; }
+.ctx-input:focus,
+.ctx-select:focus { @apply gb:light-layout-page-context-input-focus-ctx-select-focus; }
+.ctx-select { @apply gb:light-layout-page-context-select; }
+.ctx-select option { @apply gb:light-layout-page-context-select-option; }
+[data-theme="light"] .ctx-select { @apply gb:light-layout-page-data-theme-light-ctx-select; }
+/* Inline checkboxes inside .ctx-label rows (e.g. "Glass between..." */
+.ctx-label > input[type="checkbox"] { @apply gb:light-layout-page-context-label-input-type-checkbox; }
+/* Textarea variant */
+textarea.ctx-input { @apply gb:light-layout-page-textarea-ctx-input; }
+
+/* Shared native AI-extraction sections; authored session/conditions details own their utilities. */
+.sun-detail-section:not([data-light-detail-presentation] *):not(:where([data-light-conditions-presentation], [data-light-conditions-presentation] *)) { @apply gb:light-layout-page-sun-detail-section; }
+.sun-detail-section-label:not([data-light-detail-presentation] *):not(:where([data-light-conditions-presentation], [data-light-conditions-presentation] *)) { @apply gb:light-layout-page-sun-detail-section-label; }
+.sun-detail-section-value:not([data-light-detail-presentation] *):not(:where([data-light-conditions-presentation], [data-light-conditions-presentation] *)) { @apply gb:light-layout-page-sun-detail-section-value; }
+.sun-detail-disclosure:not([data-light-detail-presentation] *) { @apply gb:light-layout-page-sun-detail-disclosure; }
+.sun-detail-disclosure > summary:not([data-light-detail-presentation] *) { @apply gb:light-layout-page-sun-detail-disclosure-summary; }
+.sun-detail-disclosure[open] > summary:not([data-light-detail-presentation] *) { @apply gb:light-layout-page-sun-detail-disclosure-open-summary; }
+.sun-detail-disclosure > p:not([data-light-detail-presentation] *),
+.sun-detail-disclosure > .sun-detail-channels:not([data-light-detail-presentation] *),
+.sun-detail-disclosure > .sun-detail-atm:not([data-light-detail-presentation] *),
+.sun-detail-disclosure > .sun-detail-input-location:not([data-light-detail-presentation] *),
+.sun-detail-disclosure > .light-device-safety:not([data-light-detail-presentation] *) { @apply gb:light-layout-page-sun-detail-disclosure-p; }
+.sun-detail-disclosure > p:not([data-light-detail-presentation] *) { @apply gb:light-layout-page-sun-detail-disclosure-p-2; }
+
+/* ─── Fresco-style body region picker ──────────────────────────────────
+   The picker is staged as a small fresco panel — figures rendered as
+   single confident outlines in warm cream against deep midnight. Selected
+   regions bathe in sun-gold radial wash, as if real sunlight were falling
+   on the body. Klimt × Pompeii × app-modern. */
+
+/* Fresco color tokens — used only inside the silhouette block so the rest
+   of the app's design system is undisturbed. Reach for these instead of
+   raw hex values when adjusting the picker. */
+:root {
+  --fresco-night:   #15131e;       /* backdrop */
+  --fresco-night-2: #1c1828;       /* lighter pool */
+  --fresco-cream:   #e8d8b9;       /* body fill */
+  --fresco-cream-2: #d8c4a0;       /* mid-tone shading */
+  --fresco-umber:   #5a3a1f;       /* line work */
+  --fresco-umber-2: #3a2412;       /* deep accents */
+  --fresco-sienna:  #b86a3c;       /* detail fills (nipples, genitals) */
+  --fresco-gold:    #f0b95a;       /* sun accent */
+  --fresco-gold-2:  #f5d489;       /* sun glow */
+  --fresco-rose:    #d88e6a;       /* hover wash */
+}
+[data-theme="light"] {
+  --fresco-night:   #2a2030;       /* in light mode the panel stays moody — */
+  --fresco-night-2: #322438;       /*   the figures need the contrast      */
+  --fresco-cream:   #ead7b5;
+  --fresco-cream-2: #d6bd92;
+  --fresco-umber:   #4d3018;
+  --fresco-umber-2: #2c1a08;
+  --fresco-sienna:  #b06038;
+  --fresco-gold:    #ecb152;
+  --fresco-gold-2:  #f5d489;
+  --fresco-rose:    #d28666;
+}
+
+
+
+.sun-silhouette-hint { @apply gb:light-layout-page-sun-silhouette-hint; }
+.sun-silhouette-hint-error { @apply gb:light-layout-page-sun-silhouette-hint-error; }
+/* Legacy touch-tooltip class kept for any cached DOM created by older app
+   code; new tooltips use .app-tooltip from eager app-shell.css. */
+.touch-tooltip { @apply gb:light-layout-page-touch-tooltip; }
+.touch-tooltip-show { @apply gb:light-layout-page-touch-tooltip-show; }
+
+.sun-empty { @apply gb:light-layout-page-sun-empty; }
+.sun-empty p { @apply gb:light-layout-page-sun-empty-p; }
+
+/* ═══════════════════════════════════════════════════════════════════
+   Light & Sun — mobile responsive pass
+   ═══════════════════════════════════════════════════════════════════
+   Audited surfaces: Dashboard Light Today strip, Light page channel
+   pill row + drill-down, device cards, sessions list, quick-log row,
+   session-log dialog, conditions-now strip. Each issue addressed with
+   the minimal media query needed. Touch + hover interactions split via
+   @media (hover: none) so devices that can't hover still see all
+   affordances (no fade-in delete, etc.).
+*/
+
+/* Phones — Light & Sun page layout adjustments */
+@media (max-width: 600px) {
+  /* Quick-log CTA row stacks: primary CTAs full-width, tally on its
+     own line below. Was a 4-element flex row that collapsed into a
+     visual pile of buttons + text on narrow widths. */
+  .light-widget-prompt:not(:where([data-light-widget-prompt], [data-light-widget-prompt] *)) { @apply gb:light-layout-page-widget-prompt-2; }
+  .light-widget-prompt-cta:not(:where([data-light-widget-prompt], [data-light-widget-prompt] *)) { @apply gb:light-layout-page-widget-prompt-cta-2; }
+
+}

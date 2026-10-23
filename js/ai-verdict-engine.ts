@@ -25,7 +25,9 @@ import {
   isAIVerdictEngineDisabledRuntime,
   refreshSunSurfacesRuntime,
 } from './ai-verdict-engine-runtime.js';
-import { saveImportedData } from './data.js';
+import { commitAIVerdictData } from './ai-verdict-write.js';
+import type { ProfileData } from '../types/app-state.js';
+import { captureAIVerdictOwner } from './ai-verdict-owner.js';
 import { pushCurrentProfile, isSyncEnabled } from './sync.js';
 
 // Cross-device LWW behaviour (load-bearing for anyone debugging "verdict
@@ -124,10 +126,12 @@ export interface AIVerdictEngine<T> {
   purgeOrphaned(): Promise<void>;
 }
 export interface AIVerdictConfig<T> {
-  getTarget(id: string): T | null | undefined;
+  /** Resolve from the supplied root, including private staged snapshots. */
+  getTarget(id: string, data: ProfileData): T | null | undefined;
   getId(target: T): string;
-  getAIAnalysis(target: T): AIVerdictAnalysis | null | undefined;
-  setAIAnalysis(target: T, value: AIVerdictAnalysis | null): void;
+  getAIAnalysis(target: T, data: ProfileData): AIVerdictAnalysis | null | undefined;
+  /** Mutate only the supplied target/root; never close over global live data. */
+  setAIAnalysis(target: T, value: AIVerdictAnalysis | null, data: ProfileData): void;
   /** Hash the target fields that invalidate a cached verdict. */
   getFingerprint(target: T): string;
   buildContext(target: T): string;
@@ -137,7 +141,7 @@ export interface AIVerdictConfig<T> {
   canAnalyze?: (target: T) => boolean;
   shouldAutoFire?: (target: T) => boolean;
   /** Find persisted analyzing states left by interrupted legacy runs. */
-  getAllTargets?: () => T[];
+  getAllTargets?: (data: ProfileData) => T[];
   /** Merge feature-specific fields, such as onboarding actions, into the verdict. */
   parseExtraFields?: (parsed: Record<string, unknown>, target: T) => Partial<AIVerdictAnalysis> & Record<string, unknown>;
   /** Push after saving; defaults to true. Disable for local-only verdicts. */
@@ -275,7 +279,8 @@ export function createAIVerdict<T>(cfg: AIVerdictConfig<T>): AIVerdictEngine<T> 
   }
 
   function isAnalyzing(id: string) {
-    return inflight.has(id) || retrying.has(id);
+    const key = captureAIVerdictOwner().key(id);
+    return inflight.has(key) || retrying.has(key);
   }
 
   /**
@@ -287,8 +292,8 @@ export function createAIVerdict<T>(cfg: AIVerdictConfig<T>): AIVerdictEngine<T> 
   function getStatus(target: T | null | undefined): AIVerdictStatus {
     if (!target) return 'idle';
     const id = getId(target);
-    if (inflight.has(id) || retrying.has(id)) return 'analyzing';
-    const a = getAIAnalysis(target);
+    if (isAnalyzing(id)) return 'analyzing';
+    const a = getAIAnalysis(target, captureAIVerdictOwner().root);
     if (a?.status === 'ok' && a.dot) return 'ok';
     if (a?.status === 'error') return 'error';
     // `status: 'analyzing'` left over from a pre-fix run is treated as
@@ -302,9 +307,10 @@ export function createAIVerdict<T>(cfg: AIVerdictConfig<T>): AIVerdictEngine<T> 
     if (_engineDisabled()) return null;
     const id = getId(target);
     if (!id) return null;
-    if (inflight.has(id)) return null;
+    const owner = captureAIVerdictOwner(), key = owner.key(id);
+    if (inflight.has(key)) return null;
     const fingerprint = getFingerprint(target);
-    const cached = getAIAnalysis(target);
+    const cached = getAIAnalysis(target, owner.root);
     // Cache-hit returns immediately, BEFORE provider / canAnalyze gates.
     // Reading a cached verdict requires no API call and no feature gate
     // — a user who removed their AI provider should still see the
@@ -321,7 +327,7 @@ export function createAIVerdict<T>(cfg: AIVerdictConfig<T>): AIVerdictEngine<T> 
     // canAnalyze yield (e.g. token-validation round-trip) would otherwise
     // open a window for duplicate API calls. The finally clause releases
     // the slot on every exit path, including the gate-fail returns below.
-    inflight.add(id);
+    inflight.add(key);
     _refresh(target);
     let slotHeld = false;
     let abandoned = false;
@@ -348,7 +354,9 @@ export function createAIVerdict<T>(cfg: AIVerdictConfig<T>): AIVerdictEngine<T> 
     });
     try {
       if (!hasAssistantFeatureProvider()) return null;
-      if (!canAnalyze(target)) return null;
+      if (!owner.current() || !canAnalyze(target)) return null;
+      // Capture context before waiting; a queued request must never read another profile.
+      const ctx = buildContext(target);
       // Race slot acquisition against the watchdog. If the watchdog wins,
       // _acquireAISlot's promise eventually resolves anyway when a slot
       // frees — at that point we observe `abandoned` and release the
@@ -358,7 +366,7 @@ export function createAIVerdict<T>(cfg: AIVerdictConfig<T>): AIVerdictEngine<T> 
         else slotHeld = true;
       });
       await Promise.race([acquire, watchdog]);
-      const ctx = buildContext(target);
+      if (!owner.current()) return null;
       const apiCall = callAssistantFeatureAI({
         system: systemPrompt,
         messages: [{ role: 'user', content: ctx }],
@@ -367,6 +375,9 @@ export function createAIVerdict<T>(cfg: AIVerdictConfig<T>): AIVerdictEngine<T> 
         consentKind: opts.userInitiated ? 'text' : 'automatic-insight',
       });
       const result = await Promise.race([apiCall, watchdog]);
+      if (!owner.current()) return null;
+      const fresh = getTarget(id, owner.root);
+      if (!fresh) return null;
       const text = (result && typeof result === 'object') ? ((result as { text?: string }).text || '') : (typeof result === 'string' ? result : '');
       const match = text.match(/\{[\s\S]*\}/);
       if (!match) throw new Error('No JSON in response');
@@ -376,7 +387,7 @@ export function createAIVerdict<T>(cfg: AIVerdictConfig<T>): AIVerdictEngine<T> 
       const detail = String(parsed.detail || '').slice(0, 800);
       let extra = {};
       if (typeof parseExtraFields === 'function') {
-        try { extra = parseExtraFields(parsed, target) || {}; } catch (_) {}
+        try { extra = parseExtraFields(parsed, fresh) || {}; } catch (_) {}
       }
       // Keep the context-time fingerprint when writing. If the user edited
       // the target during the API call, the verdict describes the old data.
@@ -386,16 +397,24 @@ export function createAIVerdict<T>(cfg: AIVerdictConfig<T>): AIVerdictEngine<T> 
         generatedAt: Date.now(),
         status: 'ok' as const,
       }, extra);
-      setAIAnalysis(target, value);
-      await saveImportedData();
+      const saved = await commitAIVerdictData(owner, draft => {
+        const staged = getTarget(id, draft);
+        if (!staged) return false;
+        setAIAnalysis(staged, value, draft);
+        return true;
+      });
+      if (!saved || !owner.current() || !getTarget(id, owner.root)) return null;
       // Push immediately so other devices see the new verdict in seconds
       // rather than waiting for the 10s onDataSaved debounce.
-      if (syncOnSave && isSyncEnabled?.()) {
+      if (owner.current() && syncOnSave && isSyncEnabled?.()) {
         pushCurrentProfile().catch(() => {});
       }
       return value;
     } catch (e) {
-      const prev = getAIAnalysis(target);
+      if (!owner.current()) return null;
+      const fresh = getTarget(id, owner.root);
+      if (!fresh) return null;
+      const prev = getAIAnalysis(fresh, owner.root);
       const errSidecar = {
         lastErrorAt: Date.now(),
         lastErrorMessage: _normalizeErrorMessage(e),
@@ -408,17 +427,17 @@ export function createAIVerdict<T>(cfg: AIVerdictConfig<T>): AIVerdictEngine<T> 
       // the dot/tip/detail that previously informed them.
       // No-prev (or prior already-error) — write a fresh error state so
       // the row shows "Analysis failed" instead of the idle CTA.
-      if (prev?.status === 'ok' && prev?.dot) {
-        setAIAnalysis(target, Object.assign({}, prev, errSidecar));
-      } else {
-        setAIAnalysis(target, Object.assign({}, prev || {}, errSidecar, {
-          status: 'error',
-          errorAt: errSidecar.lastErrorAt,
-          errorMessage: errSidecar.lastErrorMessage,
-        }));
-      }
-      // Persist so the error survives a reload too — best-effort.
-      try { await saveImportedData(); } catch (_) {}
+      const value: AIVerdictAnalysis = prev?.status === 'ok' && prev?.dot
+        ? Object.assign({}, prev, errSidecar)
+        : Object.assign({}, prev || {}, errSidecar, {
+          status: 'error' as const, errorAt: errSidecar.lastErrorAt, errorMessage: errSidecar.lastErrorMessage,
+        });
+      await commitAIVerdictData(owner, draft => {
+        const staged = getTarget(id, draft);
+        if (!staged) return false;
+        setAIAnalysis(staged, value, draft);
+        return true;
+      });
       return null;
     } finally {
       // If watchdog won and we never acquired the slot, the .then above
@@ -427,14 +446,15 @@ export function createAIVerdict<T>(cfg: AIVerdictConfig<T>): AIVerdictEngine<T> 
       abandoned = true;
       if (watchdogTimer) { try { clearTimeout(watchdogTimer); } catch (_) {} }
       if (slotHeld) _releaseAISlot();
-      inflight.delete(id);
-      _refresh(target);
+      inflight.delete(key);
+      if (owner.current()) _refresh(getTarget(id, owner.root));
     }
   }
 
   /** Run analyze with force=true. Public entry for refresh buttons. */
   async function refresh(id: string) {
-    const target = getTarget ? getTarget(id) : null;
+    const owner = captureAIVerdictOwner();
+    const target = getTarget ? getTarget(id, owner.root) : null;
     if (!target) return null;
     return analyze(target, { force: true, userInitiated: true });
   }
@@ -462,31 +482,37 @@ export function createAIVerdict<T>(cfg: AIVerdictConfig<T>): AIVerdictEngine<T> 
     if (!hasAssistantFeatureProvider()) return;
     if (!shouldAutoFire(target)) return;
     const id = getId(target);
-    if (retrying.has(id)) return; // already running
-    retrying.add(id);
+    const owner = captureAIVerdictOwner(), key = owner.key(id);
+    if (retrying.has(key)) return; // already running for this owner
+    retrying.add(key);
     _refresh(target);
     setTimeout(async () => {
       try {
-        try { await analyze(target); }
+        if (!owner.current()) return;
+        const initial = getTarget(id, owner.root);
+        if (!initial) return;
+        try { await analyze(initial); }
         catch (_) { /* analyze writes its own error state */ }
         const delays = Array.isArray(autoFireRetryDelaysMs) ? autoFireRetryDelaysMs : [];
         for (let i = 0; i < delays.length; i++) {
-          const fresh = getTarget ? getTarget(id) : target;
-          const a = fresh ? getAIAnalysis(fresh) : null;
+          if (!owner.current()) return;
+          const fresh = getTarget ? getTarget(id, owner.root) : target;
+          const a = fresh ? getAIAnalysis(fresh, owner.root) : null;
           if (a?.status !== 'error') return; // success or moved on
           if (!_isRetryableError(a.errorMessage)) return;
           await new Promise<void>(r => setTimeout(r, delays[i]));
-          const t = getTarget ? getTarget(id) : target;
+          if (!owner.current()) return;
+          const t = getTarget ? getTarget(id, owner.root) : target;
           if (!t) return;
           try { await analyze(t, { force: true }); }
           catch (_) {}
         }
       } finally {
-        retrying.delete(id);
+        retrying.delete(key);
         // Use the latest version of the target so the scroll-anchor
         // lookup reflects the row's current shape (it gained an
         // aiAnalysis field during this run).
-        _refresh(getTarget ? getTarget(id) : target);
+        if (owner.current()) _refresh(getTarget(id, owner.root));
       }
     }, 0);
   }
@@ -503,23 +529,17 @@ export function createAIVerdict<T>(cfg: AIVerdictConfig<T>): AIVerdictEngine<T> 
    */
   async function purgeOrphaned() {
     try {
-      const targets = getAllTargets();
-      let dirty = false;
-      for (const t of targets) {
-        const a = getAIAnalysis(t);
-        if (a?.status === 'analyzing' && !inflight.has(getId(t))) {
-          // For row-level: clear aiAnalysis entirely (no useful state).
-          // For map-level (e.g. lightDailyVerdicts) this still works
-          // because setAIAnalysis is responsible for the assignment;
-          // engines pass a delete-by-replace shim.
-          setAIAnalysis(t, null);
-          dirty = true;
+      const owner = captureAIVerdictOwner();
+      const saved = await commitAIVerdictData(owner, draft => {
+        let dirty = false;
+        for (const target of getAllTargets(draft)) {
+          if (getAIAnalysis(target, draft)?.status === 'analyzing' && !isAnalyzing(getId(target))) {
+            setAIAnalysis(target, null, draft); dirty = true;
+          }
         }
-      }
-      if (dirty) {
-        await saveImportedData();
-        _refresh();
-      }
+        return dirty;
+      });
+      if (saved && owner.current()) _refresh();
     } catch (_) {
       // Failures here are not user-actionable.
     }

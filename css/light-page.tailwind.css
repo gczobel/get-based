@@ -1,0 +1,78 @@
+/* Light page-owned utilities; the ordered lazy URL and shared child styles remain stable. */
+@import "./sun-data-source.tailwind.css";
+@import "tailwindcss/theme.css" layer(gb-theme) prefix(gb);
+@import "tailwindcss/utilities.css" prefix(gb) source(none);
+@import "./ui-tokens.tailwind.css";
+@source "../js/components/LightPagePresentation.svelte";
+@source "../js/components/LightPageBody.svelte";
+@source "../js/components/LightPageHeader.svelte";
+@source "../js/components/LightPageWidgets.svelte";
+@source "../js/components/LightWidgetBody.svelte";
+@source "../js/components/LightMethods.svelte";
+@source "../js/components/LightSessionActions.svelte";
+@source "../js/components/LightUVSafety.svelte";
+@source "../js/components/LightWidgetPrompt.svelte";
+@custom-variant light-page (&:is([data-light-page-presentation], [data-light-page-presentation] *));
+@source "../js/components/LightTodayStrip.svelte";
+@source "../js/components/LightDashboardPills.svelte";
+
+@custom-variant light-session (&:is([data-light-session-presentation], [data-light-session-presentation] *));
+@source "../js/components/LightSessionPresentation.svelte";
+@source "../js/components/LightSessionRow.svelte";
+@source "../js/components/LightSessionHistory.svelte";
+@source "../js/components/SunPastSessionForm.svelte";
+@source "../js/components/DeviceSessionForm.svelte";
+
+@custom-variant light-detail (&:is([data-light-detail-presentation], [data-light-detail-presentation] *));
+@source "../js/components/LightSessionDetail.svelte";
+@source "../js/components/LightSessionDetailFields.svelte";
+@source "../js/components/DeviceSessionModeForm.svelte";
+
+@custom-variant light-active (&:is([data-light-active-presentation], [data-light-active-presentation] *));
+@source "../js/components/LightActiveSession.svelte";
+@source "../js/components/LightSessionControls.svelte";
+@source "../js/components/LightLiveReadouts.svelte";
+@source "../js/components/LightSessionChips.svelte";
+
+@source "../js/components/SunStartSessionForm.svelte";
+@source "../js/components/SunPreflightBanner.svelte";
+
+@custom-variant sun-body (&:is([data-sun-body-picker], [data-sun-body-picker] *));
+@source "../js/components/SunBodyPicker.svelte";
+@import "./sun-body-picker.css";
+@source "../js/components/SunBodyPickerFrame.svelte";
+
+@custom-variant session-ai (&:is([data-light-session-ai], [data-light-session-ai] *, [data-light-environment-ai], [data-light-environment-ai] *, [data-light-review-ai], [data-light-review-ai] *));
+@source "../js/components/LightSessionAI.svelte";
+@source "../js/components/LightVerdictDot.svelte";
+@source "../js/components/LightVerdictButton.svelte";
+@source "../js/light-session-ai-classes.ts";
+
+@custom-variant review-ai (&:is([data-light-review-ai], [data-light-review-ai] *));
+@source "../js/components/LightReviewAI.svelte";
+@source "../js/components/LightTodayAI.svelte";
+@source "../js/components/LightTodayQuestion.svelte";
+@source "../js/components/LightReviewDetail.svelte";
+@source "../js/components/LightWeeklyAI.svelte";
+@source "../js/components/LightWeeklyFallback.svelte";
+@source "../js/components/LightBurdenAI.svelte";
+@source "../js/light-review-ai-classes.ts";
+
+@custom-variant channel-detail (&:where([data-light-channel-presentation], [data-light-channel-presentation] *));
+@source "../js/components/LightChannelDetail.svelte";
+@source "../js/components/LightChannelChart.svelte";
+@source "../js/components/LightChannelResearch.svelte";
+@source "../js/light-channel-classes.ts";
+
+/* Inclusive legacy breakpoints; ordered narrow after mobile for exact parity. */
+@custom-variant pill-mobile (@media (max-width: 600px));
+@custom-variant pill-narrow (@media (max-width: 375px));
+@custom-variant channel-pill (&:where([data-light-channel-pills], [data-light-channel-pills] *));
+@source "../js/components/LightChannelPills.svelte";
+@source "../js/components/LightChannelSparkline.svelte";
+@source "../js/light-channel-pill-classes.ts";
+
+@custom-variant channel-section (&:where([data-light-channel-section], [data-light-channel-section] *));
+@source "../js/components/LightChannelSection.svelte";
+@source "../js/components/LightLocationHint.svelte";
+@source "../js/light-channel-section-classes.ts";

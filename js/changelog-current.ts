@@ -6,11 +6,9 @@ export interface ChangelogEntry {
   forceShow?: boolean;
 }
 // Current release kept separate so the historical archive remains bounded.
-export const CURRENT_RELEASE = { version: '1.23.0', date: '2026-10-05', title: 'Migration to TypeScript 7', items: [
-  '<b>getbased has been fully migrated to TypeScript 7.</b> This gives future development a stronger foundation, helps catch errors earlier, and makes the code easier to maintain. Existing profiles, data, and familiar workflows remain compatible.',
-  '<b>Fixes for issues inherited from the JavaScript codebase.</b> Improved Routstr wallet handling across mints, nodes, and refund recovery.',
-  '<b>Faster repeated node browsing.</b> Recently loaded node information is cached to reduce waiting when browsing again.',
-  '<b>Safer profile handling.</b> More reliable profile switching and stronger protection for unreadable encrypted data.',
-  '<b>Improved startup reliability.</b> Fixes for app startup and offline updates.',
-  '<b>Updated documentation and release checks.</b> Setup instructions and verification now reflect the TypeScript migration.',
+export const CURRENT_RELEASE = { version: '1.25.0', date: '2026-10-22', title: 'Waist measurements and cycle guidance', items: [
+  '<b>More body measurements.</b> Log waist and optional hip measurements, see waist-to-hip and waist-to-height ratios, or record abdominal depth (SAD) with a caliper.',
+  '<b>Measure in a way that suits you.</b> Choose standing, seated or lying down for waist measurements, with simple guidance and centimetres or inches.',
+  '<b>Follow your progress consistently.</b> The app remembers your measurement method and keeps different positions and locations separate in your history.',
+  '<b>Use your cycle for timing.</b> See cycle context beside measurements and estimated dates for your first measurement and later comparisons.',
 ] } satisfies ChangelogEntry;

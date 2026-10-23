@@ -1,3 +1,4 @@
+import {waitForAsyncCondition} from '../helpers/awaited-condition.js';
 import { expect, test } from './coverage-fixture.js';
 
 const TRANSLUCENT_THEMES = ['glass', 'synth-sunrise', 'neuromancer'];
@@ -8,8 +9,8 @@ test('dashboard renders Biological Coherence hero and domain rows', async ({ pag
   await prepareDemoProfile(page);
 
   await page.evaluate(async () => {
-    (await import('/js/views.js')).navigate('dashboard');
-    await new Promise(r => setTimeout(r, 300));
+    const preparedDashboard = await (await import('/js/views.js')).navigate('dashboard');
+    if (preparedDashboard === false || (await import('/js/state.js')).state.currentView !== 'dashboard' || !document.querySelector('#main-content .dashboard-widgets')) throw new Error('Actual Dashboard route did not prepare');
   });
 
   const hero = page.locator('[data-widget-id="biology-score-biologicalCoherence"]').first();
@@ -63,8 +64,8 @@ test('dashboard coherence domain row navigates to Biology Scores lens and scroll
   await prepareDemoProfile(page);
 
   const targetScoreId = await page.evaluate(async () => {
-    (await import('/js/views.js')).navigate('dashboard');
-    await new Promise(r => setTimeout(r, 300));
+    const preparedDashboard = await (await import('/js/views.js')).navigate('dashboard');
+    if (preparedDashboard === false || (await import('/js/state.js')).state.currentView !== 'dashboard' || !document.querySelector('#main-content .dashboard-widgets')) throw new Error('Actual Dashboard route did not prepare');
     const row = document.querySelector<HTMLElement>('[data-widget-id="biology-score-biologicalCoherence"] .bc-micro-domain[data-biology-score-id]');
     if (!row) throw new Error('No coherence domain row found');
     const id = row.getAttribute('data-biology-score-id');
@@ -86,8 +87,8 @@ test('dashboard individual biology score widget is clickable and navigates to it
   await page.evaluate(async () => {
     const { showDashboardWidget } = (await import('/js/dashboard-widgets.js')) as typeof import('../../js/dashboard-widgets.js') & {showDashboardWidget?: undefined};
     (showDashboardWidget as ((...args: unknown[]) => unknown) | undefined)?.('biology-score-metabolicFlexibility', { force: true });
-    (await import('/js/views.js')).navigate('dashboard');
-    await new Promise(r => setTimeout(r, 300));
+    const preparedDashboard = await (await import('/js/views.js')).navigate('dashboard');
+    if (preparedDashboard === false || (await import('/js/state.js')).state.currentView !== 'dashboard' || !document.querySelector('#main-content .dashboard-widgets')) throw new Error('Actual Dashboard route did not prepare');
     const widget = document.querySelector<HTMLElement>('[data-widget-id="biology-score-metabolicFlexibility"]');
     const clickTarget = widget?.querySelector<HTMLElement>('[data-biology-score-action="jump-to-domain"]');
     if (!clickTarget) throw new Error('Metabolic widget click target not found');
@@ -132,8 +133,8 @@ test('dashboard domain rows without primaryScoreId get no-jump visual cue', asyn
   await prepareDemoProfile(page);
 
   await page.evaluate(async () => {
-    (await import('/js/views.js')).navigate('dashboard');
-    await new Promise(r => setTimeout(r, 300));
+    const preparedDashboard = await (await import('/js/views.js')).navigate('dashboard');
+    if (preparedDashboard === false || (await import('/js/state.js')).state.currentView !== 'dashboard' || !document.querySelector('#main-content .dashboard-widgets')) throw new Error('Actual Dashboard route did not prepare');
   });
 
   // All domain rows should have either jump-to-domain action or no-jump class
@@ -460,11 +461,14 @@ test('background telemetry does not discard AI and a real input edit preserves a
 });
 
 
-test('requested insights survive reload and backups; bulk updates reuse completed answers', async ({ page }) => {
+test('requested insights survive reload and backups; bulk updates reuse completed answers', async ({ page, browserName }) => {
   test.setTimeout(60000);
-  // Exercise startup maintenance overlapping a slower device's first render.
-  const cdp = await page.context().newCDPSession(page);
-  await cdp.send('Emulation.setCPUThrottlingRate', { rate: 6 });
+  // Chromium adds slow-device coverage; CDP is unavailable in Firefox/WebKit.
+  // Every browser runs the same persistence, restore and request-reuse assertions.
+  if (browserName === 'chromium') {
+    const cdp = await page.context().newCDPSession(page);
+    await cdp.send('Emulation.setCPUThrottlingRate', { rate: 6 });
+  }
   await prepareDemoProfile(page);
   const calls: string[][] = [];
   await page.exposeFunction('recordBiologyAIRequest', (ids: string[]) => calls.push(ids));
@@ -517,7 +521,7 @@ test('requested insights survive reload and backups; bulk updates reuse complete
   expect(exported.restored).toEqual(exported.backup);
   expect((Object.keys as (value: unknown) => string[])(exported.json).length).toBeGreaterThan(10);
   await page.reload({ waitUntil: 'load' });
-  await page.waitForFunction(async () => !!(await import('/js/state.js')).state.importedData.biologyScoreAI?.metabolicFlexibility?.summary);
+  await waitForAsyncCondition(() => page.evaluate(async () => !!(await import('/js/state.js')).state.importedData.biologyScoreAI?.metabolicFlexibility?.summary), 0);
   await installProvider();
   await page.evaluate(async () => {
     (await import('/js/views.js')).navigate('biology-scores');
@@ -980,7 +984,7 @@ test('bounded comparison assessment survives range switching, reload and JSON re
   await page.evaluate(async () => (await import('/js/biology-scores.js')).loadBiologyScoreInsights());
   expect(calls).toHaveLength(warmedCalls);
   await page.reload({ waitUntil: 'load' });
-  await page.waitForFunction(async () => !!(await import('/js/state.js')).state.importedData.biologyScoreAI?.redoxStress?.coveredMaterials?.length);
+  await waitForAsyncCondition(() => page.evaluate(async () => !!(await import('/js/state.js')).state.importedData.biologyScoreAI?.redoxStress?.coveredMaterials?.length), 0);
   await install();
   expect(await checkViews()).toEqual(before);
   expect(calls).toHaveLength(warmedCalls);

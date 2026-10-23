@@ -416,7 +416,7 @@ try {
 
 // 16. Settings + Chat source checks
 const providerSrc = read('js/provider-panels.js');
-const providerRenderSrc = read('js/provider-panel-renderers.js');
+const providerRenderSrc = read('js/components/VeniceSettings.svelte');
 const providerModelControlsSrc = read('js/provider-model-controls.js');
 assert('provider renderer has venice-e2ee-toggle', providerRenderSrc.includes('venice-e2ee-toggle'));
 assert('provider renderer has venice-e2ee-indicator', providerRenderSrc.includes('venice-e2ee-indicator'));
@@ -424,14 +424,29 @@ assert('provider model controls has toggleVeniceE2EE', providerModelControlsSrc.
 assert('provider model controls has Venice model change handler', providerModelControlsSrc.includes('function onVeniceModelDropdownChange'));
 assert('Venice model dropdown uses delegated change handler',
   providerRenderSrc.includes('data-provider-panel-change="venice-model"') &&
-    providerModelControlsSrc.includes('data-provider-panel-change="venice-model"') &&
+    providerModelControlsSrc.includes('getVeniceSettingsView') && providerModelControlsSrc.includes('view?.setModels(buildVeniceModelState(models))') &&
     providerSrc.includes('onVeniceModelDropdownChange,'));
 const chatSrc = read('js/chat.js');
 const chatSendSrc = read('js/chat-send.js');
-const chatAttestationSrc = read('js/chat-attestation.js');
 assert('chat send uses isVeniceE2EEActive', chatSendSrc.includes('isVeniceE2EEActive'));
-assert('chat send imports E2EE attestation helpers', chatSendSrc.includes("from './chat-attestation.js'"));
-assert('chat attestation shows lock emoji for E2EE', chatAttestationSrc.includes('\\uD83D\\uDD12'));
+const chatSendRuntime = await import('../js/chat-send-runtime.js');
+const attestationKeys = ['_ppqAttestation', '_routstrAttestation', '_veniceAttestation'] as const;
+const attestationWindow = window as Window & Partial<Record<typeof attestationKeys[number], unknown>>;
+const previousAttestations = attestationKeys.map(key => ({key, own: Object.hasOwn(attestationWindow, key), value: attestationWindow[key]}));
+const receiptProbes = [{provider:'ppq', receipt:{probe:'ppq'}}, {provider:'routstr', receipt:{probe:'routstr'}}, {provider:'venice', receipt:{probe:'venice'}}];
+try {
+  attestationKeys.forEach((key, index) => { attestationWindow[key] = receiptProbes[index]!.receipt; });
+  assert('chat send resolves each E2EE provider receipt through its runtime adapter',
+    chatSendSrc.includes("from './chat-send-runtime.js'") &&
+    chatSendSrc.includes('getChatSendProviderAttestation(_msgProvider)') &&
+    receiptProbes.every(({provider, receipt}) => chatSendRuntime.getChatSendProviderAttestation(provider) === receipt));
+} finally {
+  for (const previous of previousAttestations) {
+    if (previous.own) attestationWindow[previous.key] = previous.value;
+    else delete attestationWindow[previous.key];
+  }
+}
+assert('chat attestation shows lock emoji for E2EE', read('js/components/ChatAttestationBadge.svelte').includes('🔒'));
 const limitedVenice = {
   verificationLevel: 'binding',
   nonceVerified: true,
@@ -466,7 +481,7 @@ const dcapLock = chatAttestationMod.e2eeLockHTML(dcapVenice);
 assert('Venice DCAP lock has a distinct non-green tier',
   dcapLock.includes('#38bdf8')
     && dcapLock.includes('TEE')
-    && dcapLock.includes('class="e2ee-attestation-badge"')
+    && /class="e2ee-attestation-badge(?:\s|")/.test(dcapLock)
     && dcapLock.includes('data-attestation-tooltip=')
     && !dcapLock.includes('#22c55e'),
   dcapLock);
@@ -501,7 +516,7 @@ assert('Venice NRAS tooltip reports signed tokens and the co-location limit',
 assert('Venice provider copy leads with a readable summary and keeps technical detail available',
   providerRenderSrc.includes('TEE + GPU checked')
     && providerRenderSrc.includes('Encrypted Mode')
-    && providerRenderSrc.includes('What is checked &mdash; and what is not')
+    && providerRenderSrc.includes('What is checked — and what is not')
     && providerRenderSrc.includes('Checked in your browser')
     && providerRenderSrc.includes('Intel TDX confidential-computing environment (TEE, verified with DCAP)')
     && providerRenderSrc.includes("NVIDIA's signed GPU result (NRAS)")

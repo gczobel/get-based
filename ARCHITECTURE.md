@@ -21,14 +21,14 @@ file covers code ownership and dependency rules that must change with the app.
   `getbased-docs` as well.
 - Never hand-edit `MODULE_MAP.md`. CI regenerates it and fails if it is stale.
 
-## TypeScript migration source contract
+## TypeScript source contract
 
 Canonical `.ts` and `.mts` modules compile with TypeScript 7 to ignored `.js`
 and `.mjs` siblings at existing runtime URLs. Run `npm run typescript:build`
 after source edits. `npm ci` runs it through `prepare`; the `dev-server`, `test`,
 `production:build` and `production:check` npm commands also compile first.
 Source inventories prefer the canonical TypeScript file. Project-owned assets in
-`vendor/components.json` participate in migration completion; external vendor
+`vendor/components.json` participate in source-completeness checks; external vendor
 bundles remain third-party inputs. The same ownership manifest includes executable
 project-owned vendor modules in coverage and affected-test planning. CodeQL excludes
 external bundles precisely so owned vendor sources remain scanned. Runtime coverage
@@ -41,17 +41,308 @@ data, then release the snapshot and compiler process. Production and test
 semantic checks use separate strict projects for their actual browser, worker and
 Node environments. The default editor, app and server projects use the native
 NodeNext resolution, checked index access, exact optional-property types and
-erasable/verbatim module rules too. Every native project retains the
-previous compiler safety flags. The fixed migration baseline is retained in
-[`scripts/typescript-migration-baseline.json`](scripts/typescript-migration-baseline.json);
-the completed migration was merged in [PR #1660](https://github.com/elkimek/get-based/pull/1660).
+erasable/verbatim module rules too. All native projects retain their compiler safety flags. Source-completeness
+checks use the fixed inventory in
+[`scripts/typescript-migration-baseline.json`](scripts/typescript-migration-baseline.json).
+
+## Presentation and lifecycle contract
+
+`body-measurement-model.ts` owns method-specific waist/hip/SAD field identities
+and validated portable-mirror projection. `wearables-manual.ts` owns their paired
+numeric writes and deletion clocks through the existing encrypted manual-reading
+path. Overview tiles read this projection without pooling methods into a wearable
+baseline. The lazy body-measurement loader guards profile, route and modal
+ownership; its Svelte editor preserves drafts and compares only matching methods.
+Waist-to-height ratio is a display projection from canonical centimetre waist
+values and the current profile height; it does not rewrite measurement history.
+`body-measurement-cycle.ts` projects optional date-specific cycle context and
+rolling estimated comparison windows for this editor and the Cycle overview.
+Forecast dates never create observed periods, change raw measurements or infer
+an adjustment to fat mass.
+
+Svelte components own first-party markup. Pure presentation modules project
+readonly data; feature controllers retain calculations, provider requests,
+storage, navigation and delegated actions. Projections preserve observable getter,
+coercion, default and fault order at public boundaries. Ordinary parents compose typed children,
+including the finite Dashboard and Lens widget unions. Do not coordinate children
+through serialized HTML, compiler markers, string slots or private frame parsers.
+
+Public synchronous HTML facades serialize those same owners at native insertion
+boundaries. Explicit legacy renderer injection APIs remain compatibility boundaries,
+not a path for untrusted data or ordinary application composition. Sanitized Markdown,
+fixed SVG/catalog content and self-contained printable documents have separately
+reviewed content boundaries. [The DOM sink audit](scripts/dom-sink-audit.mts) owns
+its exact current policy; new sinks require explicit review, not a count refresh.
+
+Shared components serve both the native-compatible entry and the static Kit route.
+Hydrate matching snapshots once, preserve retained controls and live child hosts,
+and dispose the old owner before replacing its DOM. Each native component uses
+lifecycle functions from its own emitted bundle; Kit shares one Svelte runtime.
+The synchronous browser serializer needs no rendering backend. Its build rejects
+static Node dependencies; Svelte's unused asynchronous renderer import must not
+become a browser dependency.
+
+Every async view action captures its profile/data, root and request identity before
+awaiting work. Recheck the relevant provider, credential, thread, selection or draft
+before dispatch, publication and persistence. Retired controls cannot start new work
+or update replacement views. Accepted domain writes can finish for their original
+owner after closure; they must not publish into a new owner's UI or adopt unrelated
+unsaved fields. Domain transactions, locks and explicit field baselines decide
+commit/rollback, not component mount lifetime.
+
+Keep credentials and private metadata in dedicated live-field/service ports,
+not general display snapshots or action attributes. Existing explicit Sync recovery
+and profile-share reveal/copy serializers retain their narrow sensitive display
+contracts; see [credential presentation boundaries](engineering/presentation-ownership.md#credentials-identities-and-payment-operations).
+Those owner views must not become diagnostic or analytics snapshots. Disposal
+scrubs retained fields. Preserve current
+input values, native reset defaults, selection, composition, focused-node identity,
+keyboard activation, focus traps and scroll locks during refreshes. Release listeners,
+subscriptions, timers, observers, pointer capture and object URLs with their owner.
+Delayed initial focus must yield to an explicit newer focus target or modal.
+
+See [presentation ownership](engineering/presentation-ownership.md) for feature
+entry points, sensitive workflows and lazy-loading boundaries. The generated map
+remains the complete module/import inventory.
+
+Optional features expose lightweight configuration and loaded-owner ports before
+loading their UI. The EMF interpretation port retains synchronous close/abort and
+focus cleanup; late streams and completions must match their request, profile,
+data and actual overlay/body owner. Closing a cold feature does not load it.
+
+Biology definitions and state-aware synchronous calculations live in
+[`biology-score-compute.ts`](js/biology-score-compute.ts); Dashboard projection and
+shared persisted review contracts do not import its page/AI controller. The public
+`biology-scores` facade reexports the same bindings. Biology navigation waits for
+its cached page module and shared styles, rejecting retired route/profile/root
+requests. Startup completes synchronous chrome setup, then waits for the current
+first-party navigation before declaring `data-app-ready`. A replacement route or
+Dashboard breakpoint supersedes a pending load; an abandoned import cannot block
+its ready replacement. Navigation started during later bootstrap is drained before
+readiness too. The public route return values and injected startup callbacks keep
+their original contracts. A contained route failure may finish with a usable retry
+alert; an unhandled current-route rejection prevents readiness.
+
+The production route runtime prepares one Dashboard composition and controls
+instance on first use. Empty Welcome and marker pin operations stay synchronous;
+populated Dashboard, Lens and Light routes await the resident composition before
+reading preferences or projecting content. Public `views.ts` keeps its original
+synchronous injected factory and re-exports the same route/action functions from
+`views-runtime.ts`. Prepared widget controls, including picker projection and
+rendering, keep their synchronous path. Each visible-widget render owns a fresh
+Biology projection scope. It may reuse a successful calculation only across adjacent
+Biology widgets with eligible inputs and unchanged owners; any other feature
+projection retires the scope before running. Standalone projections keep their
+per-call behavior. A segment captures one coherent score snapshot, including
+live Light rollups, rather than rereading those rollups for each adjacent score.
+No score result survives a render.
+Biology AI presentation may share the material fingerprint within one synchronous
+state read of a freshly computed score. Summary and answer reconciliation keep
+separate reads around DOM replacement and focus callbacks; public state and
+request-key functions retain their original per-call behavior.
+The [scope tests](tests/dashboard-biology-render-scope.test.ts) and
+[registry tests](tests/dashboard-render-projector.test.ts) cover this boundary.
+
+Dashboard and Lens nutrition summaries import the typed `NutritionDashboard`
+component directly. The lightweight `nutrition-widget-runtime` owns their shared
+projection, native serialization, refresh and editor-residency port. The full
+`NutritionPresentation` collection and editor controller load at an actual editor,
+history, target or drink action. Cold actions retain their request, source control,
+profile/data, route, focus and modal ownership through the complete opener; each
+opener also checks its own mounted owner after storage or draft restoration. Warm
+controls remain with the full controller's single resident delegate set.
+
+The eagerly registered `nutrition-summary-runtime` owns serialized sync hydration
+and awaits the lazy encrypted store before initial route readiness. Context and
+profile refresh share that same operation; loading summary state does not require
+the editor. Keep initialization, reconciliation, retries and accepted writes in
+their existing storage owners.
+
+The encrypted meal store delegates ordered row reads to `nutrition-store-reads`.
+It uses bounded reverse batch reads only when the browser supports them and the
+limit is a primitive positive integer within IndexedDB's count range; other limits
+and browsers retain the cursor path. A list for a nonempty primitive-string profile
+ID shares one fresh lazy device-key read for that invocation. Each selected envelope
+is still validated and decrypted, with no cross-call key cache.
+
+Imported-profile storage shares the exact WHOOP literal-token predicate with its
+optional transformer. Values outside that existing eligibility boundary retain
+their original bytes without loading the transformer; eligible values keep the
+same device protection, passphrase encryption, durable migration and error path.
+
+## Styling source contract
+
+Tailwind 4 utilities and semantic recipes are the authored presentation source.
+Components and typed class catalogs use scoped, prefixed utilities without global
+Preflight. Theme variables remain authoritative for typography, colors and radii;
+owner specificity and original cascade positions preserve shared/theme overrides.
+Use the owning compiler rather than adding global overrides or `!important`.
+
+[`scripts/build-styles.mts`](scripts/build-styles.mts) coordinates stylesheet owners.
+[`scripts/native-recipe-styles.mts`](scripts/native-recipe-styles.mts) validates
+ordered declarations, values and priorities before restoring them at their original
+selectors, media/container/supports ancestry and cascade positions. Preserve foreign
+styles, duplicate receiver order, comments and runtime URLs. Native CSS remains
+appropriate for tokens, keyframe/pseudo-element grammar, vendor integration and
+explicit self-contained print/report outputs; it must not become a second ordinary
+component styling source.
+
+LightSetup uses readable per-hook `gb-ls-<hook>` recipes, where `gb-ls` means
+getbased LightSetup. Its complete Tailwind declaration catalog is build-only in
+[`scripts/style-recipes/light-setup.mts`](scripts/style-recipes/light-setup.mts);
+the runtime helper retains semantic hooks and its existing input behavior. The
+LightSetup compiler replaces only qualified atomic selector tokens, preserving
+exact owner/state selectors, specificity, cascade and all non-selector bytes.
+A complete inverse and pinned native HTML/CSS contracts guard this single owner;
+do not broaden it into a global class registry or a second styling language.
+
+Static inline presentation is authored as named Tailwind recipes registered in
+[`scripts/inline-style-map-owners.mts`](scripts/inline-style-map-owners.mts).
+The TypeScript build validates these before compiling application sources and emits
+immutable typed maps. Components and necessary native property setters consume
+exact declaration bodies or validated singleton values, preserving inline cascade,
+setter order and unrelated styles. Measured geometry, placement and visibility
+state remain explicit controller ports; do not reintroduce fixed style strings.
+Registered map outputs are excluded from authored-source fingerprints while their
+recipe inputs remain included. Runtime map modules retain explicit worker assets.
+
+The root foundation and optional-theme recipes compile to `styles.css` and
+`themes-extra.css`. Startup-layout and shared-theme-mode recipes generate only
+the two owned inline style snapshots in `index.html`, validating their unique
+head/font/theme anchors and preserving all other document bytes. Keep their
+first-paint order and legal/AppShell boundaries intact.
+
+Run `npm run typescript:build` after authored changes. `styles:check` and
+`svelte:check` verify reproducible emissions. TypeScript 7 remains the app compiler
+and component diagnostics engine; `tooling/svelte` isolates the checker's supporting
+TypeScript 6 peer. Native component artifacts retain source maps and stable public
+URLs; static Kit compiles authored components directly. Architecture and test readers
+include both component script blocks. Coverage counts authored components once,
+separates positively mapped framework functions, fails on missing maps and retains
+unmapped functions in the first-party denominator and diagnostics.
+
+## Static SvelteKit distribution
+
+`scripts/build-sveltekit.mts` assembles the default self-contained static
+production distribution with SvelteKit 3 and `adapter-static`. `production:build`
+writes `dist/`; `production:check` validates a disposable distribution. Vercel
+publishes that same output. `tooling/svelte` isolates Kit's TypeScript 6 peer;
+application sources still compile with TypeScript 7. The native compatibility
+builder remains available for existing module, coverage and budget contracts.
+
+The Kit route prerenders and hydrates shared authored components. Native
+compatibility entrypoints use deterministic snapshots from those same owners,
+then hydrate their matching nodes before installing feature delegates. Route and
+native owners must not hydrate the same subtree twice or replace retained controls.
+Populated Dashboard routes load their selected Desktop or Mobile renderer and
+hydration owner together. Empty Welcome and mobile navigation remain synchronous.
+Cold navigation awaits that renderer; resident rendering keeps its synchronous
+path. A request ticket, profile/data identity, route revision, connected main
+container and viewport protect publication and delayed work. An owned loading or
+retry view never replaces persisted data.
+Dashboard Biology widgets import their three typed presentation leaves directly.
+The public overview and summary dispatchers retain their complete page renderers
+without making those unused page branches part of Dashboard startup.
+`ChatShell.svelte` and `ChatComposer.svelte` share the initial Chat structure and
+composer; `js/kit/routes/app/+layout.svelte` starts existing services after mount.
+
+Kit runs in embedded mode: navigation delegation attaches to `#kit-root`, the
+parent of its route body. Native forms and links outside that mount retain their
+document handlers and event cancellation order. Kit still manages navigation
+and browser history inside its route.
+The Vite graph compiles authored
+components directly and shares one Svelte runtime with Kit. Native CSS,
+worker and computed vendor URLs keep their original module-relative meaning.
+Kit discovers only canonical `.ts` route modules, excluding emitted siblings.
+
+Native compatibility and Kit client builds reuse five self-contained encrypted
+provider SDKs at their existing vendor URLs. The build qualifies their complete
+bytes, locked provenance and lack of additional module or worker dependencies,
+then verifies every copied SDK and its full app-shell cache entry. Those bytes
+remain included in cache-size measurements. Kit SSR and prerender retain their
+normal module resolution.
+The native optimized browser build selects production conditional exports, while
+standalone development and Kit SSR keep their own resolution settings.
+
+Shared Lens configuration, ordering, chrome and delegates live in
+`js/lens-page-shell-core.ts`. First-party typed pages import that core directly;
+the public `js/lens-page-shell.ts` facade retains synchronous compatibility
+rendering over the same state. An unused compatibility renderer does not make
+its full feature presentation part of startup.
+
+Sync Diagnose configuration and clipboard actions stay available without loading
+the modal presentation. First use loads its implementation with an explicit retry
+URL; pending opens retire when their route, profile, main container or modal owner
+changes. The sync engine keeps its existing lifecycle.
+
+Automatic context assessments and Agent Access acquire the shared lab-context
+builder only after their existing eligibility checks. Lightweight settings and
+configuration consumers import their owning leaves; the public builder remains
+synchronous. Its canonical and retry facades retain their own public function
+identities while delegating to one shared private assembly module. Caller option
+getters and date defaults are evaluated at the public boundary; cache and runtime
+callback ownership remain shared. Injected callbacks retain their synchronous path. Cold preparation
+rechecks profile, data, provider and callback ownership. Context assessments also
+recheck fingerprints and demo consent after context assembly; Agent Access checks
+its credentials and Sync scope again before encryption and transmission.
+
+Native retry chunks share a physical body only after two build passes prove
+identical code, exports and dependencies without module-relative URL inspection.
+Import rewrites happen before content hashing. The exact hashed native
+`?lazy-retry=1` transport keeps a separate ESM namespace; the worker serves it
+from the requesting build's cache only after validating an install-generated
+body proof. Missing or corrupt proof falls back to the original network request
+without caching a query copy. Network responses cannot supply trusted proof
+headers. Other query strings and qualified production raw module URLs retain
+their behavior. Development-only emitted modules outside the declared bootstrap
+and worker dependency closure are not a static-distribution module API.
+
+Stable feature and root theme stylesheets follow the requesting document's reported
+build cache. The waiting worker requires direct build replies from every live
+document before early activation and checks the client census again. An unknown
+legacy document leaves the update waiting until the old app windows close; it must
+never be assigned a build from cache capability or a response timeout. Pages reply
+to the requesting waiting worker as well as their current controller.
+Update banners retain a visible, bounded pending state and bind automatic reload
+intent to the exact requested worker. Deferral, timeout, messaging failure or worker
+replacement restores an actionable status instead of silently hiding the update.
+Page exit clears pending reload intent; a delayed replacement cannot reuse it.
+Returning from the back/forward cache restores an eligible waiting offer or an
+installed version's manual Reload action without polling or reusing automatic
+consent; a deliberate Later dismissal remains effective.
+
+Known cached app navigations record the resulting document's build before startup
+styles load. Unproven network navigation responses cannot be promoted into the
+owned version cache; missing owned app-alias documents fail closed in fingerprinted
+production rather than mixing a new document with old version metadata. After a
+worker restart, a bounded shared request recovers ownership.
+Only an exact successful stylesheet in that build's existing cache is eligible,
+including the exact lazy-retry request; unresolved ownership with retained builds
+or an unavailable owned stylesheet returns an uncached error instead of another
+build's CSS. Hashed modules, font/SQLite aliases and live requests retain their
+separate routing rules.
+
+The two Evolu vendor trees retain their public SQLite module and worker URLs.
+Builds qualify four complete, byte-identical payload pairs against pinned hashes
+and locked provenance before sharing their current-build cache entries. Fresh
+responses preserve each requested module or worker's URL base for relative WASM
+and proxy requests. Other Evolu assets and runtime identities stay distinct.
+
+The static assembler externalizes Kit's classic bootstrap to satisfy the existing
+CSP without permitting inline executable scripts. It copies only declared public
+assets, retains `/`, `/index.html`, `/app` and `/app/`, and uses the existing
+manifest identity, root service worker, update consent and storage services.
+Kit worker registration and version polling are disabled. Live documents identify
+their build to the worker so previous immutable modules remain available until
+old tabs reload or close; unknown legacy documents retain their caches safely.
+No rendering server is part of the output. See [static Kit build and acceptance](engineering/static-sveltekit.md).
 
 ## Runtime topology
 
 getbased is a static browser application. Local development loads
-`js/main.js` and its native ES-module graph directly. Hosted deployments run
-the Rolldown production build, which collapses the static startup graph into a
-hashed entry bundle and preserves lazy feature chunks. Official Vercel
+`js/main.js` and its native ES-module graph directly. Hosted deployments serve
+the optimized static SvelteKit distribution, with hashed framework modules and
+lazy feature chunks. Official Vercel
 functions are limited to encrypted operations and public deployment metadata.
 An independently deployed Node compatibility relay owns the explicit
 plaintext-operation allowlist. AI and voice provider payloads use
@@ -165,7 +456,7 @@ foundation, storage adapters, and pure utilities
   inversion seams. Keep them narrow; do not turn them into alternate global
   service locators.
 
-This fine-grained direction remains a migration target for coupling cleanup,
+This fine-grained direction guides further coupling cleanup,
 but the runtime graph no longer contains strongly connected components. Both
 cycle ceilings are fixed at zero, so the checker rejects any new cyclic
 dependency.
@@ -204,11 +495,15 @@ the higher-layer behavior through a narrow runtime seam.
 - Secrets and sensitive rows use the existing encryption and IndexedDB paths.
   Do not introduce plaintext fallbacks for OAuth tokens, AI keys, wallet
   proofs, genetics, or health records.
-- Raw wearable and cycle stores remain device-local unless an explicit,
-  privacy-reviewed summary surface is added to sync. The one exception is
-  manual body readings (weight, blood pressure, pulse, with tags and notes):
-  they sync per field through `manualBodyReadings`, written only by explicit
-  log and delete actions, and applied back into the local store after a pull.
+- Raw vendor wearable and cycle stores remain device-local. Explicit user-entered
+  weight, blood pressure and pulse use the encrypted `manualBodyReadings` Sync
+  map, keyed by metric and date; source histories from vendors or file imports
+  are excluded. The local Reading store remains the display source of truth,
+  reconciled from this narrow map with deletion intent and guarded profile writes.
+  Row writes reread canonical deletion/field clocks inside their manual write
+  boundary. Portable manual restores drain prior profile-load wearable work
+  before copying fields, then materialize rows and refresh only manual-owned
+  projections before publishing their still-current import shell.
 - Supplement and medication status is derived from dated periods. Product-label
   facts, a user's regimen, inactive materials, and source quality evidence stay
   separate; AI consumers use the bounded projections in `supplement-context.js`.
@@ -255,13 +550,17 @@ ceilings in [`scripts/cold-load-budget.json`](scripts/cold-load-budget.json)
 cover same-origin application request count, compressed transfer bytes, and
 decoded bytes. Runtime `/api/*` calls and cross-origin services are excluded so
 the measurement tracks the shipped app graph rather than network availability.
+This guard targets the native-compatible development graph. Profile the static
+distribution separately with `sveltekit-startup-performance.spec.ts`, as described
+in [CONTRIBUTING.md](CONTRIBUTING.md); startup and complete worker precaching
+are distinct measurements.
 
 The mandatory Terms/Privacy gate is prerendered at the start of `index.html`.
 `legal-consent-bootstrap.js` validates current acceptance and makes a required
-gate interactive before the main application graph arrives. Development loads
-that bootstrap as a standalone classic script; the production build inlines
-the same checked source into the HTML to avoid an extra render-blocking network
-round trip. `legal-consent.js` retains the full application integration and
+gate interactive before the main application graph arrives. Development and
+the static Kit distribution load that bootstrap as a standalone classic script
+under the deployed CSP. The native compatibility production builder inlines the
+same checked source into its HTML. `legal-consent.js` retains application integration and
 fallback path after startup. Both paths dispatch the same
 `legal-consent-accepted` event so changelog, analytics, backup, and deep-link
 destinations remain ordered behind acceptance.
@@ -269,190 +568,3 @@ destinations remain ordered behind acceptance.
 The browser check runs in the normal Chromium suite and therefore in CI. Lower
 the ceilings as route and feature lazy loading removes startup resources; do
 not raise them to absorb an unexplained regression.
-
-Light & Sun keeps only `light-sun-loader.js` and its small persisted-state
-checks in the startup graph. The complete context, analysis, route, dashboard,
-and shell-hook composition lives behind `app-light-sun-modules.js`. It loads
-when the Light route or an optional Light dashboard widget is opened, when a
-persisted active session needs its ticker, or alongside Chat when persisted
-Light data must be present in AI context. Device preset hydration and stale
-Sun-session maintenance import only the implementation needed by profiles that
-actually contain those records. Visual entry points use the UI loader, which
-waits for the module graph and all seven ordered Light stylesheets before
-rendering. An HTML anchor preserves the original cascade position.
-Marker-history controls and the context-card Ott badge keep their cross-feature
-styles in their eager owning bundles, while the deferred Light stylesheets and
-modules remain in the service-worker app shell for offline first use.
-
-Settings and Tweaks are loaded through `settings-loader.js` on their first
-shell, startup deep-link, or feature action. Theme-owned accent initialization
-stays in `theme.js`, while the Light page imports its Sun data-source renderer
-from `settings-privacy.js`; neither path requires the full Settings modal
-during normal startup. The loader also fetches `css/settings.css` on first use
-and waits for both resources before opening the UI. An HTML anchor preserves
-the stylesheet's cascade position, while the shell-owned Settings button rule
-stays in `app-shell.css`. The deferred stylesheet remains in the service-worker
-app shell for offline first use.
-
-The four optional visual themes share a conditional presentation boundary in
-`theme.js`. Default dark and light startup skip `themes-extra.css`; a saved
-optional theme inserts the sheet from the head bootstrap before first paint,
-while later selections use the same single-flight loader. Failed action loads
-restore the core dark theme and retry with a fresh URL later. The sheet remains
-in the service-worker app shell for offline first use, and its HTML anchor
-preserves the original final cascade position after chat redesign styles.
-Cross-theme shell geometry and Sunset Mode rules remain in a final eager
-inline block after that anchor, preserving their original cascade while keeping
-the deferred sheet scoped to the four optional themes.
-
-Only the persistent Chat launcher, closed panel markup, nudge state, base
-shell styles, and final redesign overrides remain eager. `chat-loader.js`
-single-flights the behavior composition on the first shell action, feature
-prompt, keyboard shortcut, or startup deep-link. `app-chat-hooks.js` then wires
-the loaded Chat graph to host callbacks injected by `app-shell-hooks.js`;
-attachment handlers and the rest of the Chat runtime are not initialized
-before that boundary. Failed module loads reset the single-flight state and
-retry with a fresh URL. The same first action makes `chat-panel.js` load the
-personality, messages, composer, onboarding, responsive, actions, and mobile
-presentation sheets before opening the panel. Failed links are removed and
-cache-busted for group retry, a shared HTML anchor preserves their original
-order before redesign overrides, and the service worker keeps the deferred
-modules and stylesheets precached for offline first use.
-
-Voice preserves this Chat boundary. `voice-loader.js` is a small first-use
-facade; microphone capture, playback, settings resolution, and provider
-selection load only when dictation, Listen, or enabled auto-read is used.
-Input and output retain independent provider values internally, while Settings
-links them behind one Voice service choice by default and reveals the separate
-values only in advanced mode. Provider metadata and capabilities live in the
-provider catalog; the provider-neutral Voice service resolves settings into
-adapter operations without exposing provider branches to Chat. Browser-local
-Whisper and Kokoro run in dedicated module workers and download model assets
-only after explicit installation. The local-server adapter calls an
-OpenAI-compatible endpoint directly. BYOK cloud adapters also call their fixed
-provider endpoints directly from the browser, sending the configured provider
-key while omitting browser ambient credentials. As a result, getbased and its
-Vercel deployment do not receive provider keys, microphone audio, or speech
-text. Custom OpenAI-compatible endpoints use the same browser-direct boundary;
-there is no hosted compatibility fallback, and endpoints that do not allow
-browser inference fail with a user-facing configuration explanation. The
-provider-neutral AI gate stores its first-activation transparency
-acknowledgement separately from destination approval while presenting both in
-one first-activation decision when a destination needs approval. User-triggered
-connection checks can run before activation and must contain no user content;
-custom APIs may receive a fixed synthetic compatibility probe. Same-device
-inference stops after the AI notice; private-network endpoints require an
-origin-scoped confirmation; remote inference requires provider/origin-scoped
-sensitive-data approval. The gate is checked before text, automatic insight,
-image, and voice requests. Unapproved automatic work fails without opening a
-surprise dialog, and remote approval can be withdrawn in Settings. Route classification
-uses the inference endpoint and cloud-model metadata, never the frontend host.
-Microphone blobs remain ephemeral; dictation only edits
-the composer, and chat panel/thread lifecycle callbacks stop tracks, synthesis,
-and playback. Portable Voice preferences and cloud keys follow the existing
-encrypted settings/sync path, but consent records remain browser-local.
-Provider selection, local model/hardware choices, a local voice server URL, and
-its optional key remain device-local. Full backups preserve preferences, but
-device-key-wrapped credentials are omitted unless passphrase protection makes
-them portable. One Voice settings schema owns these scopes so backup and sync
-allowlists cannot drift independently.
-The service worker precaches worker source but deliberately does not precache
-large remote model assets.
-
-`api.js` keeps synchronous provider selection, key state, and model metadata in
-the startup graph because dashboards and feature availability checks use them.
-Provider transports for Ollama, Venice, OpenRouter, Routstr, PPQ, and custom
-OpenAI-compatible endpoints load through cached, retryable dynamic adapters
-only when a provider operation is requested. This keeps provider behavior and
-the public API facade stable without paying for every transport on a cold
-dashboard load.
-
-Wearables presentation is loaded through the single-flight stylesheet boundary
-in `wearables-runtime.js` when a biometric detail, inline manual log, or the
-Wearables settings tab is opened. The dashboard's compact biometric tiles and
-empty manual-card shell retain their small shared rules in
-`css/dashboard-data.css`, so the default dashboard paints without
-`css/wearables.css`. The deferred sheet stays in the service-worker app shell
-for offline first use, and its HTML anchor preserves its original cascade
-position between Client List and Light & Sun.
-
-Cycle presentation is loaded through `cycle-runtime.js`. Female Dashboard and
-Body routes wait for it before rendering, and editor or import-review actions
-share the same single-flight boundary. Profiles that are not female do not pay
-for `css/cycle.css` on startup. Failed loads are removed and cache-busted for a
-later retry; the deferred sheet stays precached for offline use and its anchor
-keeps the original position between Mobile Dashboard and marker-detail styles.
-
-Profile Sharing is loaded through `profile-share-loader.js` when a shell,
-Settings, or client-list action opens it, or when startup/hash routing detects
-a shared-profile link. The loader owns only lazy loading and route detection;
-`profile-share.js` retains link validation, encryption, import, and UI
-responsibilities. `export.js` remains shell-owned without a Data I/O
-composition wrapper. Official app origins resolve profile-share requests to a
-separate getbased-operated service; self-hosted origins retain their same-origin
-`/api/share` contract. The shared runtime-neutral handler enforces the envelope,
-expiry, size, origin, management-token, and abuse boundaries for both. The
-operated service stores only opaque envelopes and minimal TTL/deletion/abuse
-metadata in an isolated SQLite database; the password and decrypted profile do
-not reach it. New operated-service ids use a non-overlapping `vps1_` namespace.
-The Vercel adapter redirects old-client writes, serves legacy Blob reads and
-deletions only within a configured window of at most 31 days, and then stops
-reading Blob entirely; record migration is not required. The initial SQLite
-store has no retained backup so recovery cannot resurrect stopped/expired
-links, and the UI discloses that temporary copies can be lost after a service
-failure.
-
-Genome and DNA behavior stays module-eager because dashboard summaries,
-recommendations, startup catalog hydration, and import routing share it.
-`dna-runtime.js` owns the narrower presentation boundary: `css/genetics.css`
-loads when the Genome route or a DNA preview/manual-entry surface first opens.
-Every styled entry waits for the stylesheet, concurrent calls share one
-request, failed links are removed and cache-busted for retry, and route/action
-failures remain contained with an explanatory status. An HTML anchor preserves
-the original cascade position, while dashboard genome tiles remain in the
-eager `dashboard-data.css` bundle. The service-worker app shell retains the
-deferred stylesheet for offline first use.
-
-Category, Compare, and Correlations behavior stays module-eager for route
-compatibility, but `category-page-runtime.js` loads `css/category-views.css`
-when one of those routes first opens. Each route waits for the stylesheet
-before rendering, concurrent route entries share one request, failed links are
-removed and cache-busted for retry, and an HTML anchor preserves the original
-cascade position. Dashboard greeting spacing, alert cards, and date-range
-controls remain in eager dashboard bundles because the returning-user dashboard
-renders them without entering a category-backed route. The service-worker app
-shell retains the deferred stylesheet for offline first use.
-
-Client List remains module-eager because shell, profile, and location actions
-use it, but `css/client-list.css` loads only when `openClientList()` is first
-called. Opening waits for the stylesheet, concurrent opens share one request,
-and a failed request is removed so the next open can retry. An HTML anchor
-preserves the stylesheet's cascade position, and the service-worker app shell
-retains it for offline first use.
-
-Import review presentation loads through `import-loader.js` on the first file
-input/drop interaction, pending-draft restoration, or direct cycle-import
-preview. The generic action buttons, header import status, and empty-Labs drop
-zone remain in `app-shell.css` because non-import features and startup routes
-use them. Concurrent stylesheet requests share one load, failures are removed
-for retry, an HTML anchor preserves cascade order, and the service-worker app
-shell retains `css/import.css` for offline first use.
-
-Marker detail, manual-entry, and custom-marker presentation remains
-module-eager because dashboard, category, Biology Score, and sync refresh paths
-share its behavior, but `css/marker-detail-modal.css` loads only when one of
-those modal surfaces first opens through its already-eager runtime adapter. The
-entry waits for the stylesheet so an unstyled modal is never shown, concurrent
-requests share one load, failed links are removed and cache-busted for retry,
-and an HTML anchor preserves the original cascade position before
-Recommendations. The service-worker app shell retains the stylesheet for
-offline first use.
-
-The EMF assessment module and `css/emf.css` load together through
-`emf-runtime.js` when an EMF editor entry point is first used. Cross-feature
-launchers keep their presentation in their eager owning bundles, so the
-deferred stylesheet contains only EMF editor and interpretation UI. Opening
-waits for both resources, concurrent stylesheet requests share one load, and a
-failed link is removed and cache-busted for retry. An HTML anchor preserves
-the original cascade position, and the service-worker app shell retains the
-stylesheet for offline first use.

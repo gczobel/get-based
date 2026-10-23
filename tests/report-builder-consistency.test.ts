@@ -8,7 +8,7 @@ import { getReportPreset, normalizeReportOptions, buildPreparedReportPayload } f
 import { openReportBuilder, closeReportBuilder } from '../js/export-report-builder.js';
 type BuilderOptionsFixture = Omit<ReturnType<typeof normalizeReportOptions>, 'aiSummary'> & {aiSummary?: {text: string} | null};
 type PreviewWindowFixture = {document: Document;closed: boolean;close: Mock<() => void>};
-const { generate, preview, available, openPreview } = vi.hoisted(() => ({ generate: vi.fn<(options: BuilderOptionsFixture, lifecycle: {payload: ReturnType<typeof buildPreparedReportPayload>}) => Promise<unknown>>(), preview: vi.fn<(options: BuilderOptionsFixture, window: PreviewWindowFixture | null, payload: ReturnType<typeof buildPreparedReportPayload>) => unknown>(), available: vi.fn<() => boolean>(), openPreview: vi.fn<() => PreviewWindowFixture | null>() }));
+const { generate, preview, available, openPreview } = vi.hoisted(() => ({ generate: vi.fn<(options: BuilderOptionsFixture, lifecycle: {payload: ReturnType<typeof buildPreparedReportPayload>; signal?: AbortSignal}) => Promise<unknown>>(), preview: vi.fn<(options: BuilderOptionsFixture, window: PreviewWindowFixture | null, payload: ReturnType<typeof buildPreparedReportPayload>) => unknown>(), available: vi.fn<() => boolean>(), openPreview: vi.fn<() => PreviewWindowFixture | null>() }));
 vi.mock('../js/ai-feature-routing.js', async load => ({ ...await load<Record<string, unknown>>(), hasAssistantFeatureProvider: available }));
 vi.mock('../js/export-report-html.js', () => ({ exportPDFReport: preview, openReportPreviewWindow: openPreview }));
 vi.mock('../js/export-report.js', async importOriginal => ({ ...await importOriginal<Record<string, unknown>>(), generateReportAISummary: generate }));
@@ -28,6 +28,29 @@ beforeEach(() => {
 afterEach(() => { closeReportBuilder(); vi.restoreAllMocks(); });
 
 describe('report builder selection', () => {
+  it.each([true, false])('retains action text nodes through purpose input and blur changes with AI available %s', aiAvailable => {
+    available.mockReturnValue(aiAvailable);
+    openReportBuilder('full');
+    const primary = document.querySelector<HTMLButtonElement>('[data-report-action="export"]')!;
+    const generateButton = document.querySelector<HTMLButtonElement>('[data-report-action="generate-ai-summary"]')!;
+    const primaryText = primary.firstChild;
+    const generateText = generateButton.firstChild;
+    expect(primaryText?.nodeType).toBe(Node.TEXT_NODE);
+    expect(generateText?.nodeType).toBe(Node.TEXT_NODE);
+
+    const purpose = document.querySelector<HTMLTextAreaElement>('#report-purpose')!;
+    purpose.value = 'A revised question before pressing Preview';
+    for (const eventName of ['input', 'change']) {
+      purpose.dispatchEvent(new Event(eventName, {bubbles: true}));
+      // WebKit needs the same pressed text node to dispatch the ensuing click.
+      expect(primary.firstChild).toBe(primaryText);
+      expect(generateButton.firstChild).toBe(generateText);
+      expect(primary.textContent).toBe(aiAvailable ? 'Generate AI overview & preview' : 'Preview PDF');
+      expect(generateButton.textContent).toBe('Retry overview');
+    }
+    expect(generate).not.toHaveBeenCalled();
+    expect(preview).not.toHaveBeenCalled();
+  });
   it.each(['clinician', 'full', 'lifestyle', 'personal'])('keeps %s template selections consistent from builder to report data', async presetId => {
     const categories = Object.fromEntries(['biochemistry', 'tumorMarkers', 'boneMetabolism', 'urinalysis', 'customLab'].map((key, index) => [key, { label: key, markers: { result: { name: key + ' result', values: [index === 0 ? 20 : 2], unit: 'u', refMin: 1, refMax: 10 } } }]));
     (vi.spyOn(dataModule, 'getActiveData') as unknown as {mockReturnValue(value: {dates: string[]; categories: unknown}): unknown}).mockReturnValue({ dates: ['2024-01-01'], categories });
@@ -187,6 +210,7 @@ describe('report builder selection', () => {
     expect(document.querySelector<HTMLElement>('.report-generation-progress')).not.toBeNull();
     document.querySelector<HTMLButtonElement>('[data-report-action="close"]')!.click();
     expect(openPreview.mock.results[0]!.value.close).toHaveBeenCalledOnce();
+    expect(generate.mock.calls[0]![1].signal!.aborted).toBe(true);
     expect(document.querySelector<HTMLElement>('.report-generation-progress')).toBeNull();
     finish!({ text: 'Cancelled overview' });
     await vi.waitFor(() => expect(preview).not.toHaveBeenCalled());
@@ -219,14 +243,18 @@ describe('report builder selection', () => {
     expect(generate).not.toHaveBeenCalled();
     expect(preview.mock.calls[0]![0].aiSummary).toBeUndefined();
   });
-  it.each(['failure', 'empty'])('offers an explicit fallback after %s and preserves the report selection', async mode => {
-    if (mode === 'failure') generate.mockRejectedValue(new Error('Service unavailable'));
+  it.each(['failure', 'empty', 'timeout'])('offers an explicit fallback after %s and preserves the report selection', async mode => {
+    if (mode === 'timeout') generate.mockRejectedValue(new DOMException('Venice report generation timed out after 120 seconds.', 'TimeoutError'));
+    else if (mode === 'failure') generate.mockRejectedValue(new Error('Service unavailable'));
     else generate.mockResolvedValue(null);
     document.querySelector<HTMLTextAreaElement>('#report-purpose')!.value = 'Keep my questions';
     document.querySelector<HTMLButtonElement>('[data-report-action="export"]')!.click();
     await vi.waitFor(() => expect(document.querySelector<HTMLButtonElement>('[data-report-action="preview-without-ai"]')!.hidden).toBe(false));
     expect(preview).not.toHaveBeenCalled();
     expect(openPreview.mock.results[0]!.value.close).toHaveBeenCalledOnce();
+    expect(document.querySelector<HTMLElement>('.report-generation-progress')).toBeNull();
+    expect(document.querySelector<HTMLButtonElement>('[data-report-action="export"]')!.disabled).toBe(false);
+    expect(document.querySelector<HTMLButtonElement>('[data-report-action="generate-ai-summary"]')!.disabled).toBe(false);
     document.querySelector<HTMLButtonElement>('[data-report-action="preview-without-ai"]')!.click();
     await vi.waitFor(() => expect(preview).toHaveBeenCalledOnce());
     expect(preview.mock.calls[0]![0].purpose).toBe('Keep my questions');

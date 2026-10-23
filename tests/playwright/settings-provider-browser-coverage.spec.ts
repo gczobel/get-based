@@ -1,4 +1,5 @@
 import { expect, test } from './coverage-fixture.js';
+import { createExpectAll } from '../helpers/browser-outcomes.js';
 
 const moduleUrl = (path:string) => `${path}?settingsProviderCoverage=${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
@@ -55,14 +56,7 @@ test('local AI settings controls cover connection, advisor, privacy, and hardwar
 
       document.body.insertAdjacentHTML('beforeend', `
         <section id="local-ai-fixture">
-          <input id="local-ai-url-input">
-          <input id="local-ai-apikey-input" value="sk-local">
-          <span id="local-ai-dot" class="local-ai-status-dot"></span>
-          <span id="local-ai-status-text"></span>
-          <div id="local-ai-model-section" style="display:none">
-            <select id="local-ai-model-select"></select>
-          </div>
-          <div id="local-ai-advisor"></div>
+          <div id="local-ai-owned-fixture"></div>
           <input id="pii-local-url-input">
           <input id="pii-local-apikey-input" value="sk-pii-local">
           <span id="pii-local-dot" class="local-ai-status-dot"></span>
@@ -74,6 +68,8 @@ test('local AI settings controls cover connection, advisor, privacy, and hardwar
         </section>
       `);
 
+      (await import('/js/provider-local-ai-controls.js')).hydrateLocalAiSettings(document.getElementById('local-ai-owned-fixture')!);
+      (await import('/js/local-ai-settings-component.js')).getLocalAiSettingsView()!.setConnection({ url: '', apiKey: 'sk-local' });
       const urlInput = (document.getElementById('local-ai-url-input') as HTMLInputElement|null);
       const statusText = (document.getElementById('local-ai-status-text') as HTMLElement|null);
       const dot = (document.getElementById('local-ai-dot') as HTMLElement|null);
@@ -198,7 +194,7 @@ test('local AI settings controls cover connection, advisor, privacy, and hardwar
         && (document.getElementById('local-ai-advisor') as HTMLElement|null)?.textContent!.includes('loaded now')
         && (document.getElementById('local-ai-advisor') as HTMLElement|null)?.textContent!.includes('available \u2014 loads on first request')
         && !(document.getElementById('local-ai-advisor') as HTMLElement|null)?.textContent!.includes('not loaded');
-      (document.getElementById('local-ai-advisor') as HTMLElement|null)!.innerHTML = '';
+      (await import('/js/local-ai-settings-component.js')).getLocalAiSettingsView()!.setAdvisor(null);
       controls.refreshModelAdvisor();
       for (let i = 0; i < 20 && !(document.getElementById('local-ai-advisor') as HTMLElement|null)?.textContent!.includes('qwen2.5:14b'); i += 1) {
         await wait(10);
@@ -212,6 +208,7 @@ test('local AI settings controls cover connection, advisor, privacy, and hardwar
 
       const overrideToggle = document.querySelector<HTMLElement>('[data-local-ai-action="toggle-override"]');
       overrideToggle?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+      await wait(0);
       const hardwareOverrideKeyboardToggle = document.querySelector<HTMLElement>('.model-advisor-override-body')?.style.display === 'flex'
         && overrideToggle?.getAttribute('aria-expanded') === 'true';
       (document.getElementById('hw-vram-override-input') as HTMLInputElement|null)!.value = '16';
@@ -242,7 +239,8 @@ test('local AI settings controls cover connection, advisor, privacy, and hardwar
         && providerStorage.getOllamaPIIApiKey() === 'sk-pii-local';
 
       await providerStorage.saveOllamaConfig({ url: 'https://remote.example/v1', model: 'remote-model', mode: 'openai-compatible', apiKey: '' });
-      (document.getElementById('local-ai-model-select') as HTMLSelectElement|null)!.innerHTML = '<option value="remote-small">remote-small</option><option value="remote-huge">remote-huge</option>';
+      const localView = (await import('/js/local-ai-settings-component.js')).getLocalAiSettingsView()!;
+      localView.refresh({ ...localView.getSnapshot(), selectedModel: 'remote-small', models: [{ value: 'remote-small', label: 'remote-small' }, { value: 'remote-huge', label: 'remote-huge' }] });
       await controls.renderModelAdvisor([
         { name: 'remote-small', size: 2000000000, quantLevel: 'Q4', paramSize: '2B' },
         { name: 'remote-huge', size: 30000000000, quantLevel: 'Q4', paramSize: '30B' },
@@ -278,6 +276,7 @@ test('local AI settings controls cover connection, advisor, privacy, and hardwar
         else localStorage.setItem(key, oldStorage[key]!);
       }
       cryptoStore.updateKeyCache('labcharts-ollama', oldStorage['labcharts-ollama'] || '');
+      (await import('/js/local-ai-settings-component.js')).disposeLocalAiSettings();
       (document.getElementById('local-ai-fixture') as HTMLElement|null)?.remove();
       document.querySelectorAll('.notification-toast').forEach(el => el.remove());
     }
@@ -312,12 +311,7 @@ test('switching local backends automatically releases the previous server VRAM f
     try {
       document.body.insertAdjacentHTML('beforeend', `
         <section id="local-ai-switch-fixture">
-          <input id="local-ai-url-input" value="http://10.222.88.195:11434">
-          <input id="local-ai-apikey-input" value="">
-          <span id="local-ai-dot" class="local-ai-status-dot"></span>
-          <span id="local-ai-status-text"></span>
-          <div id="local-ai-model-section" style="display:none"><select id="local-ai-model-select"></select></div>
-          <div id="local-ai-advisor"></div>
+          <div id="local-ai-switch-owned-fixture"></div>
         </section>
       `);
       await providerStorage.saveOllamaConfig({
@@ -329,6 +323,8 @@ test('switching local backends automatically releases the previous server VRAM f
       providerStorage.setOllamaMainModel('qwen/qwen3.6-27b');
       discovery.clearLocalAiDiscovery();
 
+      (await import('/js/provider-local-ai-controls.js')).hydrateLocalAiSettings(document.getElementById('local-ai-switch-owned-fixture')!);
+      (await import('/js/local-ai-settings-component.js')).getLocalAiSettingsView()!.setConnection({ url: 'http://10.222.88.195:11434', apiKey: '' });
       window.fetch = async (url, options = {}) => {
         const href = String(url);
         if (options.method === 'HEAD' && href.endsWith('/v1/models')) return new Response('', { status: 204 });
@@ -373,6 +369,7 @@ test('switching local backends automatically releases the previous server VRAM f
       cryptoStore.updateKeyCache('labcharts-ollama', oldConfig || '');
       if (oldModel == null) localStorage.removeItem('labcharts-ollama-model');
       else localStorage.setItem('labcharts-ollama-model', oldModel);
+      (await import('/js/local-ai-settings-component.js')).disposeLocalAiSettings();
       (document.getElementById('local-ai-switch-fixture') as HTMLElement|null)?.remove();
       document.querySelectorAll('.notification-toast').forEach(el => el.remove());
     }
@@ -465,6 +462,7 @@ test('settings sync and agent access delegates cover setup, restore, relay, tomb
       const messengerSection = (document.getElementById('messenger-section') as HTMLElement|null);
 
       syncSection!.innerHTML = syncPanel.renderSyncSection();
+      await waitFor(() => syncSection!.querySelector('[data-sync-settings-view]'), 'mounted sync settings owner');
       const tombstoneBanner = syncSection!.textContent!.includes('Old Profile');
       syncSection!.querySelector<HTMLButtonElement>('[data-sync-action="apply-tombstone"]')!.click();
       syncSection!.querySelector<HTMLButtonElement>('[data-sync-action="reject-tombstone"]')!.click();
@@ -481,19 +479,39 @@ test('settings sync and agent access delegates cover setup, restore, relay, tomb
       setupOverlay!.click();
       const setupNudgesOnBackdrop = setupOverlay!.querySelector<HTMLElement>('.confirm-dialog')?.classList.contains('modal-nudge');
       setupOverlay!.querySelector<HTMLButtonElement>('[data-sync-setup-action="setup-restore"]')!.click();
-      const setupRestoreShown = setupOverlay!.querySelector<HTMLElement>('#sync-setup-restore')?.style.display === 'block';
+      const setupRestoreShown = setupOverlay!.querySelector<HTMLElement>('#sync-setup-restore')?.hidden === false
+        && setupOverlay!.querySelector<HTMLElement>('#sync-setup-choices')?.hidden === true;
       setupOverlay!.querySelector<HTMLButtonElement>('[data-sync-setup-action="setup-back"]')!.click();
-      const setupBackRestoresChoices = setupOverlay!.querySelector<HTMLElement>('#sync-setup-choices')?.style.display === '';
+      const setupBackRestoresChoices = setupOverlay!.querySelector<HTMLElement>('#sync-setup-choices')?.hidden === false
+        && setupOverlay!.querySelector<HTMLElement>('#sync-setup-restore')?.hidden === true;
 
       const setupDoneButton = document.createElement('button');
       setupDoneButton.dataset.syncSetupAction = 'setup-done';
       setupOverlay!.querySelector<HTMLElement>('.confirm-dialog')?.appendChild(setupDoneButton);
       setupDoneButton.click();
+      const unacknowledgedSetupStaysOpen = setupOverlay!.classList.contains('show');
+      setupDoneButton.remove();
+      // Supply a synthetic phrase through the same private view port used by identity creation.
+      // Exercise the actual acknowledgment and Done actions without creating a real sync identity.
+      const { getSyncDialogOwner } = await import('/js/sync-dialog-component.js');
+      const setupOwner = getSyncDialogOwner('setup');
+      if (!setupOwner) throw new Error('Missing setup dialog owner');
+      setupOwner.showGeneratedPhrase(mnemonic);
+      setupOwner.patch({ step: 'new', pending: false, message: '' });
+      const doneButton = setupOverlay!.querySelector<HTMLButtonElement>('#sync-setup-done-btn');
+      const setupDoneRequiresAcknowledgement = doneButton?.disabled === true;
+      const acknowledgement = setupOverlay!.querySelector<HTMLInputElement>('#sync-setup-ack');
+      acknowledgement!.checked = true;
+      acknowledgement!.dispatchEvent(new Event('change', { bubbles: true }));
+      const setupAcknowledgementEnablesDone = doneButton?.disabled === false;
+      doneButton!.click();
       const setupDoneCloses = !setupOverlay!.classList.contains('show');
 
       syncState.setSyncEnabled(true);
       localStorage.setItem('labcharts-sync-enabled', 'true');
       messengerSection!.innerHTML = syncPanel.renderMessengerSection();
+      await waitFor(() => messengerSection!.querySelector('[data-agent-access-view]'), 'mounted Agent Access owner');
+      await wait(0);
       const ownerPendingToggle = messengerSection!.querySelector<HTMLInputElement>('[data-sync-action="toggle-messenger"]');
       const ownerPendingDisabled = ownerPendingToggle?.disabled === true;
       syncRuntime.setSyncAppOwner({
@@ -504,10 +522,12 @@ test('settings sync and agent access delegates cover setup, restore, relay, tomb
       const ownerReadyRerenderEnables = messengerSection!.querySelector<HTMLInputElement>('[data-sync-action="toggle-messenger"]')?.disabled === false;
       localStorage.setItem('labcharts-sync-relay', 'wss://relay.example');
       syncSection!.innerHTML = syncPanel.renderSyncSection();
+      await waitFor(() => syncSection!.querySelector('[data-sync-settings-view]'), 'mounted sync settings owner');
       const enabledRender = syncSection!.textContent!.includes('Your mnemonic')
         && syncSection!.querySelector<HTMLInputElement>('#sync-relay-input')?.value === 'wss://relay.example';
       syncState.setSyncPaused(true);
       syncSection!.innerHTML = syncPanel.renderSyncSection();
+      await waitFor(() => syncSection!.querySelector('[data-sync-settings-view]'), 'mounted sync settings owner');
       const pausedRender = syncSection!.textContent!.includes('Paused')
         && syncSection!.textContent!.includes('identity and sync history are retained')
         && !!syncSection!.querySelector<HTMLButtonElement>('[data-sync-action="resume-sync"]')
@@ -515,6 +535,7 @@ test('settings sync and agent access delegates cover setup, restore, relay, tomb
         && !syncSection!.querySelector<HTMLButtonElement>('[data-sync-action="setup-restore-direct"]');
       syncState.setSyncPaused(false);
       syncSection!.innerHTML = syncPanel.renderSyncSection();
+      await waitFor(() => syncSection!.querySelector('[data-sync-settings-view]'), 'mounted sync settings owner');
       syncSection!.querySelector<HTMLButtonElement>('[data-sync-action="open-restore-dialog"]')!.click();
       await wait(0);
       const restoreOverlay = (document.getElementById('sync-restore-overlay') as HTMLElement|null);
@@ -544,6 +565,8 @@ test('settings sync and agent access delegates cover setup, restore, relay, tomb
         && (document.getElementById('sync-status-text') as HTMLElement|null)?.textContent!.includes('Connected'), 'relay connected status');
 
       messengerSection!.innerHTML = syncPanel.renderMessengerSection();
+      await waitFor(() => messengerSection!.querySelector('[data-agent-access-view]'), 'mounted Agent Access owner');
+      await wait(0);
       messengerSection!.querySelector<HTMLInputElement>('[data-sync-action="toggle-messenger"]')!.checked = true;
       messengerSection!.querySelector<HTMLInputElement>('[data-sync-action="toggle-messenger"]')!.dispatchEvent(new Event('change', { bubbles: true }));
       await waitFor(() => syncMessenger.isMessengerEnabled()
@@ -596,6 +619,8 @@ test('settings sync and agent access delegates cover setup, restore, relay, tomb
         && messengerSection!.textContent!.includes('Context encryption key');
       syncRuntime.setSyncAppOwner(null);
       messengerSection!.innerHTML = syncPanel.renderMessengerSection();
+      await waitFor(() => messengerSection!.querySelector('[data-agent-access-view]'), 'mounted Agent Access owner');
+      await wait(0);
       const ownerLostToggle = messengerSection!.querySelector<HTMLInputElement>('[data-sync-action="toggle-messenger"]');
       const ownerLostCanDisable = ownerLostToggle?.checked === true
         && ownerLostToggle?.disabled === false
@@ -617,6 +642,9 @@ test('settings sync and agent access delegates cover setup, restore, relay, tomb
         setupNudgesOnBackdrop,
         setupRestoreShown,
         setupBackRestoresChoices,
+        unacknowledgedSetupStaysOpen,
+        setupDoneRequiresAcknowledgement,
+        setupAcknowledgementEnablesDone,
         setupDoneCloses,
         ownerPendingDisabled,
         ownerReadyRerenderEnables,
@@ -666,7 +694,5 @@ test('settings sync and agent access delegates cover setup, restore, relay, tomb
     syncMessengerUrl: '/js/sync-messenger.js',
   });
 
-  for (const [name, passed] of Object.entries(results)) {
-    expect(passed, name).toBe(true);
-  }
+  createExpectAll(expect, 'collect')(results);
 });

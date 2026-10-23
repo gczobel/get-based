@@ -1,3 +1,7 @@
+import { bindImportDropZone } from './import-drop-zone-events.js';
+import { dispatchImportFiles } from './import-dispatch.js';
+import { confirmImportSelection } from './import-selection-confirmation.js';
+export { confirmImportSelection };
 import type { PdfImportDependencyOperations, PdfImportDependencies, RawAIImportReader, RawNormalizer, ParsedPDFResult, ParsePDFOptions, AIProgressCallback, BenchmarkPatch, PreviewReader, ImportAIResult, ProgressFactory, PerformanceWriter, FileClassifier } from '../types/pdf-import.js';
 import { configureRuntimeFunctions } from './runtime-callbacks.js';
 // pdf-import.js — PDF parsing pipeline, import preview, drop zone, batch import
@@ -11,7 +15,7 @@ import { obfuscatePDFText, sanitizeWithOllama, sanitizeWithOllamaStreaming, chec
 import { getProfileLocation, getActiveProfileId } from './profile.js';
 import { maybeShowEncryptionNudge } from './crypto.js';
 import { importDataJSON, loadDemoData } from './export.js';
-import { closeModalOverlay, openModalOverlay } from './modal-lifecycle.js';
+import { showAiActionDialog } from './ai-action-dialog-component.js';
 import {
   callImportAIWithStreamFallback,
   compactMarkerReference,
@@ -38,8 +42,6 @@ import {
 } from './pdf-import-persistence.js';
 import {
   hideImportProgress,
-  importDispatch,
-  isImportRunning,
   showBatchImportProgress,
   updateImportProgressPct,
 } from './pdf-import-progress.js';
@@ -121,13 +123,6 @@ export {
 // OAuth), advanced (Settings for paste-a-key), or escape hatch (load demo data).
 // ═══════════════════════════════════════════════
 export function showAINeededDialog(action: unknown = 'import') {
-  let overlay = document.getElementById('ai-needed-overlay');
-  if (!overlay) {
-    overlay = document.createElement('div');
-    overlay.id = 'ai-needed-overlay';
-    overlay.className = 'confirm-overlay';
-    document.body.appendChild(overlay);
-  }
   const verb = action === 'image'
     ? 'Reading lab values from an image'
     : action === 'csv'
@@ -137,53 +132,21 @@ export function showAINeededDialog(action: unknown = 'import') {
         : action === 'xlsx'
           ? 'Reading lab values from an Excel workbook'
           : 'Reading lab values from a PDF';
-  overlay.innerHTML = `<div class="confirm-dialog ai-needed-dialog" role="dialog" aria-modal="true" aria-label="AI needed to import">
-    <p class="confirm-message"><strong>${verb} needs an AI to parse them.</strong></p>
-    <p style="font-size:13px;color:var(--text-muted);margin:0 0 14px">Quickest setup is the &ldquo;card&rdquo; option below &mdash; one-click login, charge to your card, you&rsquo;re done in about 30 seconds.</p>
-    <div class="chat-quiz-options" style="margin-bottom:10px">
-      <button class="chat-quiz-option chat-quiz-recommended" id="ai-needed-or">
-        <span class="chat-quiz-icon" aria-hidden="true">&#128179;</span>
-        <span class="chat-quiz-body">
-          <strong>Connect with OpenRouter</strong>
-          <span>Card payment, one-click login. <em class="chat-quiz-rec">Recommended</em></span>
-        </span>
-        <span class="chat-quiz-arrow" aria-hidden="true">&rarr;</span>
-      </button>
-      <button class="chat-quiz-option" id="ai-needed-key">
-        <span class="chat-quiz-icon" aria-hidden="true">&#128273;</span>
-        <span class="chat-quiz-body">
-          <strong>I already have an API key</strong>
-          <span>Open Settings &rarr; AI to paste it.</span>
-        </span>
-        <span class="chat-quiz-arrow" aria-hidden="true">&rarr;</span>
-      </button>
-      <button class="chat-quiz-option" id="ai-needed-demo">
-        <span class="chat-quiz-icon" aria-hidden="true">&#128202;</span>
-        <span class="chat-quiz-body">
-          <strong>Just exploring? Load demo labs</strong>
-          <span>Sample dataset so you can poke around without setup.</span>
-        </span>
-        <span class="chat-quiz-arrow" aria-hidden="true">&rarr;</span>
-      </button>
-    </div>
-    <div style="text-align:right;margin-top:8px">
-      <button class="confirm-btn confirm-btn-cancel" id="ai-needed-cancel">Not now</button>
-    </div>
-  </div>`;
-  openModalOverlay(overlay, { initialFocus: '#ai-needed-or', focusDelay: 50 });
-  const close = () => closeModalOverlay(overlay);
-  document.getElementById('ai-needed-or')?.addEventListener('click', () => { close(); pdfImportDeps.startOpenRouterOAuth(); });
-  document.getElementById('ai-needed-key')?.addEventListener('click', () => {
-    close();
-    getSettingsModuleFunction('openSettingsModal')?.('ai');
-  });
-  document.getElementById('ai-needed-demo')?.addEventListener('click', () => {
-    close();
+  showAiActionDialog({
+    overlayId: 'ai-needed-overlay', ariaLabel: 'AI needed to import',
+    title: `${verb} needs an AI to parse them.`,
+    description: 'Quickest setup is the “card” option below — one-click login, charge to your card, you’re done in about 30 seconds.',
+    options: [
+      { id: 'ai-needed-or', icon: '💳', recommended: true, label: 'Connect with OpenRouter', description: 'Card payment, one-click login.', recommendation: 'Recommended' },
+      { id: 'ai-needed-key', icon: '🔑', label: 'I already have an API key', description: 'Open Settings → AI to paste it.' },
+      { id: 'ai-needed-demo', icon: '📊', label: 'Just exploring? Load demo labs', description: 'Sample dataset so you can poke around without setup.' },
+    ], cancelId: 'ai-needed-cancel',
+  }, id => {
+    if (id === 'ai-needed-or') return pdfImportDeps.startOpenRouterOAuth();
+    if (id === 'ai-needed-key') return getSettingsModuleFunction('openSettingsModal')?.('ai');
     const sex = state.profileSex === 'female' ? 'female' : 'male';
-    void pdfImportDeps.loadDemoData(sex);
+    return pdfImportDeps.loadDemoData(sex);
   });
-  document.getElementById('ai-needed-cancel')?.addEventListener('click', close);
-  overlay.onclick = (e) => { if (e.target === overlay) close(); };
 }
 
 // ═══════════════════════════════════════════════
@@ -381,46 +344,10 @@ export async function classifyImportFiles(files: Parameters<typeof classifyImpor
 // ═══════════════════════════════════════════════
 // DROP ZONE
 export function setupDropZone() {
-  const dropZone = document.getElementById("drop-zone");
-  if (!dropZone || dropZone.dataset.lazyDropZoneBound === 'true') return;
-  dropZone.dataset.lazyDropZoneBound = 'true';
-  dropZone.addEventListener("click", () => { if (importDispatch.busy || isImportRunning()) return; document.getElementById('pdf-input')?.click(); });
-  dropZone.addEventListener("dragover", e => { e.preventDefault(); if (!importDispatch.busy && !isImportRunning()) dropZone.classList.add("drag-over"); });
-  dropZone.addEventListener("dragleave", e => { e.preventDefault(); dropZone.classList.remove("drag-over"); });
-  dropZone.addEventListener("drop", async e => {
-    e.preventDefault(); dropZone.classList.remove("drag-over");
-    if (importDispatch.busy || isImportRunning()) { showNotification("Import already in progress", "info"); return; }
-    const files = Array.from(e.dataTransfer?.files || []);
-    if (files.length === 0) return;
-    importDispatch.busy = true;
-    try {
-      const ownerProfile = state.currentProfile, ownerData = state.importedData;
-      const { jsonFiles, pdfFiles, imageFiles, dnaFiles, textFiles, cycleFiles = [], unsupportedCount } = await classifyImportFiles(files);
-      if (state.currentProfile !== ownerProfile || state.importedData !== ownerData) return;
-      if (unsupportedCount > 0 && [jsonFiles, pdfFiles, imageFiles, dnaFiles, textFiles, cycleFiles].every(files => !files.length)) {
-        showNotification("Unsupported file type. Use PDF, Excel, text, image, JSON, DNA raw data, or an Apple Health, Drip, Natural Cycles, or Clue export.", "error");
-        return;
-      }
-      for (const f of jsonFiles) { if (state.currentProfile !== ownerProfile) return; await pdfImportDeps.importDataJSON(f); }
-      for (const f of cycleFiles) { if (state.currentProfile !== ownerProfile) return; await handleCycleImportFile(f); }
-      for (const f of dnaFiles) {
-        if (state.currentProfile !== ownerProfile) return;
-        const headerData = state.importedData, header = await f.slice(0, 1500).text();
-        if (state.currentProfile !== ownerProfile || state.importedData !== headerData) return;
-        const fmt = getDnaModuleFunction('detectDNAFile')?.(header) || null;
-        const handleMtDNAFile = getDnaModuleFunction('handleMtDNAFile');
-        const handleDNAFile = getDnaModuleFunction('handleDNAFile');
-        if ((fmt === 'mtdna' || fmt === '23andme-mito') && handleMtDNAFile) await handleMtDNAFile(f);
-        else if (fmt === '23andme-y') { showNotification('Y-chromosome DNA files are not supported', 'info'); }
-        else if (handleDNAFile) await handleDNAFile(f);
-      }
-      for (const f of textFiles) { if (state.currentProfile !== ownerProfile) return; await handleTextFile(f); }
-      for (const f of imageFiles) { if (state.currentProfile !== ownerProfile) return; await handleImageFile(f); }
-      if (state.currentProfile !== ownerProfile) return;
-      if (pdfFiles.length === 1) await handlePDFFile(pdfFiles[0]!);
-      else if (pdfFiles.length > 1) await handleBatchPDFs(pdfFiles);
-    } finally { importDispatch.busy = false; }
-  });
+  bindImportDropZone(files => dispatchImportFiles(files, async () => ({
+    classifyImportFiles, confirmImportSelection, handleCycleImportFile, handleTextFile,
+    handleImageFile, handlePDFFile, handleBatchPDFs,
+  }), 'drop-zone', file => pdfImportDeps.importDataJSON(file)));
 }
 
 // ═══════════════════════════════════════════════

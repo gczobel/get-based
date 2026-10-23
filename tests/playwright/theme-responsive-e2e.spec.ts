@@ -1,3 +1,4 @@
+import {waitForAsyncCondition} from '../helpers/awaited-condition.js';
 type ThemeProfileFixture={id:string;name?:unknown;sex?:unknown;dob?:unknown;location?:unknown;tags?:unknown};
 import type {Browser,Page,TestInfo} from '@playwright/test';
 type ThemeName=typeof THEMES[number];
@@ -50,11 +51,7 @@ function delay(ms:number) {
 }
 
 async function waitForApp(page:Page) {
-  await page.waitForFunction(
-    async () => !!(await import('/js/state.js')).state,
-    null,
-    { timeout: 15000 }
-  );
+  await waitForAsyncCondition(() => page.evaluate(async () => !!(await import('/js/state.js')).state, null), 15000);
 }
 
 async function seedDemoData(page:Page) {
@@ -133,7 +130,10 @@ async function seedDemoData(page:Page) {
     (await import('/js/chat-panel.js')).closeChatPanel();
   });
   await page.waitForSelector('#main-content', { timeout: 10000 });
-  await delay(200);
+  // Navigation mounts an asynchronous Dashboard loading state first. Wait for
+  // its actual widgets before measuring their geometry and theme signatures.
+  await page.waitForSelector('#main-content .dashboard-widget[data-widget-id]:visible', { timeout: 10000 });
+  await waitForAsyncCondition(() => page.locator('#main-content > [aria-busy="true"]').count().then(count => count === 0), 10000);
 }
 
 async function seedMobileLightSessions(page:Page) {
@@ -452,8 +452,9 @@ async function evaluateBaseChecks(page:Page, theme:ThemeName, viewport:ViewportF
       assertNoOverlap('.m-dashboard-widgets .dashboard-widget', 'mobile dashboard widgets');
 
       if (theme === 'cyberterm') {
-        ok('cyberterm mobile section titles show bracket signature',
-          getComputedStyle(document.querySelector<HTMLElement>('.m-section-title')!, '::before').content.includes('['));
+        const titles = mobileWidgets.flatMap(widget => [...widget.querySelectorAll<HTMLElement>('.dashboard-widget-title')]).filter(visible);
+        ok('cyberterm mobile section titles show bracket signature', titles.length > 0 && titles.every(title =>
+          getComputedStyle(title, '::before').content.includes('[') && getComputedStyle(title, '::after').content.includes(']')));
       }
       if (theme === 'glass') {
         const filter = getComputedStyle(tabbar!).backdropFilter || (getComputedStyle(tabbar!) as unknown as {webkitBackdropFilter?:unknown}).webkitBackdropFilter;
@@ -959,7 +960,10 @@ async function checkMobileInteractions(page:Page, theme:ThemeName, viewportName:
   });
 
   for (const tab of ['labs', 'body', 'light', 'insight']) {
-    await page.evaluate(async () => (await import('/js/views.js')).navigate('dashboard'));
+    // Return through the real Home control. An async import wrapper can lose its
+    // CDP promise after the synchronous Dashboard render has already completed.
+    await page.click('.m-tab[data-tab="dashboard"]');
+    await page.waitForFunction(() => !!document.querySelector('.m-tab.active[data-tab="dashboard"]') && !!document.querySelector('.m-shell'));
     await delay(180);
     if (tab === 'light') await seedMobileLightSessions(page);
     await page.click(`.m-tab[data-tab="${tab}"]`);

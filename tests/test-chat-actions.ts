@@ -51,6 +51,8 @@ const {
 } = await import('../js/chat-discussion-round-prompts.js');
 const { readDiscussPersonaPickerSelection } = await import('../js/chat-discussion-ui.js');
 
+const { ownChatDiscussion, publishDiscussionPicker } = await import('../js/chat-discussion-view.js');
+const { chatDiscussionScope } = await import('../js/chat-discussion-picker.js');
 const hasState = S && typeof S === 'object';
 assert('state module export exists', hasState, hasState ? 'found' : 'not found');
 
@@ -68,10 +70,12 @@ assert('window.readAloud removed', typeof (window as {readAloud?: unknown}).read
 // ─── Section 1a: Discuss Button UI ───
 console.log('Section 1a: Discuss button UI');
 if (hasState) {
-  const origGetElementById = document.getElementById;
+  const originalQuery = document.querySelector;
+  const root = { isConnected: true, ownerDocument: document } as HTMLElement;
+  document.querySelector = ((selector: string) => selector === '[data-chat-discussion-view]' ? root : originalQuery.call(document, selector)) as typeof document.querySelector;
   const origHistory = S.chatHistory;
   const btn = { style: {} as {display?: unknown;opacity?: unknown}, title: '', setAttribute() {} };
-  (document as {getElementById: unknown}).getElementById = (id: string) => (id === 'chat-discuss-btn' ? btn : origGetElementById.call(document, id));
+  const owner = ownChatDiscussion(root, view => { btn.style.display = view.visible ? 'flex' : 'none'; btn.style.opacity = view.dim ? '0.5' : '1'; btn.title = view.active ? 'Add a discussion participant' : 'Start a discussion'; });
 
   S.chatHistory = [{ role: 'user', content: 'No assistant yet' }];
   updateDiscussButton();
@@ -90,7 +94,7 @@ if (hasState) {
   assert('Discuss button remains available for multiple perspectives', btn.style.opacity === '1' && btn.title.includes('Start a discussion'), btn.title);
 
   (S as {chatHistory: unknown}).chatHistory = origHistory;
-  document.getElementById = origGetElementById;
+  owner.destroy(); document.querySelector = originalQuery;
 } else {
   console.warn('Skipping Discuss button UI tests — state module not available');
 }
@@ -99,20 +103,15 @@ if (hasState) {
 console.log('Section 1b: Discuss picker selection');
 {
   const origQuerySelector = document.querySelector;
-  const makeInput = (id: string, name = id, icon = id[0]!.toUpperCase()) => ({
-    value: id,
-    dataset: { name, icon },
-  });
+  const root = { isConnected: true, ownerDocument: document } as HTMLElement;
+  document.querySelector = ((selector: string) => selector === '[data-chat-discussion-view]' ? root : origQuerySelector.call(document, selector)) as typeof document.querySelector;
+  const owner = ownChatDiscussion(root, () => {});
+  const makeInput = (id: string, name = id, icon = id[0]!.toUpperCase()) => ({ id, name, icon });
   const withPicker = <Result>(locked: ReturnType<typeof makeInput>[], checked: ReturnType<typeof makeInput>[], fn: () => Result) => {
-    const picker = {
-      dataset: { existingDiscussion: locked.length ? 'true' : 'false' },
-      querySelectorAll(selector: string) {
-        if (selector === 'input[data-locked="1"]') return locked;
-        if (selector === 'input:checked:not([data-locked="1"])') return checked;
-        return [];
-      },
-    };
-    (document as {querySelector: unknown}).querySelector = (selector: string) => (selector === '.discuss-persona-picker' ? picker : origQuerySelector.call(document, selector));
+    publishDiscussionPicker(chatDiscussionScope(), {
+      options: [...locked.map(persona => ({ ...persona, locked: true })), ...checked.map(persona => ({ ...persona, locked: false }))],
+      selected: checked.map(persona => persona.id), addingToExisting: locked.length > 0,
+    });
     return fn();
   };
 
@@ -142,7 +141,7 @@ console.log('Section 1b: Discuss picker selection');
     }),
     'one added persona');
 
-  document.querySelector = origQuerySelector;
+  owner.destroy(); document.querySelector = origQuerySelector;
 }
 
 // ─── Section 1c: Discussion Thread Lifecycle State ───
@@ -269,12 +268,12 @@ if (hasState) {
   assert('AI msg with context has context toggle', bar1.includes('chat-context-toggle'), 'contains toggle');
   assert('AI msg context toggle uses delegated action',
     bar1.includes('data-chat-message-action="toggle-context-details"')
-      && bar1.includes('<button type="button" class="chat-context-toggle"')
+      && /<button type="button" class="chat-context-toggle(?:\s|")/.test(bar1)
       && bar1.includes('aria-expanded="false"'),
     'delegated context');
   assert('Context shows area count', bar1.includes('1 area'), 'shows 1 area');
   assert('Context disclosure says provided, not used', bar1.includes('Context provided') && !bar1.includes('Context used'), 'accurate label');
-  assert('Context details are hidden by default', bar1.includes('display:none'), 'hidden');
+  assert('Context details are hidden by default', /style="[^"]*display:\s*none/.test(bar1), 'hidden');
   assert('Context item has checkmark', bar1.includes('✓'), 'has checkmark');
 
   assert('Second AI msg shows 2 areas', bar3.includes('2 areas'), 'shows 2 areas');
@@ -363,7 +362,11 @@ const cssClasses = [
   'chat-toggle-arrow', 'chat-toggle-slider'
 ];
 for (const cls of cssClasses) {
-  assert(`CSS .${cls} defined`, cssSrc.includes('.' + cls), 'found in CSS bundle');
+  const ownedActions = read('js/components/ChatMessageActions.svelte') + read('js/chat-message-actions-classes.ts');
+  const defined = cls === 'chat-toggle-slider'
+    ? read('js/components/ChatHeader.svelte').includes('chat-toggle-slider gb:header:relative')
+    : ownedActions.includes(cls + ' gb:message-actions:');
+  assert(`CSS .${cls} defined`, defined, 'found in owned Tailwind styling');
 }
 assert('CSS has shimmer animation', cssSrc.includes('@keyframes shimmer'), 'found');
 assert('CSS .chat-action-btn.active removed', !cssSrc.includes('.chat-action-btn.active'), 'removed');
@@ -407,8 +410,10 @@ const appUiShellModulesSrc = read('js/app-ui-shell-modules.js');
 const chatRenderSrc = read('js/chat-render.js');
 const chatSendSrc = read('js/chat-send.js').replace(/if \(!state\.currentThreadId\)\s+return;/g, 'if (!state.currentThreadId) return;');
 const labCtxSrc = read('js/lab-context.js');
+const labCtxAssemblySrc = read('js/lab-context-assembly.js');
 assert('lazy chat context summary owns the exact-context receipt',
   !labCtxSrc.includes('getContextSummary')
+    && !labCtxAssemblySrc.includes('getContextSummary')
     && !chatPromptContextSrc.includes('function getContextSummary')
     && chatContextSummarySrc.includes('function getContextSummary'),
   'found');
@@ -448,7 +453,7 @@ assert('sendChatMessage keeps AI placeholder in abort-handler scope',
 assert('chat raises response token headroom', chatContinuationSrc.includes('CHAT_RESPONSE_MAX_TOKENS = 16384'), 'found');
 assert('chat auto-continues token-limit stops', chatContinuationSrc.includes('CHAT_AUTO_CONTINUE_LIMIT') && chatContinuationSrc.includes('callChatAPIWithContinuation'), 'found');
 assert('chat continuation uses provider snapshot',
-  chatContinuationSrc.includes('reasoningEffort }, provider)') && chatContinuationSrc.includes('    }, provider);'), 'found');
+  chatContinuationSrc.includes('reasoningEffort, modelOverride }, provider)') && chatContinuationSrc.includes('      modelOverride,') && chatContinuationSrc.includes('    }, provider);'), 'found');
 assert('chat auto-continues likely mid-sentence stops', chatContinuationSrc.includes('isLikelyIncompleteResponse') && chatContinuationSrc.includes('shouldAutoContinueResponse'), 'found');
 assert('chat incomplete heuristic does not continue solely because final line is long',
   !chatSrc.includes('return lastLine.length > 60') && !chatSendSrc.includes('return lastLine.length > 60') && !chatContinuationSrc.includes('return lastLine.length > 60'), 'length-only fallback removed');
@@ -456,7 +461,11 @@ assert('chat incomplete heuristic does not continue on terminal high/low adjecti
   !chatSrc.includes('low|high') && !chatSrc.includes('high|low') && !chatSendSrc.includes('low|high') && !chatSendSrc.includes('high|low') && !chatContinuationSrc.includes('low|high') && !chatContinuationSrc.includes('high|low'), 'medical adjectives removed from trailing-word fallback');
 assert('chat renders output-limit note', chatContinuationSrc.includes('output limit reached'), 'found');
 assert('chat persists truncated assistant state', chatSendSrc.includes('assistantMsg.truncated = true'), 'found');
-assert('renderChatMessages restores truncated note', chatRenderSrc.includes('msg.truncated') && chatRenderSrc.includes('responseLimitNote()'), 'found');
+assert('shared transcript restores the persisted truncated note',
+  chatRenderSrc.includes('renderChatTranscript(container, projectChatTranscript(')
+    && read('js/chat-transcript-presentation.ts').includes('truncated: !!message.truncated')
+    && read('js/components/ChatMessage.svelte').includes('{#if view.truncated}')
+    && read('js/components/ChatMessage.svelte').includes('[output limit reached - ask "continue" to finish]'), 'found');
 assert('regenerateLastMessage checks streaming state via chat runtime',
   chatActionsSrc.includes('isChatRuntimeStreaming()') &&
     chatRuntimeSrc.includes('chatRuntimeCallbacks.isChatStreaming') &&
@@ -494,10 +503,17 @@ assert('chat-send.js imports continuation helpers', chatSendSrc.includes("from '
 assert('chat-continuation.js exports continuation helper', chatContinuationSrc.includes('export async function callChatAPIWithContinuation'), 'found');
 assert('chat-send.js imports prompt context helpers', chatSendSrc.includes("from './chat-prompt-context.js'"), 'found');
 assert('chat-prompt-context.js exports tagged messages helper', chatPromptContextSrc.includes('export function buildTaggedChatMessages'), 'found');
-assert('chat-send.js imports attestation helpers', chatSendSrc.includes("from './chat-attestation.js'"), 'found');
+assert('chat sender retains the attestation rendering chain through the shared message projector',
+  chatSendSrc.includes('completeChatLiveMessage(aiMsgEl, assistantMsg')
+    && read('js/chat-live-message-component.ts').includes('component.complete(projectChatTranscriptMessage(message, -1))')
+    && read('js/chat-transcript-presentation.ts').includes("import './chat-attestation.js'")
+    && read('js/chat-transcript-presentation.ts').includes('message.e2ee ? { badge: projectAttestationBadge(message.attestation) } : null')
+    && read('js/components/ChatMessage.svelte').includes('<ChatAttestationBadge view={view.usage.receipt.badge} footnote/>')
+    && !read('js/components/ChatMessage.svelte').includes('{@html view.usage.receipt}')
+    && read('js/components/ChatAttestationBadge.svelte').includes('view === undefined ? projectAttestationBadge(attestation) : view'), 'found');
 assert('chat-attestation.js exports E2EE lock footnote helper', chatAttestationSrc.includes('export function e2eeLockFootnote'), 'found');
 assert('chat.js imports personality helpers', chatSrc.includes("from './chat-personalities.js'"), 'found');
-assert('chat-personalities.js exports header model helper', chatPersonalitiesSrc.includes('export function updateChatHeaderModel'), 'found');
+assert('chat-personalities.js exports header model helper', chatPersonalitiesSrc.includes('updateChatHeaderModel, updateSummaryButton } from') && read('js/chat-header-presentation.ts').includes('export function updateChatHeaderModel'), 'found');
 assert('chat.js imports history helpers', chatSrc.includes("from './chat-history.js'"), 'found');
 assert('chat-history.js exports save/load helpers', chatHistorySrc.includes('export async function saveChatHistory') && chatHistorySrc.includes('export async function loadChatHistory'), 'found');
 assert('chat-actions.js saves regenerated history through chat-history helper', chatActionsSrc.includes('saveChatHistory'), 'found');
@@ -522,12 +538,17 @@ assert('chat marker prompts name the target thread from the source',
   chatMarkerPromptsSrc.includes('renameThread(state.currentThreadId, threadName)') &&
     chatMarkerPromptsSrc.includes("openSourcePrompt(prompt, 'Biomarker and dose exploration', { canOpen })"),
   'found');
-assert('renderChatMessages calls buildActionBar', chatRenderSrc.includes('buildActionBar(i)'), 'found');
+assert('restored transcript composes the same authored action bar as the public facade',
+  chatRenderSrc.includes('renderChatTranscript(container, projectChatTranscript(')
+    && read('js/chat-transcript-presentation.ts').includes('actions: projectChatMessageActions(state.chatHistory, index)')
+    && read('js/components/ChatMessage.svelte').includes('<ChatMessageActions view={view.actions}/>')
+    && chatActionsSrc.includes("renderChatMessageActions(msgIndex, 'assistant')")
+    && read('js/chat-message-actions-component.ts').includes('renderHTML({ view })'), 'found');
 assert('API messages tag other personas', chatPromptContextSrc.includes('Response from') && chatPromptContextSrc.includes('personalityName'), 'tags messages from different personas');
 assert('chat.js imports chat panel helpers', chatSrc.includes("from './chat-panel.js'"), 'found');
 assert('chat-panel.js exports open/close helpers', chatPanelSrc.includes('export async function openChatPanel') && chatPanelSrc.includes('export function closeChatPanel'), 'found');
 assert('chat-panel.js owns web-search toggle state', chatPanelSrc.includes('export function getChatWebSearchEnabled') && chatPanelSrc.includes('export function setChatWebSearchEnabled'), 'found');
-assert('chat-panel scopes web-search selector to chat panel', chatPanelSrc.includes("querySelector('#chat-panel .chat-websearch-toggle-label')"), 'found');
+assert('chat-panel scopes web-search presentation to owned header', chatPanelSrc.includes('refreshChatHeaderWebSearch()') && read('js/chat-header-view.ts').includes("owner.root.ownerDocument.querySelector('[data-chat-header-view]') === owner.root"), 'found');
 assert('chat.js imports chat nudge helpers', chatSrc.includes("from './chat-nudge.js'"), 'found');
 assert('chat-nudge.js owns FAB nudge state', chatNudgeSrc.includes('export function setChatNudge') && chatNudgeSrc.includes('export function updateChatNudge'), 'found');
 assert('chat-panel delegates nudge dismissal', chatPanelSrc.includes("from './chat-nudge.js'") && chatPanelSrc.includes('dismissCurrentChatNudge()'), 'found');
@@ -579,8 +600,10 @@ assert('chat-discussion-round-runner.js owns per-persona round execution',
   chatDiscussionRoundRunnerSrc.includes('export async function runDiscussionRound') &&
     chatDiscussionRoundRunnerSrc.includes('callDiscussionRoundAssistant') &&
     chatDiscussionRoundRunnerSrc.includes('buildDiscussionRoundRequest') &&
-    chatDiscussionRoundRunnerSrc.includes('renderFinalDiscussionMessage') &&
-    chatDiscussionRoundRunnerSrc.includes('appendDiscussionUsageFootnote') &&
+    chatDiscussionRoundRunnerSrc.includes('buildDiscussionAssistantMessage') &&
+    chatDiscussionRoundRunnerSrc.includes('createChatLiveMessage') &&
+    chatDiscussionRoundRunnerSrc.includes('completeChatLiveMessage(live.element, assistantMsg') &&
+    chatDiscussionRoundRunnerSrc.includes('trackDiscussionUsage(request, aiResult.usage)') &&
     chatDiscussionRoundRunnerSrc.includes('setChatAbortController(null)') &&
     !chatDiscussionSrc.includes('callChatAPIWithContinuation'),
   'found');
@@ -607,12 +630,14 @@ assert('chat-discussion-ui.js owns discussion button and continuation controls',
     !chatDiscussionSrc.includes("querySelector('.discuss-persona-picker')") &&
     !chatDiscussionSrc.includes('export function updateDiscussButton'),
   'found');
-assert('chat-discussion-picker.js owns discussion picker DOM and selection',
+assert('Svelte owns discussion picker rendering and selection through its public facade',
   chatDiscussionPickerSrc.includes('export function removeDiscussPersonaPicker') &&
     chatDiscussionPickerSrc.includes('export function readDiscussPersonaPickerSelection') &&
     chatDiscussionPickerSrc.includes('export function showDiscussPersonaPicker') &&
-    chatDiscussionPickerSrc.includes('const addingToExisting = existingDiscussion') &&
-    chatDiscussionPickerSrc.includes('checkedCount !== maxNewSelections') &&
+    chatDiscussionPickerSrc.includes('publishDiscussionPicker(chatDiscussionScope()') &&
+    read('js/chat-discussion-view.ts').includes('picker.selected.length !== discussionPickerLimit(picker)') &&
+    read('js/components/ChatDiscussion.svelte').includes('disabled={count !== limit}') &&
+    !chatDiscussionPickerSrc.includes('innerHTML') &&
     !chatDiscussionUiSrc.includes("querySelector('.discuss-persona-picker')"),
   'found');
 assert('Discuss button does not duplicate inline Continue',
@@ -634,32 +659,49 @@ assert('chat-discussion-round-state.js owns thread-bound round persistence',
     chatDiscussionRoundStateSrc.includes('export function renderRoundMessages') &&
     chatDiscussionRoundStateSrc.includes('export async function saveRoundChatHistory'),
   'found');
-assert('chat-discussion-round-view.js owns live discussion round DOM',
+assert('discussion element facade and live rounds share authored Svelte message markup',
   chatDiscussionRoundRunnerSrc.includes("from './chat-discussion-round-view.js'") &&
     chatDiscussionRoundViewSrc.includes('export function createDiscussionTypingIndicator') &&
     chatDiscussionRoundViewSrc.includes('export function appendRoundPersonaLabel') &&
     chatDiscussionRoundViewSrc.includes('export function renderFinalDiscussionMessage') &&
     chatDiscussionRoundViewSrc.includes('export function appendDiscussionUsageFootnote') &&
-    chatDiscussionRoundViewSrc.includes("setAttribute('role', 'article')"),
+    chatDiscussionRoundViewSrc.includes('snapshotChatCompatibilityMessage(message).message') &&
+    read('js/chat-live-message-component.ts').includes('projectChatTranscriptMessage(message, -1)') &&
+    read('js/components/ChatLiveMessage.svelte').includes('<ChatMessage view={view || initial}') &&
+    read('js/components/ChatMessage.svelte').includes('role="article"') &&
+    !chatDiscussionRoundViewSrc.includes('innerHTML') &&
+    !chatDiscussionRoundViewSrc.includes('renderMarkdown'),
   'found');
 assert('chat discussion rounds stay bound to origin thread during streaming',
   chatDiscussionRoundRunnerSrc.includes('const roundThreadId = opts.threadId || state.currentThreadId') &&
-    chatDiscussionRoundRunnerSrc.includes('saveRoundChatHistory(roundThreadId, roundHistory)') &&
-    chatDiscussionTurnsSrc.includes('persistDiscussionThreadState(threadId, allPersonas, originalPersonality)'),
+    chatDiscussionRoundRunnerSrc.includes('saveRoundChatHistory(roundThreadId, roundHistory, origin)') &&
+    chatDiscussionRoundRunnerSrc.includes('origin.isActive() && ownsController()') &&
+    chatDiscussionTurnsSrc.includes('persistDiscussionThreadState(threadId, allPersonas, originalPersonality, origin)') &&
+    read('js/chat-discussion-origin.ts').includes('profileId !== state.currentProfile') &&
+    read('js/chat-discussion-origin.ts').includes('!state.chatThreads.includes(thread)') &&
+    read('js/chat-discussion-origin.ts').includes('history !== state.chatHistory') &&
+    chatDiscussionRoundStateSrc.includes('return saveChatHistory({') &&
+    chatDiscussionRoundStateSrc.includes('current: () => captured.isValid()') &&
+    !chatDiscussionRoundStateSrc.includes('encryptedSetItem'),
   'prevents thread switches mid-stream from dropping the continue prompt');
-assert('chat discussion live stream restores persona label after thread switch',
-  chatDiscussionRoundViewSrc.includes('export function appendRoundPersonaLabel') &&
-    chatDiscussionRoundRunnerSrc.includes('appendRoundPersonaLabel(roundThreadId, container, labelEl);') &&
-    /onStream\(text\)[\s\S]{0,180}appendRoundPersonaLabel\(roundThreadId, container, labelEl\);[\s\S]{0,80}typewriter\.update\(text\)/.test(chatDiscussionRoundRunnerSrc),
-  're-entering the origin thread mid-stream should show whose response is streaming');
-assert('chat-discussion.js typewriter callback degrades safely',
+assert('chat discussion live stream restores the authored persona label and message after repaint',
+  read('js/components/ChatLiveMessage.svelte').includes('<ChatPersonaLabel text={label}/>') &&
+    chatDiscussionRoundRunnerSrc.includes('const release = origin.watch(') &&
+    chatDiscussionRoundRunnerSrc.includes('activeRound.live?.restore(container)') &&
+    /onStream\(text\)[\s\S]{0,180}live\.restore\(container\);\s*typewriter\.update\(text\)/.test(chatDiscussionRoundRunnerSrc),
+  're-entering or repainting the origin thread retains one authored participant label and live message');
+assert('chat-discussion.js typewriter callback degrades safely and forwards lifetime guards',
   !chatDiscussionCallbacksSrc.includes('Chat discussion typewriter callback not configured') &&
-    /function createDiscussionTypewriter[\s\S]{0,180}update\(\)\s*\{\s*\}[\s\S]{0,80}stop\(\)\s*\{\s*\}/.test(chatDiscussionCallbacksSrc),
-  'fallback typewriter should no-op instead of throwing before cleanup');
+    /if \(!discussionCallbacks\.createTypewriter\)[\s\S]{0,90}update\(\)\s*\{\s*\}[\s\S]{0,80}stop\(\)\s*\{\s*\}/.test(chatDiscussionCallbacksSrc) &&
+    chatDiscussionCallbacksSrc.includes('discussionCallbacks.createTypewriter(el, typingEl, container, current)') &&
+    chatDiscussionRoundRunnerSrc.includes('createDiscussionTypewriter(live.element, typingEl, container, ownsView)'),
+  'fallback safely no-ops and real typewriter ticks are bound to the originating view');
 assert('chat.js imports onboarding helpers', chatSrc.includes("from './chat-onboarding.js'"), 'found');
 assert('chat-onboarding.js owns onboarding handlers',
   chatOnboardingSrc.includes('export function startOnboardingLabImport') &&
-    chatOnboardingSrc.includes('export async function saveChatProfile') &&
+    chatOnboardingSrc.includes('export function saveChatProfile') &&
+    chatOnboardingSrc.includes('return profileOnboarding.saveProfile(advance, source)') &&
+    read('js/chat-profile-onboarding.ts').includes('controller.saveProfile(origin, origin.view.readDraft(), advance)') &&
     chatOnboardingSrc.includes('export function _renderProviderQuiz'),
   'found');
 assert('chat window bindings configure onboarding callbacks',

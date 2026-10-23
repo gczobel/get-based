@@ -1,4 +1,17 @@
+import type { Locator } from '@playwright/test';
 import { expect, test } from './coverage-fixture.js';
+
+test.beforeEach(async ({ page }) => {
+  await page.addInitScript(() => {
+    for (const key of ['emptyTour', 'tour']) localStorage.setItem(`labcharts-default-${key}`, 'completed');
+    localStorage.setItem('labcharts-encryption-nudge-dismissed', 'true');
+  });
+});
+
+async function setContextSource(control: Locator, value: boolean): Promise<void> {
+  await control.setChecked(value);
+  await expect(control.page().locator('[data-context-hub-view]')).toHaveAttribute('data-context-save-state', 'idle');
+}
 
 test('Context hub opens from Personalize AI alias and dismisses', async ({ page }) => {
   await page.goto('/app', { waitUntil: 'load' });
@@ -64,9 +77,10 @@ test('Context hub opens from Personalize AI alias and dismisses', async ({ page 
   await overlay.locator('.ai-picker-card[data-pick="lens"]').click();
   const editorOverlay = page.locator('#modal-overlay');
   await expect(editorOverlay).toHaveClass(/show/);
-  await expect(page.locator('#detail-modal .context-back-btn')).toHaveAttribute('aria-label', 'Back to Context');
-  await expect(page.locator('#detail-modal .context-back-btn svg')).toBeVisible();
-  await page.locator('#detail-modal .context-back-btn').evaluate(el => (el as HTMLElement).click());
+  const lensBack = page.locator('#detail-modal').getByRole('button', { name: 'Back to Context', exact: true });
+  await expect(lensBack).toHaveAttribute('aria-label', 'Back to Context');
+  await expect(lensBack).toHaveText('←');
+  await lensBack.click();
   await expect(editorOverlay).not.toHaveClass(/show/);
   await expect(overlay).toHaveClass(/show/);
 
@@ -95,6 +109,7 @@ test('Context hub data source toggles control prompt and score context', async (
     const data = await import('/js/data.js');
     const lab = await import('/js/lab-context.js');
     localStorage.setItem('labcharts-active-profile', 'context-source-coverage');
+    state.currentProfile = 'context-source-coverage';
     state.importedData = {
       ...(state.importedData || {}),
       customMarkers: {
@@ -170,7 +185,8 @@ test('Context hub data source toggles control prompt and score context', async (
     lab.setGeneticsInventoryInAIContext(false);
     data.invalidateActiveDataCache();
     lab.invalidateLabContextCache();
-    cards.openContextModal();
+    if (!await data.saveImportedData()) throw new Error('Could not persist source fixture');
+    await cards.openContextModal();
   });
 
   const overlay = page.locator('#context-hub-overlay');
@@ -181,6 +197,7 @@ test('Context hub data source toggles control prompt and score context', async (
   await expect(overlay.locator('[data-context-toggle="body-regions"]')).toHaveCount(0);
   await expect(overlay.locator('#nutrition-context-days')).toHaveValue('30');
   await overlay.locator('#nutrition-context-days').selectOption('90');
+  await expect(overlay.locator('[data-context-hub-view]')).toHaveAttribute('data-context-save-state', 'idle');
   const nutritionRangeContext = await page.evaluate(async () => {
     const lab = await import('/js/lab-context.js');
     const { state } = await import('/js/state.js');
@@ -198,74 +215,38 @@ test('Context hub data source toggles control prompt and score context', async (
     return { vitD7: light.vitD7, circadian7: light.circadian7 };
   });
 
-  await overlay.locator('.context-source-row[data-context-group="Fatty Acids"] [data-context-toggle="lab-group"]').evaluate(el => {
-    const input = /** @type {HTMLInputElement} */ (el as HTMLInputElement);
-    input.checked = false;
-    input.dispatchEvent(new Event('change', { bubbles: true }));
-  });
+  await setContextSource(overlay.locator('.context-source-row[data-context-group="Fatty Acids"] [data-context-toggle="lab-group"]'), false);
   const labWithoutFattyAcids = await page.evaluate(async () => {
     const lab = await import('/js/lab-context.js');
     return lab.buildLabContext();
   });
 
-  await overlay.locator('[data-context-toggle="genome-summary"]').evaluate(el => {
-    const input = /** @type {HTMLInputElement} */ (el as HTMLInputElement);
-    input.checked = false;
-    input.dispatchEvent(new Event('change', { bubbles: true }));
-  });
-  await overlay.locator('[data-context-toggle="genome-priority"]').evaluate(el => {
-    const input = /** @type {HTMLInputElement} */ (el as HTMLInputElement);
-    input.checked = false;
-    input.dispatchEvent(new Event('change', { bubbles: true }));
-  });
+  await setContextSource(overlay.locator('[data-context-toggle="genome-summary"]'), false);
+  await setContextSource(overlay.locator('[data-context-toggle="genome-priority"]'), false);
   const labWithoutDna = await page.evaluate(async () => {
     const lab = await import('/js/lab-context.js');
     return lab.buildLabContext();
   });
 
-  await overlay.locator('[data-context-toggle="light-sun"]').evaluate(el => {
-    const input = /** @type {HTMLInputElement} */ (el as HTMLInputElement);
-    input.checked = false;
-    input.dispatchEvent(new Event('change', { bubbles: true }));
-  });
+  await setContextSource(overlay.locator('[data-context-toggle="light-sun"]'), false);
   const labWithoutLight = await page.evaluate(async () => {
     const lab = await import('/js/lab-context.js');
     const { getContextSummary } = await import('/js/chat-context-summary.js');
     const context = lab.buildLabContext();
     return { context, receipt: getContextSummary(context) };
   });
-  await overlay.locator('[data-context-toggle="body-wearables"]').evaluate(el => {
-    const input = /** @type {HTMLInputElement} */ (el as HTMLInputElement);
-    input.checked = false;
-    input.dispatchEvent(new Event('change', { bubbles: true }));
-  });
-  await overlay.locator('[data-context-toggle="body-nutrition"]').evaluate(el => {
-    const input = /** @type {HTMLInputElement} */ (el as HTMLInputElement);
-    input.checked = false;
-    input.dispatchEvent(new Event('change', { bubbles: true }));
-  });
+  await setContextSource(overlay.locator('[data-context-toggle="body-wearables"]'), false);
+  await setContextSource(overlay.locator('[data-context-toggle="body-nutrition"]'), false);
   await expect(overlay.locator('#nutrition-context-days')).toBeDisabled();
-  await overlay.locator('[data-context-toggle="genome-lookup"]').evaluate(el => {
-    const input = /** @type {HTMLInputElement} */ (el as HTMLInputElement);
-    input.checked = true;
-    input.dispatchEvent(new Event('change', { bubbles: true }));
-  });
-  await overlay.locator('[data-context-toggle="insight-cards"]').evaluate(el => {
-    const input = /** @type {HTMLInputElement} */ (el as HTMLInputElement);
-    input.checked = false;
-    input.dispatchEvent(new Event('change', { bubbles: true }));
-  });
+  await setContextSource(overlay.locator('[data-context-toggle="genome-lookup"]'), true);
+  await setContextSource(overlay.locator('[data-context-toggle="insight-cards"]'), false);
 
   const insightOffSupplementsOn = await page.evaluate(async () => {
     const lab = await import('/js/lab-context.js');
     return lab.buildLabContext();
   });
 
-  await overlay.locator('[data-context-toggle="supplements-meds"]').evaluate(el => {
-    const input = /** @type {HTMLInputElement} */ (el as HTMLInputElement);
-    input.checked = false;
-    input.dispatchEvent(new Event('change', { bubbles: true }));
-  });
+  await setContextSource(overlay.locator('[data-context-toggle="supplements-meds"]'), false);
 
   const result = await page.evaluate(async () => {
     const lab = await import('/js/lab-context.js');
@@ -358,6 +339,7 @@ test('Context hub data source toggles control prompt and score context', async (
 
 test('chat header shows clickable green AI Context status chip', async ({ page }) => {
   await page.goto('/app', { waitUntil: 'load' });
+  await expect(page.locator('html[data-app-ready]')).toBeAttached();
 
   await page.evaluate(async () => {
     const { state } = await import('/js/state.js');
@@ -367,8 +349,10 @@ test('chat header shows clickable green AI Context status chip', async ({ page }
     localStorage.removeItem('labcharts-ai-paused');
     localStorage.setItem('labcharts-ai-provider', 'ollama');
     localStorage.removeItem('labcharts-lens-config');
-    localStorage.setItem('labcharts-lens-local-count', '24');
-    saveLensConfig({ backend: 'in-browser', enabled: true, name: 'Research Notes', topK: 5, multiQuery: true });
+    // This test covers header state across browsers, independently of OPFS support.
+    const { updateKeyCache } = await import('/js/crypto.js');
+    updateKeyCache('labcharts-lens-key', 'synthetic-context-key');
+    saveLensConfig({ backend: 'external-server', url: 'https://kb-header.example/query', enabled: true, name: 'Research Notes', topK: 5, multiQuery: true });
     state.importedData.interpretiveLens = 'Functional endocrinology';
     await openChatPanel();
     chat.updateChatHeaderModel();
@@ -395,6 +379,7 @@ test('chat AI Context chip carries the last Knowledge Base search error', async 
     body: JSON.stringify({ error: 'worker unavailable' }),
   }));
   await page.goto('/app', { waitUntil: 'load' });
+  await expect(page.locator('html[data-app-ready]')).toBeAttached();
 
   await page.evaluate(async () => {
     const { saveLensConfig, queryLens } = await import('/js/lens.js');
@@ -425,6 +410,7 @@ test('chat AI Context chip carries the last Knowledge Base search error', async 
 
 test('chat header shows pending KB state when Knowledge Base is enabled but empty', async ({ page }) => {
   await page.goto('/app', { waitUntil: 'load' });
+  await expect(page.locator('html[data-app-ready]')).toBeAttached();
 
   await page.evaluate(async () => {
     const { state } = await import('/js/state.js');
@@ -455,6 +441,7 @@ test('chat header shows pending KB state when Knowledge Base is enabled but empt
 
 test('clearing Interpretive Lens immediately clears chat header context chip', async ({ page }) => {
   await page.goto('/app', { waitUntil: 'load' });
+  await expect(page.locator('html[data-app-ready]')).toBeAttached();
 
   await page.evaluate(async () => {
     const { state } = await import('/js/state.js');
@@ -465,6 +452,7 @@ test('clearing Interpretive Lens immediately clears chat header context chip', a
     localStorage.removeItem('labcharts-lens-config');
     localStorage.removeItem('labcharts-lens-local-count');
     state.importedData.interpretiveLens = 'Functional endocrinology';
+    if (!await (await import('/js/data.js')).saveImportedData()) throw new Error('Could not save Lens fixture');
     await openChatPanel();
     chat.updateChatHeaderModel();
   });
@@ -480,7 +468,8 @@ test('clearing Interpretive Lens immediately clears chat header context chip', a
 
   const editorOverlay = page.locator('#modal-overlay');
   await expect(editorOverlay).toHaveClass(/show/);
-  await page.locator('[data-lifestyle-action="clear-interpretive-lens"]').evaluate(el => (el as HTMLElement).click());
+  await page.locator('#detail-modal').getByRole('button', { name: 'Clear', exact: true }).click();
+  await page.locator('#confirm-ok').click();
 
   await expect(editorOverlay).not.toHaveClass(/show/);
   await expect(chip).toBeHidden();
@@ -491,6 +480,7 @@ test('clearing Interpretive Lens immediately clears chat header context chip', a
 
 test('chat header hides AI Context status chip when no AI provider is configured', async ({ page }) => {
   await page.goto('/app', { waitUntil: 'load' });
+  await expect(page.locator('html[data-app-ready]')).toBeAttached();
 
   await page.evaluate(async () => {
     const { state } = await import('/js/state.js');

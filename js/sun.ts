@@ -10,6 +10,7 @@
 // in profile.js migrateProfileData().
 
 import { state } from './state.js';
+import { renderHTML } from './components/LightSessionPresentation.svelte.html.js';
 import { showNotification, showPromptDialog, showConfirmDialog } from './utils.js';
 import { saveImportedData } from './data.js';
 import {
@@ -20,7 +21,7 @@ import {
 } from './modal-lifecycle.js';
 import {
   BODY_REGIONS,
-  renderBodySilhouette,
+  projectBodySilhouette, renderBodySilhouette,
   bindBodySilhouette,
   resetBodySilhouetteState,
 } from './sun-body-silhouette.js';
@@ -327,21 +328,7 @@ export async function changeCoverageMidSession(id: unknown) {
   const currentRegions = new Set(sess.bodyExposure?.regions || []);
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
-  overlay.innerHTML = `<div class="modal sun-start-modal" role="dialog" aria-label="Change coverage">
-    <div class="modal-header">
-      <h3>Update coverage mid-session</h3>
-      <button type="button" class="modal-close" data-sun-coverage-close aria-label="Close">×</button>
-    </div>
-    <div class="modal-body">
-      <p class="modal-body-hint">Tap each body region that's uncovered <strong>now</strong>. The dose accrued under the previous coverage stays — the change applies from this moment forward.</p>
-      <div class="sun-silhouette-wrap" id="sun-coverage-silhouette-slot">${renderBodySilhouette(currentRegions)}</div>
-      <div class="sun-silhouette-hint" id="sun-coverage-hint"></div>
-      <div class="modal-actions" style="margin-top:18px">
-        <button type="button" class="import-btn import-btn-secondary" data-sun-coverage-close>Cancel</button>
-        <button class="import-btn import-btn-primary" id="coverage-confirm">Apply coverage</button>
-      </div>
-    </div>
-  </div>`;
+  overlay.innerHTML = renderHTML({ kind: 'coverage', silhouetteView: projectBodySilhouette(currentRegions) });
   const closeDialog = () => removeModalOverlay(overlay);
   overlay.querySelectorAll('[data-sun-coverage-close]').forEach(btn => {
     btn.addEventListener('click', closeDialog);
@@ -619,7 +606,7 @@ function _refreshSurfaces(scrollAnchor?: unknown) {
     const view = state.currentView
       || document.querySelector<HTMLElement>('.nav-item.active')?.dataset?.category
       || 'dashboard';
-    const navOpts = anchor ? { scrollAnchor: anchor } : undefined;
+    const navOpts = { preserveSidebar: true, ...(anchor ? { scrollAnchor: anchor } : {}) };
     navigateSunRuntime(view, navOpts as Parameters<typeof navigateSunRuntime>[1]);
     setTimeout(() => _resumeActiveTickerIfNeeded(), 100);
   }, 150);
@@ -743,3 +730,5 @@ function _resetSunModuleState() {
 if (hasSunBrowserRuntime()) {
   addSunProfileSwitchListener(_resetSunModuleState);
 }
+
+export{getSunSessionRowView}from'./sun-session-ui.js';

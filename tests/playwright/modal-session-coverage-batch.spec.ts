@@ -382,10 +382,7 @@ test('device session dialog covers validation unit mode start and save paths', a
         sunDefaults: {},
       };
       const validateModeCoupling = (_device: unknown, mode: unknown) => ({ ok: mode !== 'blocked' });
-      const renderBodySilhouette = (selected:Parameters<typeof import("../../js/sun-body-silhouette.js").renderBodySilhouette>[0]) => `
-        <button type="button" class="body-region-test" data-region="legs-front" aria-pressed="${selected.has('legs-front')}">Legs front</button>
-        <button type="button" class="body-region-test" data-region="arms-front" aria-pressed="${selected.has('arms-front')}">Arms front</button>
-      `;
+      const projectBodySilhouette = (await import('/js/sun-body-silhouette.js')).projectBodySilhouette;
       const bindBodySilhouette = (slot:Parameters<typeof import("../../js/sun-body-silhouette.js").bindBodySilhouette>[0], selected:Parameters<typeof import("../../js/sun-body-silhouette.js").bindBodySilhouette>[1], callback:Parameters<typeof import("../../js/sun-body-silhouette.js").bindBodySilhouette>[2]) => {
         slot.querySelectorAll<HTMLElement>('[data-region]').forEach(btn => {
           btn.addEventListener('click', () => {
@@ -415,7 +412,7 @@ test('device session dialog covers validation unit mode start and save paths', a
         },
         ensureActiveDeviceTicker: () => calls.push(['ticker']),
         validateModeCoupling,
-        renderBodySilhouette,
+        projectBodySilhouette,
         bindBodySilhouette,
         navigate: (route: unknown) => calls.push(['navigate', route]),
         openLightSetup: () => calls.push(['open-light-setup']),
@@ -437,7 +434,7 @@ test('device session dialog covers validation unit mode start and save paths', a
         && (overlay.querySelector<HTMLElement>('#dev-session-mode') as unknown as {value: string})?.value === 'red'
         && modeButtons.length === 3
         && !overlay.textContent.includes('Blocked')
-        && !!overlay.querySelector<HTMLElement>('.body-region-test')
+        && !!overlay.querySelector<HTMLElement>('[data-region]')
         && (overlay.querySelector<HTMLElement>('#dev-session-eyes') as unknown as {checked: boolean})?.checked === false
         && overlay.querySelector<HTMLElement>('#dev-session-area-hint')?.textContent.includes('Legs');
 
@@ -453,7 +450,7 @@ test('device session dialog covers validation unit mode start and save paths', a
         outcomes.unitToggleConvertsBothDirections = distance.dataset.unit === 'in'
           && Math.abs(initialInches - 11.8) < 0.05
           && Math.abs(convertedCm - 30) < 0.05
-          && overlay!.querySelector<HTMLElement>('.dev-unit-btn[data-unit="in"]')?.getAttribute('aria-selected') === 'true';
+          && overlay!.querySelector<HTMLElement>('.dev-unit-btn[data-unit="in"]')?.getAttribute('aria-pressed') === 'true';
       } else {
         outcomes.unitToggleConvertsBothDirections = false;
       }
@@ -515,6 +512,7 @@ test('light sessions view covers all-sessions modal refresh scroll and row event
 
   const results = await page.evaluate(async ({ sessionsUrl }) => {
     const sessionsView = (await import(sessionsUrl) as unknown) as Pick<typeof import('../../js/light-sessions-view.js'), "configureLightSessionsView" | "renderUnifiedSessionsList" | "installLightSessionsActionDelegates" | "_openAllSessionsModal">;
+    const { projectCompletedSunSession } = await import('/js/light-session-presentation.js');
     const outcomes: Record<string, unknown> = {};
     const calls: unknown[] = [];
     const base = Date.UTC(2026, 5, 7, 12, 0);
@@ -523,10 +521,9 @@ test('light sessions view covers all-sessions modal refresh scroll and row event
       getSessions: () => [],
       getDeviceSessions: () => [],
       getDevices: () => [],
-      renderSunSessionRow: () => '',
+      getSunSessionRowView: () => null,
       openDeviceSessionDetail: () => {},
       deleteDeviceSession: () => {},
-      renderDeviceSessionAIInline: () => '',
       channelDisplay: {},
       channelTier: () => 0,
       formatChannelUnit: () => '',
@@ -559,12 +556,9 @@ test('light sessions view covers all-sessions modal refresh scroll and row event
         },
         channelTier: (value:number) => value > 0 ? 2 : 0,
         formatChannelUnit: (key: string, value:number) => `${Math.round(value)} ${key}`,
-        renderSunSessionRow: (sess: unknown) => `<div class="sun-session light-session-row light-session-sun" data-id="${(sess as {id: unknown}).id}" role="button" tabindex="0" aria-label="Sun ${(sess as {id: unknown}).id}">
-          <div class="sun-session-head"><span class="sun-session-date">${(sess as {id: unknown}).id}</span></div>
-        </div>`,
+        getSunSessionRowView: (session: Parameters<typeof projectCompletedSunSession>[0]) => ({ kind: 'row' as const, view: projectCompletedSunSession(session, { date: String(session.id), time: '' }, `${session.durationMin} min`, '') }),
         openDeviceSessionDetail: (id: string) => calls.push(['detail', id]),
         deleteDeviceSession: (id: string) => calls.push(['delete', id]),
-        renderDeviceSessionAIInline: (sess: unknown) => `<span class="ai-inline">AI ${(sess as {id: unknown}).id}</span>`,
       });
 
       const inlineHost = document.createElement('div');
@@ -614,7 +608,7 @@ test('light sessions view covers all-sessions modal refresh scroll and row event
         : false;
       outcomes.modalWheelIsHandled = outcomes.modalWheelBodyExists && wheelPrevented;
 
-      overlay?.querySelector<HTMLElement>('.light-session-device[role="button"]')?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      overlay?.querySelector<HTMLElement>('.light-session-device:is(button, [role="button"])')?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
       await delay(0);
       outcomes.deviceRowClickClosesModal = !document.body.contains(overlay)
         && calls.some(call => (call as unknown[])[0] === 'detail');
@@ -622,8 +616,10 @@ test('light sessions view covers all-sessions modal refresh scroll and row event
       sessionsView._openAllSessionsModal();
       overlay = document.querySelector<HTMLElement>('.light-sessions-modal-overlay');
       if (overlay) sessionsView.installLightSessionsActionDelegates(overlay);
-      const keyRow = overlay?.querySelector<HTMLElement>('.light-session-device[role="button"]');
-      keyRow?.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', bubbles: true, cancelable: true }));
+      const keyRow = overlay?.querySelector<HTMLElement>('.light-session-device:is(button, [role="button"])');
+      // Native buttons activate through a generated click; raw synthetic keydown is not a browser activation.
+      if (keyRow instanceof HTMLButtonElement) keyRow.click();
+      else keyRow?.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', bubbles: true, cancelable: true }));
       await delay(0);
       outcomes.deviceRowKeyboardClosesModal = !(document.body.contains as (node:Node|null|undefined)=>boolean)(overlay);
     } finally {

@@ -9,10 +9,25 @@
 // Native *.test.js suites coexist with the legacy script wrapper.
 
 import { defineConfig } from 'vitest/config';
+import fs from 'node:fs';
 import { COVERAGE_INCLUDE } from './scripts/coverage-source.mjs';
+import { nativeCoveragePlugins } from './scripts/native-coverage-plugins.mjs';
+import NativeCoverageReporter from './scripts/native-coverage-reporter.mjs';
 
 export default defineConfig({
+  plugins: [{
+    name: 'getbased-native-component-coverage',
+    enforce: 'pre',
+    // Combined coverage uses compiled function ranges, just like Playwright.
+    // Keep V8/Istanbul in that coordinate space; the collector separately uses
+    // the unchanged external map to identify bundled framework functions.
+    load(id) {
+      if (!/\.svelte\.(?:native|html)\.js$/.test(id)) return null;
+      return { code: fs.readFileSync(id, 'utf8').replace(/\/\/# sourceMappingURL=[^\r\n]*/g, ''), map: null };
+    },
+  }, ...nativeCoveragePlugins()],
   test: {
+    includeTaskLocation: true,
     environment: 'node',
     include: [
       'tests/**/*.test.{js,ts}',
@@ -28,9 +43,11 @@ export default defineConfig({
       'dist-docs/**',
     ],
     setupFiles: ['./tests/_vitest-setup.js'],
-    reporters: ['default'],
+    globalSetup: ['./tests/helpers/coverage-global-setup.js'],
+    reporters: ['default', new NativeCoverageReporter()],
     coverage: {
-      provider: 'v8',
+      provider: 'custom',
+      customProviderModule: './scripts/native-coverage-runtime.mjs',
       reporter: ['json-summary', 'json'],
       reportsDirectory: 'tests/.vitest-coverage',
       ...{ all: true },

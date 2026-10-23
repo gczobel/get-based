@@ -426,11 +426,11 @@ test('Debug mode compares meal models against local reference data and can use t
     peakConcurrentRequests = Math.max(peakConcurrentRequests, activeRequests);
     await new Promise(resolve => setTimeout(resolve, 45));
     try {
-      if ((body as {model:unknown}).model === 'google/gemini-3.7-flash' && ++geminiAttempts === 1) {
+      if ((body as {model:unknown}).model === 'google/gemini-4-argon' && ++geminiAttempts === 1) {
         await route.fulfill({
           status: 429,
           contentType: 'application/json',
-          body: JSON.stringify({ error: { message: 'Rate limit reached for Gemini 3.7 Flash' } }),
+          body: JSON.stringify({ error: { message: 'Rate limit reached for Gemini 4 Argon' } }),
         });
         return;
       }
@@ -489,7 +489,7 @@ test('Debug mode compares meal models against local reference data and can use t
       { id: 'anthropic/claude-sonnet-5', name: 'Vision Sonnet' },
       { id: 'anthropic/claude-opus-4.8', name: 'Legacy Opus' },
       { id: 'google/gemini-3.5-flash', name: 'Vision Gemini' },
-      { id: 'google/gemini-3.7-flash', name: 'Vision Gemini 3.7' },
+      { id: 'google/gemini-4-argon', name: 'Vision Gemini Argon' },
       { id: 'z-ai/glm-5.2', name: 'Text-only GLM 5.2' },
       { id: 'z-ai/glm-5.3', name: 'Text-only GLM 5.3' },
       { id: 'moonshotai/kimi-k3', name: 'Vision Kimi' },
@@ -497,18 +497,18 @@ test('Debug mode compares meal models against local reference data and can use t
     ]));
     localStorage.setItem('labcharts-openrouter-vision-models', JSON.stringify([
       'openai/gpt-5.6-sol', 'anthropic/claude-opus-5.5', 'anthropic/claude-opus-4.8',
-      'google/gemini-3.5-flash', 'google/gemini-3.7-flash', 'moonshotai/kimi-k3', 'x-ai/grok-4.6',
+      'google/gemini-3.5-flash', 'google/gemini-4-argon', 'moonshotai/kimi-k3', 'x-ai/grok-4.6',
     ]));
     localStorage.setItem('labcharts-openrouter-pricing', JSON.stringify({
       'openai/gpt-5.6-sol': { input: 4, output: 20 },
       'anthropic/claude-opus-5.5': { input: 5, output: 25 },
-      'google/gemini-3.7-flash': { input: 0.5, output: 2 },
+      'google/gemini-4-argon': { input: 0.5, output: 2 },
     }));
     localStorage.setItem('labcharts-venice-models', JSON.stringify([
-      { id: 'gemini-3-5-flash', name: 'Venice Vision' },
+      { id: 'gemini-4-argon', name: 'Venice Vision' },
     ]));
     localStorage.setItem('labcharts-venice-e2ee-models', '[]');
-    localStorage.setItem('labcharts-venice-vision-models', JSON.stringify(['gemini-3-5-flash']));
+    localStorage.setItem('labcharts-venice-vision-models', JSON.stringify(['gemini-4-argon']));
     api.setAIProvider('openrouter');
     await (await import('/js/nutrition.js')).openNutritionEditor();
   });
@@ -541,7 +541,7 @@ test('Debug mode compares meal models against local reference data and can use t
   await expect(page.locator('#nutrition-model-comparison')).not.toContainText('Auto-active');
   await expect(page.locator('[data-nutrition-comparison-model]')).toHaveCount(6);
   await expect(page.locator('.nutrition-comparison-models')).toContainText('Venice Vision');
-  await expect(page.locator('.nutrition-comparison-models')).toContainText('Vision Gemini 3.7');
+  await expect(page.locator('.nutrition-comparison-models')).toContainText('Vision Gemini Argon');
   await expect(page.locator('.nutrition-comparison-models').getByText('Vision Gemini', { exact: true })).toHaveCount(0);
   await expect(page.locator('.nutrition-comparison-models')).not.toContainText('Text-only GLM');
   await expect(page.locator('.nutrition-comparison-models')).not.toContainText('Vision Sonnet');
@@ -564,7 +564,7 @@ test('Debug mode compares meal models against local reference data and can use t
   await page.locator('[data-nutrition-comparison-search]').fill('');
   await expect(page.locator('.nutrition-comparison-model:visible')).toHaveCount(6);
   await expect(page.locator('[data-nutrition-comparison-search-status]')).toHaveText('6 available');
-  const geminiChoice = page.locator('.nutrition-comparison-model').filter({ hasText: 'Vision Gemini 3.7' });
+  const geminiChoice = page.locator('.nutrition-comparison-model').filter({ hasText: 'Vision Gemini Argon' });
   const confidentChoice = page.locator('.nutrition-comparison-model').filter({ hasText: 'Meal Confident' });
   const veniceChoice = page.locator('.nutrition-comparison-model').filter({ hasText: 'Venice Vision' });
   const kimiChoice = page.locator('.nutrition-comparison-model').filter({ hasText: 'Vision Kimi' });
@@ -714,12 +714,12 @@ test('Debug mode compares meal models against local reference data and can use t
   await expect(page.locator('#nutrition-comparison-model-limit')).toHaveText('3 selected · 3 of 4 results');
   await expect(geminiChoice).toContainText('Compared');
   await expect(page.locator('.nutrition-comparison-reference-banner')).toContainText('Comparing against Meal Close');
-  const failedGemini = page.locator('.nutrition-comparison-card.is-error').filter({ hasText: 'Vision Gemini 3.7' });
+  const failedGemini = page.locator('.nutrition-comparison-card.is-error').filter({ hasText: 'Vision Gemini Argon' });
   await expect(failedGemini).toContainText('Rate limited. Please wait a moment and try again.');
   await expect(failedGemini.getByRole('button', { name: 'Retry this model' })).toBeVisible();
   await expect.poll(() => [...requestedModels].sort()).toEqual([
     'openai/gpt-5.6-sol', 'anthropic/claude-opus-5.5',
-    'google/gemini-3.7-flash', 'moonshotai/kimi-k3',
+    'google/gemini-4-argon', 'moonshotai/kimi-k3',
   ].sort());
   expect(peakConcurrentRequests).toBeGreaterThanOrEqual(2);
   await expect(failedGemini.getByRole('button', { name: 'Replace model' })).toBeVisible();
@@ -733,7 +733,7 @@ test('Debug mode compares meal models against local reference data and can use t
   await expect(page.locator('.nutrition-comparison-card')).toHaveCount(3);
   await expect.poll(() => [...requestedModels].sort()).toEqual([
     'openai/gpt-5.6-sol', 'anthropic/claude-opus-5.5',
-    'google/gemini-3.7-flash', 'moonshotai/kimi-k3', 'anthropic/claude-opus-5.5',
+    'google/gemini-4-argon', 'moonshotai/kimi-k3', 'anthropic/claude-opus-5.5',
   ].sort());
   await geminiChoice.locator('input').check();
   await expect(page.locator('#nutrition-run-comparison')).toHaveText('Add 1 model result');
@@ -743,8 +743,8 @@ test('Debug mode compares meal models against local reference data and can use t
   await expect(page.locator('#nutrition-comparison-results')).toHaveAttribute('data-result-count', '4');
   await expect.poll(() => [...requestedModels].sort()).toEqual([
     'openai/gpt-5.6-sol', 'anthropic/claude-opus-5.5',
-    'google/gemini-3.7-flash', 'moonshotai/kimi-k3',
-    'anthropic/claude-opus-5.5', 'google/gemini-3.7-flash',
+    'google/gemini-4-argon', 'moonshotai/kimi-k3',
+    'anthropic/claude-opus-5.5', 'google/gemini-4-argon',
   ].sort());
   await page.setViewportSize({ width: 1100, height: 768 });
   const presentationButton = page.getByRole('button', { name: 'Open full-screen comparison' });
@@ -791,7 +791,7 @@ test('Debug mode compares meal models against local reference data and can use t
   await expect(page.locator('#nutrition-comparison-history')).toContainText('Last comparison restored');
   await expect(page.locator('.nutrition-comparison-card')).toHaveCount(4);
   await expect(page.locator('.nutrition-comparison-reference-banner')).toContainText('Comparing against Meal Close');
-  await expect(page.locator('.nutrition-comparison-card').filter({ hasText: 'Vision Gemini 3.7' })).toContainText('$0.0001');
+  await expect(page.locator('.nutrition-comparison-card').filter({ hasText: 'Vision Gemini Argon' })).toContainText('$0.0001');
   expect(requestedModels).toHaveLength(6);
 });
 
@@ -2027,7 +2027,7 @@ test('the meal editor switches visual models directly and returns from AI Settin
   await expect(page.locator('#modal-overlay')).toBeVisible();
   await page.locator('#openrouter-model-select').selectOption('anthropic/claude-opus-5.5');
   await expect(page.locator('[data-settings-action="set-nutrition-ai-route"] option').first()).toHaveText(/^Follow chat assistant — (Anthropic: )?Claude Opus 5\.5$/);
-  await page.locator('#settings-modal .modal-close').click();
+  await page.locator('#settings-modal [data-settings-action="close"]').click();
 
   await expect(page.locator('#settings-modal-overlay')).not.toBeVisible();
   await expect(page.locator('#modal-overlay')).toBeVisible();
@@ -2046,128 +2046,140 @@ test('the meal editor switches visual models directly and returns from AI Settin
   });
 });
 
-test('nutrition review, Debug comparison, targets, and drink logging fit a narrow mobile modal', async ({ page }) => {
-  await mockMobileNutritionCatalog(page);
-  await page.setViewportSize({ width: 390, height: 844 });
-  await page.goto('/app', { waitUntil: 'load' });
-  await page.evaluate(async () => {
-    const api = await import('/js/api.js');
-    const keys = await import('/js/crypto-key-cache.js');
-    keys.updateKeyCache('labcharts-openrouter-key', 'test-openrouter-key');
-    localStorage.setItem('labcharts-debug', 'true');
-    localStorage.setItem('labcharts-openrouter-model', 'openai/gpt-5.6-sol');
-    localStorage.setItem('labcharts-openrouter-models', JSON.stringify([
-      { id: 'openai/gpt-5.6-sol', name: 'Vision A' },
-      { id: 'anthropic/claude-opus-5.5', name: 'Vision B' },
-    ]));
-    localStorage.setItem('labcharts-openrouter-vision-models', JSON.stringify(['openai/gpt-5.6-sol', 'anthropic/claude-opus-5.5']));
-    api.setAIProvider('openrouter');
-    await (await import('/js/nutrition.js')).openNutritionEditor();
+// Size bounds below verify the application's coarse-pointer touch targets.
+test.describe('coarse-pointer touch targets', () => {
+  test.use({ hasTouch: true });
+  test.beforeEach(async ({ page }) => {
+    expect(await page.evaluate(() => ({
+      coarse: matchMedia('(pointer: coarse)').matches,
+      fine: matchMedia('(pointer: fine)').matches,
+      touch: navigator.maxTouchPoints > 0,
+    }))).toEqual({ coarse: true, fine: false, touch: true });
   });
 
-  await page.locator('#nutrition-meal-name').fill('Fried Edam cheese');
-  await page.locator('#nutrition-meal-type').selectOption('dinner');
-  await page.locator('[data-nutrition-action="add-component"]').click();
-  await page.locator('[data-nutrition-component-name="0"]').fill('Breaded fried Edam cheese');
-  await page.locator('[data-nutrition-component-grams="0"]').fill('180');
-  await page.locator('[data-nutrition-component-grams="0"]').blur();
-  await page.locator('#nutrition-carbohydrateG').fill('90');
-  await page.locator('#nutrition-fatG').fill('40');
-  await expect(page.locator('#nutrition-fuel-preview')).toBeVisible();
-  await page.locator('[data-nutrition-action="toggle-comparison"]').first().click();
-
-  const mobileLayout = await page.evaluate(() => {
-    const modal = document.querySelector<HTMLElement>('#detail-modal');
-    const modalRect = modal!.getBoundingClientRect();
-    const selectors = [
-      '#nutrition-meal-type', '.nutrition-component-row', '#nutrition-model-comparison',
-      '.nutrition-comparison-model', '.nutrition-comparison-reference-grid', '.nutrition-fuel-preview',
-    ];
-    const offenders = selectors.flatMap((selector: string) => [...document.querySelectorAll<HTMLElement>(selector)])
-      .filter(element => {
-        const rect = element.getBoundingClientRect();
-        return rect.left < modalRect.left - 1 || rect.right > modalRect.right + 1;
-      })
-      .map(element => element.className || element.id || element.tagName);
-    const touchTargets = [
-      document.querySelector<HTMLElement>('#detail-modal > .modal-close'),
-      document.querySelector<HTMLElement>('.nutrition-mode-navigation button'),
-      document.querySelector<HTMLElement>('#nutrition-run-comparison'),
-      document.querySelector<HTMLElement>('.nutrition-comparison-model'),
-    ].filter(Boolean).map(element => {
-      const rect = element!.getBoundingClientRect();
-      return { width: rect.width, height: rect.height };
+  test('nutrition review, Debug comparison, targets, and drink logging fit a narrow mobile modal', async ({ page }) => {
+    await mockMobileNutritionCatalog(page);
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto('/app', { waitUntil: 'load' });
+    await page.evaluate(async () => {
+      const api = await import('/js/api.js');
+      const keys = await import('/js/crypto-key-cache.js');
+      keys.updateKeyCache('labcharts-openrouter-key', 'test-openrouter-key');
+      localStorage.setItem('labcharts-debug', 'true');
+      localStorage.setItem('labcharts-openrouter-model', 'openai/gpt-5.6-sol');
+      localStorage.setItem('labcharts-openrouter-models', JSON.stringify([
+        { id: 'openai/gpt-5.6-sol', name: 'Vision A' },
+        { id: 'anthropic/claude-opus-5.5', name: 'Vision B' },
+      ]));
+      localStorage.setItem('labcharts-openrouter-vision-models', JSON.stringify(['openai/gpt-5.6-sol', 'anthropic/claude-opus-5.5']));
+      api.setAIProvider('openrouter');
+      await (await import('/js/nutrition.js')).openNutritionEditor();
     });
-    const controlFontSizes = [
-      document.querySelector<HTMLElement>('[data-nutrition-reference="mealName"]'),
-      document.querySelector<HTMLElement>('[data-nutrition-reference="energyKcal"]'),
-      document.querySelector<HTMLElement>('#nutrition-meal-type'),
-    ].filter(Boolean).map(element => Number.parseFloat(getComputedStyle(element!).fontSize));
-    return {
-      modalOverflow: modal!.scrollWidth - modal!.clientWidth,
-      modalInsideViewport: modalRect.left >= -1 && modalRect.right <= innerWidth + 1
-        && modalRect.top >= -1 && modalRect.bottom <= innerHeight + 1,
-      offenders,
-      touchTargets,
-      controlFontSizes,
-    };
-  });
-  expect(mobileLayout.modalOverflow).toBeLessThanOrEqual(1);
-  expect(mobileLayout.modalInsideViewport).toBe(true);
-  expect(mobileLayout.offenders).toEqual([]);
-  expect(mobileLayout.touchTargets.every(target => target.width >= 44 && target.height >= 44)).toBe(true);
-  expect(mobileLayout.controlFontSizes.every(size => size >= 16)).toBe(true);
-  const firstModel = page.locator('[data-nutrition-comparison-model]').first();
-  await firstModel.uncheck();
-  await expect(page.locator('[data-nutrition-comparison-model]:checked')).toHaveCount(1);
-  await firstModel.check();
-  await expect(page.locator('[data-nutrition-comparison-model]:checked')).toHaveCount(2);
-  await page.getByRole('button', { name: 'Log meal' }).click();
-  await expect(page.locator('.nutrition-component-confidence')).toContainText('Review identity');
 
-  const mobileSurfaces = [
-    {
-      open: 'openNutritionTargets',
-      selectors: ['#nutrition-target-settings', '.nutrition-target-form', '.nutrition-widget-metric-group'],
-      controls: ['#nutrition-target-energy', '#nutrition-target-protein-basis'],
-      targets: ['.nutrition-widget-metric-option', '[data-nutrition-action="save-targets"]'],
-    },
-    {
-      open: 'openFluidLog',
-      selectors: ['.nutrition-fluid-log', '.nutrition-fluid-kind-grid', '.nutrition-fluid-presets', '.nutrition-fluid-preview'],
-      controls: ['#nutrition-fluid-amount', '#nutrition-fluid-at', '#nutrition-fluid-label'],
-      targets: ['.nutrition-fluid-kind', '.nutrition-fluid-preset', '[data-nutrition-action="save-fluid"]'],
-    },
-  ];
-  for (const surface of mobileSurfaces) {
-    await page.evaluate(async open => (await import('/js/nutrition.js'))[open as 'openNutritionTargets'|'openFluidLog'](), surface.open);
-    const audit = await page.evaluate(({ selectors, controls, targets }) => {
+    await page.locator('#nutrition-meal-name').fill('Fried Edam cheese');
+    await page.locator('#nutrition-meal-type').selectOption('dinner');
+    await page.locator('[data-nutrition-action="add-component"]').click();
+    await page.locator('[data-nutrition-component-name="0"]').fill('Breaded fried Edam cheese');
+    await page.locator('[data-nutrition-component-grams="0"]').fill('180');
+    await page.locator('[data-nutrition-component-grams="0"]').blur();
+    await page.locator('#nutrition-carbohydrateG').fill('90');
+    await page.locator('#nutrition-fatG').fill('40');
+    await expect(page.locator('#nutrition-fuel-preview')).toBeVisible();
+    await page.locator('[data-nutrition-action="toggle-comparison"]').first().click();
+
+    const mobileLayout = await page.evaluate(() => {
       const modal = document.querySelector<HTMLElement>('#detail-modal');
       const modalRect = modal!.getBoundingClientRect();
+      const selectors = [
+        '#nutrition-meal-type', '.nutrition-component-row', '#nutrition-model-comparison',
+        '.nutrition-comparison-model', '.nutrition-comparison-reference-grid', '.nutrition-fuel-preview',
+      ];
       const offenders = selectors.flatMap((selector: string) => [...document.querySelectorAll<HTMLElement>(selector)])
         .filter(element => {
           const rect = element.getBoundingClientRect();
           return rect.left < modalRect.left - 1 || rect.right > modalRect.right + 1;
-        });
-      const fontSizes = controls.flatMap((selector: string) => [...document.querySelectorAll<HTMLElement>(selector)])
-        .map(element => Number.parseFloat(getComputedStyle(element!).fontSize));
-      const touchTargets = targets.flatMap((selector: string) => [...document.querySelectorAll<HTMLElement>(selector)])
-        .map(element => element.getBoundingClientRect());
+        })
+        .map(element => element.className || element.id || element.tagName);
+      const touchTargets = [
+        document.querySelector<HTMLElement>('#detail-modal > .modal-close'),
+        document.querySelector<HTMLElement>('.nutrition-mode-navigation button'),
+        document.querySelector<HTMLElement>('#nutrition-run-comparison'),
+        document.querySelector<HTMLElement>('.nutrition-comparison-model'),
+      ].filter(Boolean).map(element => {
+        const rect = element!.getBoundingClientRect();
+        return { width: rect.width, height: rect.height };
+      });
+      const controlFontSizes = [
+        document.querySelector<HTMLElement>('[data-nutrition-reference="mealName"]'),
+        document.querySelector<HTMLElement>('[data-nutrition-reference="energyKcal"]'),
+        document.querySelector<HTMLElement>('#nutrition-meal-type'),
+      ].filter(Boolean).map(element => Number.parseFloat(getComputedStyle(element!).fontSize));
       return {
         modalOverflow: modal!.scrollWidth - modal!.clientWidth,
         modalInsideViewport: modalRect.left >= -1 && modalRect.right <= innerWidth + 1
           && modalRect.top >= -1 && modalRect.bottom <= innerHeight + 1,
-        offenderCount: offenders.length,
-        fontSizes,
-        targetSizes: touchTargets.map(rect => ({ width: rect.width, height: rect.height })),
+        offenders,
+        touchTargets,
+        controlFontSizes,
       };
-    }, surface);
-    expect(audit.modalOverflow).toBeLessThanOrEqual(1);
-    expect(audit.modalInsideViewport).toBe(true);
-    expect(audit.offenderCount).toBe(0);
-    expect(audit.fontSizes.every(size => size >= 16)).toBe(true);
-    expect(audit.targetSizes.every(target => target.width >= 44 && target.height >= 44)).toBe(true);
-  }
+    });
+    expect(mobileLayout.modalOverflow).toBeLessThanOrEqual(1);
+    expect(mobileLayout.modalInsideViewport).toBe(true);
+    expect(mobileLayout.offenders).toEqual([]);
+    expect(mobileLayout.touchTargets.every(target => target.width >= 44 && target.height >= 44)).toBe(true);
+    expect(mobileLayout.controlFontSizes.every(size => size >= 16)).toBe(true);
+    const firstModel = page.locator('[data-nutrition-comparison-model]').first();
+    await firstModel.uncheck();
+    await expect(page.locator('[data-nutrition-comparison-model]:checked')).toHaveCount(1);
+    await firstModel.check();
+    await expect(page.locator('[data-nutrition-comparison-model]:checked')).toHaveCount(2);
+    await page.getByRole('button', { name: 'Log meal' }).click();
+    await expect(page.locator('.nutrition-component-confidence')).toContainText('Review identity');
+
+    const mobileSurfaces = [
+      {
+        open: 'openNutritionTargets',
+        selectors: ['#nutrition-target-settings', '.nutrition-target-form', '.nutrition-widget-metric-group'],
+        controls: ['#nutrition-target-energy', '#nutrition-target-protein-basis'],
+        targets: ['.nutrition-widget-metric-option', '[data-nutrition-action="save-targets"]'],
+      },
+      {
+        open: 'openFluidLog',
+        selectors: ['.nutrition-fluid-log', '.nutrition-fluid-kind-grid', '.nutrition-fluid-presets', '.nutrition-fluid-preview'],
+        controls: ['#nutrition-fluid-amount', '#nutrition-fluid-at', '#nutrition-fluid-label'],
+        targets: ['.nutrition-fluid-kind', '.nutrition-fluid-preset', '[data-nutrition-action="save-fluid"]'],
+      },
+    ];
+    for (const surface of mobileSurfaces) {
+      await page.evaluate(async open => (await import('/js/nutrition.js'))[open as 'openNutritionTargets'|'openFluidLog'](), surface.open);
+      const audit = await page.evaluate(({ selectors, controls, targets }) => {
+        const modal = document.querySelector<HTMLElement>('#detail-modal');
+        const modalRect = modal!.getBoundingClientRect();
+        const offenders = selectors.flatMap((selector: string) => [...document.querySelectorAll<HTMLElement>(selector)])
+          .filter(element => {
+            const rect = element.getBoundingClientRect();
+            return rect.left < modalRect.left - 1 || rect.right > modalRect.right + 1;
+          });
+        const fontSizes = controls.flatMap((selector: string) => [...document.querySelectorAll<HTMLElement>(selector)])
+          .map(element => Number.parseFloat(getComputedStyle(element!).fontSize));
+        const touchTargets = targets.flatMap((selector: string) => [...document.querySelectorAll<HTMLElement>(selector)])
+          .map(element => element.getBoundingClientRect());
+        return {
+          modalOverflow: modal!.scrollWidth - modal!.clientWidth,
+          modalInsideViewport: modalRect.left >= -1 && modalRect.right <= innerWidth + 1
+            && modalRect.top >= -1 && modalRect.bottom <= innerHeight + 1,
+          offenderCount: offenders.length,
+          fontSizes,
+          targetSizes: touchTargets.map(rect => ({ width: rect.width, height: rect.height })),
+        };
+      }, surface);
+      expect(audit.modalOverflow).toBeLessThanOrEqual(1);
+      expect(audit.modalInsideViewport).toBe(true);
+      expect(audit.offenderCount).toBe(0);
+      expect(audit.fontSizes.every(size => size >= 16)).toBe(true);
+      expect(audit.targetSizes.every(target => target.width >= 44 && target.height >= 44)).toBe(true);
+    }
+  });
 });
 
 test('mobile photo analysis moves focus to the editable review', async ({ page }) => {
@@ -2248,55 +2260,67 @@ test('a recent meal opens into its saved photo, nutrients, and uncertainty detai
   await expect(page.locator('[data-nutrition-action="back"]')).toBeVisible();
 });
 
-test('the logger links to a bounded chronological meal timeline on mobile', async ({ page }) => {
-  await page.setViewportSize({ width: 390, height: 844 });
-  await page.goto('/app', { waitUntil: 'load' });
-  await page.evaluate(async () => {
-    const store = await import('/js/nutrition-store.js');
-    const base = new Date();
-    for (let index = 0; index < 50; index += 1) {
-      const eatenAt = new Date(base);
-      eatenAt.setDate(eatenAt.getDate() - Math.floor(index / 2));
-      eatenAt.setHours(index % 2 ? 12 : 18, 0, 0, 0);
-      const localDate = `${eatenAt.getFullYear()}-${String(eatenAt.getMonth() + 1).padStart(2, '0')}-${String(eatenAt.getDate()).padStart(2, '0')}`;
-      await store.saveActiveProfileMeal({
-        name: `Recent meal ${index + 1}`,
-        eatenAt: eatenAt.toISOString(),
-        localDate,
-        localTimeMinutes: index % 2 ? 720 : 1080,
-        mealType: 'snack',
-        nutrients: { energyKcal: 200 + index },
-        components: [{ name: `Ingredient ${index + 1}`, quantityG: 100 }],
-        reviewed: true,
-      });
-    }
-    await (await import('/js/nutrition.js')).openNutritionEditor();
+// Size bounds below verify the application's coarse-pointer touch targets.
+test.describe('coarse-pointer touch targets', () => {
+  test.use({ hasTouch: true });
+  test.beforeEach(async ({ page }) => {
+    expect(await page.evaluate(() => ({
+      coarse: matchMedia('(pointer: coarse)').matches,
+      fine: matchMedia('(pointer: fine)').matches,
+      touch: navigator.maxTouchPoints > 0,
+    }))).toEqual({ coarse: true, fine: false, touch: true });
   });
 
-  const recent = page.locator('.nutrition-recent');
-  const manualTab = page.getByRole('tab', { name: 'Manual' });
-  expect(await manualTab.evaluate(element => element.getBoundingClientRect().height)).toBeGreaterThanOrEqual(44);
-  await manualTab.click();
-  await expect(page.locator('#detail-modal')).toHaveClass(/nutrition-manual-mode/);
-  await expect(page.locator('.nutrition-photo-picker')).toBeHidden();
-  await expect(page.locator('.nutrition-review-panel')).toBeVisible();
-  await expect(recent).toContainText('Browse every saved meal');
-  await expect(recent.locator('.nutrition-meal-row')).toHaveCount(0);
-  await recent.getByRole('button', { name: 'Browse meals' }).click();
-  const modal = page.locator('#detail-modal');
-  const timeline = page.locator('.nutrition-meal-timeline');
-  await expect(page.getByRole('tab', { name: 'Meals' })).toHaveAttribute('aria-selected', 'true');
-  await expect(page.locator('.nutrition-history-meals-head')).toContainText('50 entries');
-  await expect(page.locator('.nutrition-history-meals-head')).toContainText('Showing newest 12 of 50');
-  await expect(timeline.locator('.nutrition-meal-row')).toHaveCount(12);
-  await expect(timeline.locator('.nutrition-meal-row').first()).toContainText('Recent meal 1');
-  expect(await timeline.locator('.nutrition-meal-delete').first().evaluate(element => element.getBoundingClientRect().height)).toBeGreaterThanOrEqual(44);
-  const showMore = page.getByRole('button', { name: /Show more meals/ });
-  await expect(showMore).toContainText('38 remaining');
-  expect(await showMore.evaluate(element => element.getBoundingClientRect().height)).toBeGreaterThanOrEqual(44);
-  await modal.evaluate(element => { element.scrollTop = 240; });
-  await showMore.evaluate((element:HTMLElement) => element.click());
-  await expect(timeline.locator('.nutrition-meal-row')).toHaveCount(24);
-  await expect(page.getByRole('button', { name: /Show more meals/ })).toContainText('26 remaining');
-  await expect.poll(() => modal.evaluate(element => element.scrollTop)).toBeGreaterThanOrEqual(230);
+  test('the logger links to a bounded chronological meal timeline on mobile', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto('/app', { waitUntil: 'load' });
+    await page.evaluate(async () => {
+      const store = await import('/js/nutrition-store.js');
+      const base = new Date();
+      for (let index = 0; index < 50; index += 1) {
+        const eatenAt = new Date(base);
+        eatenAt.setDate(eatenAt.getDate() - Math.floor(index / 2));
+        eatenAt.setHours(index % 2 ? 12 : 18, 0, 0, 0);
+        const localDate = `${eatenAt.getFullYear()}-${String(eatenAt.getMonth() + 1).padStart(2, '0')}-${String(eatenAt.getDate()).padStart(2, '0')}`;
+        await store.saveActiveProfileMeal({
+          name: `Recent meal ${index + 1}`,
+          eatenAt: eatenAt.toISOString(),
+          localDate,
+          localTimeMinutes: index % 2 ? 720 : 1080,
+          mealType: 'snack',
+          nutrients: { energyKcal: 200 + index },
+          components: [{ name: `Ingredient ${index + 1}`, quantityG: 100 }],
+          reviewed: true,
+        });
+      }
+      await (await import('/js/nutrition.js')).openNutritionEditor();
+    });
+
+    const recent = page.locator('.nutrition-recent');
+    const manualTab = page.getByRole('tab', { name: 'Manual' });
+    expect(await manualTab.evaluate(element => element.getBoundingClientRect().height)).toBeGreaterThanOrEqual(44);
+    await manualTab.click();
+    await expect(page.locator('#detail-modal')).toHaveClass(/nutrition-manual-mode/);
+    await expect(page.locator('.nutrition-photo-picker')).toBeHidden();
+    await expect(page.locator('.nutrition-review-panel')).toBeVisible();
+    await expect(recent).toContainText('Browse every saved meal');
+    await expect(recent.locator('.nutrition-meal-row')).toHaveCount(0);
+    await recent.getByRole('button', { name: 'Browse meals' }).click();
+    const modal = page.locator('#detail-modal');
+    const timeline = page.locator('.nutrition-meal-timeline');
+    await expect(page.getByRole('tab', { name: 'Meals' })).toHaveAttribute('aria-selected', 'true');
+    await expect(page.locator('.nutrition-history-meals-head')).toContainText('50 entries');
+    await expect(page.locator('.nutrition-history-meals-head')).toContainText('Showing newest 12 of 50');
+    await expect(timeline.locator('.nutrition-meal-row')).toHaveCount(12);
+    await expect(timeline.locator('.nutrition-meal-row').first()).toContainText('Recent meal 1');
+    expect(await timeline.locator('.nutrition-meal-delete').first().evaluate(element => element.getBoundingClientRect().height)).toBeGreaterThanOrEqual(44);
+    const showMore = page.getByRole('button', { name: /Show more meals/ });
+    await expect(showMore).toContainText('38 remaining');
+    expect(await showMore.evaluate(element => element.getBoundingClientRect().height)).toBeGreaterThanOrEqual(44);
+    await modal.evaluate(element => { element.scrollTop = 240; });
+    await showMore.evaluate((element:HTMLElement) => element.click());
+    await expect(timeline.locator('.nutrition-meal-row')).toHaveCount(24);
+    await expect(page.getByRole('button', { name: /Show more meals/ })).toContainText('26 remaining');
+    await expect.poll(() => modal.evaluate(element => element.scrollTop)).toBeGreaterThanOrEqual(230);
+  });
 });

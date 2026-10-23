@@ -1,3 +1,4 @@
+import {tsStateStyles} from './ts-state-ui-inline-style-map.generated.js';
 export interface DetachedModalSyncRefreshOptions {
   overlay?: HTMLElement; id?: string; opener?: (id?: string) => void; exists?: (id?: string) => boolean;
   bodySelector?: string; restoreSelector?: string;
@@ -16,6 +17,8 @@ export interface MarkerTrend { arrow: string; cls: string; label: string; }
 // utils.js — Pure utility functions, notifications, dialogs
 
 import { closeModalOverlay, openModalOverlay } from './modal-lifecycle.js';
+import { renderUtilsConfirm, renderUtilsPrompt } from './utils-dialog-rendering.js';
+import { renderAnalyticsConsentBody } from './analytics-consent-rendering.js';
 import {
   addUtilsRuntimeListener,
   getUtilsElementStyleRuntime,
@@ -428,16 +431,7 @@ export function maybeShowAnalyticsConsent() {
   banner.className = 'analytics-consent-banner';
   banner.setAttribute('role', 'region');
   banner.setAttribute('aria-label', 'Analytics consent');
-  banner.innerHTML = `
-    <div class="analytics-consent-body">
-      <span aria-hidden="true">📊</span>
-      <span class="analytics-consent-copy analytics-consent-copy-long">Cookieless usage stats are <strong>on</strong> to help improve getbased. Health records, chat content, uploaded files, and provider credentials are not included.</span>
-      <span class="analytics-consent-copy analytics-consent-copy-short">Cookieless usage stats are <strong>on</strong>. No health data.</span>
-    </div>
-    <div class="analytics-consent-actions">
-      <button type="button" class="analytics-consent-btn analytics-consent-btn-primary" ${ANALYTICS_CONSENT_ACTION_ATTR}="dismiss">Got it</button>
-      <button type="button" class="analytics-consent-btn" ${ANALYTICS_CONSENT_ACTION_ATTR}="disable">Turn off</button>
-    </div>`;
+  banner.innerHTML = renderAnalyticsConsentBody();
   banner.addEventListener('click', handleAnalyticsConsentActionClick);
   document.body.appendChild(banner);
   document.body.classList.add('analytics-consent-visible');
@@ -473,7 +467,7 @@ export function showNotification(message: unknown, type?: string, duration?: num
   toast.appendChild(document.createTextNode(' ' + message));
   container.appendChild(toast);
   setTimeout(() => {
-    toast.style.opacity = "0"; toast.style.transform = "translateX(100%)"; toast.style.transition = "all 0.3s";
+    toast.style.opacity = tsStateStyles.fadeOpacity; toast.style.transform = tsStateStyles.toastTransform; toast.style.transition = tsStateStyles.toastTransition;
     setTimeout(() => toast.remove(), 300);
   }, duration || 3000);
 }
@@ -491,12 +485,7 @@ export function showConfirmDialog(message: string, options: ConfirmDialogOptions
       overlay.className = "confirm-overlay";
       document.body.appendChild(overlay);
     }
-    overlay.innerHTML = `<div class="confirm-dialog" role="alertdialog" aria-modal="true" aria-label="${escapeHTML(ariaLabel)}">
-    <p class="confirm-message">${escapeHTML(message)}</p>
-    <div class="confirm-actions">
-      <button class="confirm-btn confirm-btn-cancel" id="confirm-cancel">${escapeHTML(cancelLabel)}</button>
-      <button class="confirm-btn confirm-btn-${confirmTone}" id="confirm-ok">${escapeHTML(confirmLabel)}</button>
-    </div></div>`;
+    overlay.innerHTML = renderUtilsConfirm({ ariaLabel, message, cancelLabel, confirmLabel, tone: confirmTone });
     const ok = (overlay.querySelector('#confirm-ok') as HTMLButtonElement | null);
     const cancel = (overlay.querySelector('#confirm-cancel') as HTMLButtonElement | null);
     if (!ok || !cancel) {
@@ -534,6 +523,8 @@ export function showConfirmDialog(message: string, options: ConfirmDialogOptions
         }
       }
     };
+    // Reused confirmation must follow a parent opened after its last use.
+    if (overlay !== document.body.lastElementChild) document.body.appendChild(overlay);
     openModalOverlay(overlay, { initialFocus: '#confirm-cancel', focusDelay: 0 });
     ok.onclick = () => close(true);
     cancel.onclick = () => close(false);
@@ -556,16 +547,7 @@ export function showPromptDialog(message: string, { defaultValue = '', okLabel =
       overlay.className = 'confirm-overlay';
       document.body.appendChild(overlay);
     }
-    overlay.innerHTML = `<div class="confirm-dialog" role="dialog" aria-modal="true" aria-label="Prompt">
-      <p class="confirm-message">${escapeHTML(message)}</p>
-      <input type="${escapeAttr(inputType)}" id="prompt-dialog-input" class="confirm-input"
-             value="${escapeAttr(defaultValue)}"
-             placeholder="${escapeAttr(placeholder)}"
-             aria-label="${escapeAttr(message)}">
-      <div class="confirm-actions">
-        <button class="confirm-btn confirm-btn-cancel" id="prompt-cancel">${escapeHTML(cancelLabel)}</button>
-        <button class="confirm-btn confirm-btn-primary" id="prompt-ok">${escapeHTML(okLabel)}</button>
-      </div></div>`;
+    overlay.innerHTML = renderUtilsPrompt({ message, inputType, defaultValue, placeholder, cancelLabel, okLabel });
 
     const input = (overlay.querySelector('#prompt-dialog-input') as HTMLInputElement | null);
     const ok = (overlay.querySelector('#prompt-ok') as HTMLButtonElement | null);

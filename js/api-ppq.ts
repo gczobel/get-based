@@ -32,7 +32,7 @@ type PpqApiWindow = Window & typeof globalThis & { _ppqAttestation?: unknown };
 
 const apiWindow = (typeof window !== 'undefined' ? window : {}) as PpqApiWindow;
 
-const PPQ_CURATED = ['claude-', 'anthropic/claude-', 'gpt-6-astra', 'openai/gpt-6-astra', 'gpt-6-sol', 'openai/gpt-6-sol', 'openai/gpt-5', 'gpt-5', 'gpt-4', 'gpt-oss', 'gemini-3', 'gemini-2', 'google/gemini-3', 'google/gemini-2', 'glm-5', 'z-ai/glm-5', 'moonshotai/kimi-', 'grok-', 'x-ai/grok-4', 'llama-', 'qwen', 'deepseek-', 'mistral-', 'kimi', 'perplexity'];
+const PPQ_CURATED = ['deepseek/deepseek', '~deepseek/deepseek', 'gemini-4', 'google/gemini-4', 'muse-', 'meta/muse-', 'claude-', 'anthropic/claude-', 'gpt-6-astra', 'openai/gpt-6-astra', 'gpt-6-sol', 'openai/gpt-6-sol', 'openai/gpt-5', 'gpt-5', 'gpt-4', 'gpt-oss', 'gemini-3', 'gemini-2', 'google/gemini-3', 'google/gemini-2', 'glm-5', 'z-ai/glm-5', 'moonshotai/kimi-', 'grok-', 'x-ai/grok-4', 'llama-', 'qwen', 'deepseek-', 'mistral-', 'kimi', 'perplexity'];
 const PPQ_DEFAULT_CANDIDATES = ['gpt-6-astra', 'openai/gpt-6-astra', 'gpt-6-sol', 'openai/gpt-6-sol', 'gpt-5.5', 'openai/gpt-5.5', 'claude-sonnet-5', 'claude-sonnet-4.6'];
 const PPQ_EXCLUDE = ['codex', 'audio', 'image', 'embed', 'tts', 'whisper', 'video', 'nano-banana'];
 // The PPQ API is authoritative for private-model availability, names, and
@@ -103,7 +103,7 @@ export async function checkPpqTopupStatus(invoiceId: string) {
   return res.json() as Promise<PpqTopupStatus>;
 }
 
-export async function fetchPpqModels(key?: unknown) {
+export async function fetchPpqModels(key?: unknown, options: { isCurrent?: () => boolean } = {}) {
   try {
     const headers: Record<string, string> = {};
     if (key || getPpqKey()) headers['Authorization'] = 'Bearer ' + (key || getPpqKey());
@@ -142,6 +142,9 @@ export async function fetchPpqModels(key?: unknown) {
         }
       }
     }
+    // A Settings request may outlive its account. Reject every stale cache write
+    // while preserving explicit-key callers that do not need an ownership guard.
+    if (options.isCurrent && !options.isCurrent()) return [];
     localStorage.setItem('labcharts-ppq-pricing', JSON.stringify(pricingCache));
     const visionIds = rawModels.filter(function(m) {
       if (!m.id || !m.architecture) return false;

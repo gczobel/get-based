@@ -13,6 +13,7 @@
 // tests/playwright/chat-threads-dom.spec.js on the Playwright runner.
 
 import './_node-shim.js';
+import { ownedRule, escapedClass } from './helpers/legacy-light-chat-contracts.js';
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -371,6 +372,7 @@ assert('profile-runtime preserves the lazy Chat boundary until first use',
 console.log('17. Thread Search Extraction (source inspection)');
 const chatThreadsSrc = read('js/chat-threads.js');
 const chatThreadViewSrc = read('js/chat-thread-list-view.js');
+const navigationSrc = read('js/components/ChatThreadNavigation.svelte');
 const chatWindowBindingsSrc = read('js/chat-window-bindings.js');
 const chatThreadSearchSrc = read('js/chat-thread-search.js');
 const inlineHandlerRe = /\bon(?:click|change|input|search|keydown|keyup|submit)=/;
@@ -411,17 +413,15 @@ assert('chat-thread-search uses overflow sentinel before truncation banner',
 assert('chat-threads render path uses delegated thread actions',
   chatThreadsSrc.includes('renderChatThreadList(getChatThreadSort(), filter)') &&
   !inlineHandlerRe.test(chatThreadViewSrc) &&
-  chatThreadViewSrc.includes('data-chat-thread-action="switch"') &&
-  chatThreadViewSrc.includes('data-chat-thread-action="rename"') &&
-  chatThreadViewSrc.includes('data-chat-thread-action="delete"'));
-assert('chat-threads installs an idempotent click delegate',
-  chatThreadsSrc.includes('let chatThreadDelegatesInstalled = false') &&
-    chatThreadsSrc.includes("document.addEventListener('click', handleThreadActionClick)") &&
-    chatThreadsSrc.includes('installChatThreadDelegates();'));
-assert('chat-threads uses delegated pointer gestures for reliable project drag and drop',
-  chatThreadsSrc.includes("document.addEventListener('pointerdown', handleThreadPointerDown)")
-    && chatThreadsSrc.includes("document.addEventListener('pointermove', handleThreadPointerMove")
-    && chatThreadsSrc.includes('projectDropTargetAt(event.clientX, event.clientY)'));
+  navigationSrc.includes('data-chat-thread-action="switch"') &&
+  navigationSrc.includes('data-chat-thread-action="rename"') &&
+  navigationSrc.includes('data-chat-thread-action="delete"'));
+assert('chat-threads configures shared owned actions without duplicate document delegates',
+  chatThreadsSrc.includes('configureThreadNavigationActions({') && chatThreadsSrc.includes('installChatThreadDelegates();') &&
+  !chatThreadsSrc.includes('handleThreadActionClick') && navigationSrc.includes('event.stopPropagation(); choose(() => actions.switch(thread.id))'));
+assert('owned navigation owns scoped project pointer gestures and teardown',
+  navigationSrc.includes('onpointermove={pointerMove}') && navigationSrc.includes('onpointerup={pointerUp}') &&
+  navigationSrc.includes('targetAt(event)') && navigationSrc.includes('onDestroy(') && navigationSrc.includes('clearDrag()'));
 
 // ═══════════════════════════════════════════════
 // 18. CSS Inspection
@@ -431,11 +431,22 @@ const cssSrc = ['styles.css', 'css/chat-panel.css', 'css/chat-panel-open.css', '
 const indexSrc = read('index.html');
 assert('CSS has .chat-thread-rail', cssSrc.includes('.chat-thread-rail'));
 assert('CSS has .chat-thread-rail.open', cssSrc.includes('.chat-thread-rail.open'));
-assert('CSS has .chat-thread-item', cssSrc.includes('.chat-thread-item'));
-assert('CSS has .chat-thread-item.active', cssSrc.includes('.chat-thread-item.active'));
+assert('owned thread rows have scoped Tailwind styling', navigationSrc.includes('chat-thread-item gb:thread-nav:relative') && cssSrc.includes('data-chat-thread-navigation-view'));
+assert('active thread rows retain accent treatment', navigationSrc.includes("thread.active ? 'active gb:thread-nav:border-accent"));
 assert('CSS has .chat-panel-conversation', cssSrc.includes('.chat-panel-conversation'));
-assert('CSS has .chat-rail-toggle', cssSrc.includes('.chat-rail-toggle'));
-assert('CSS has compact thread action menu', cssSrc.includes('.chat-thread-item-menu-popover'));
+const chatHeaderSrc = read('js/components/ChatHeader.svelte');
+const headerClassesSrc = read('js/chat-header-classes.js');
+const { HEADER_BUTTON } = await import('../js/chat-header-classes.js');
+assert('CSS has .chat-rail-toggle',
+  chatHeaderSrc.includes('chat-rail-toggle {HEADER_BUTTON}')
+    && chatHeaderSrc.includes('data-chat-action="toggle-thread-rail"')
+    && chatHeaderSrc.includes('aria-expanded={layout.railOpen}')
+    && headerClassesSrc.includes('export const HEADER_BUTTON')
+    && HEADER_BUTTON.split(/\s+/).includes('gb:header:size-[30px]')
+    && ownedRule(read('css/chat-panel-open.css'),
+      escapedClass('gb:header:size-[30px]') + ':is([data-chat-header-view],[data-chat-header-view] *)',
+      { width: '30px', height: '30px' }));
+assert('owned thread action menu retains its control contract', navigationSrc.includes('chat-thread-item-menu-popover') && navigationSrc.includes('THREAD_MENU'));
 assert('CSS has mobile rail overlay', cssSrc.includes('.chat-thread-rail.open') && cssSrc.includes('768px'));
 assert('chat thread list is a named keyboard-focusable region',
   indexSrc.includes('id="chat-thread-list"')

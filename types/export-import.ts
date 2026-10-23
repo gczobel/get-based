@@ -15,6 +15,7 @@ export interface ImportedDataOperations extends Record<string, unknown> {
   menstrualCycle?: MenstrualOperations; emfAssessment?: { assessments?: ImportRowOperations[] } | null;
   genetics?: { snps?: unknown; mtdna?: unknown } | null; biometrics?: { weight?: ImportRowOperations[]; pulse?: ImportRowOperations[]; bp?: ImportRowOperations[] };
   markerNotes?: Record<string, unknown>; markerValueNotes?: Record<string, unknown>; manualValues?: Record<string, unknown>;
+  manualBodyReadings?: Record<string, unknown>;
   manualMetricTombstones?: Record<string, unknown>;
   sunSessions?: ImportRowOperations[]; deviceSessions?: ImportRowOperations[]; lightDevices?: ImportRowOperations[];
   lightAudits?: ImportRowOperations[]; lightMeasurements?: ImportRowOperations[];

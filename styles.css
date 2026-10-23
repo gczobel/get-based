@@ -25,6 +25,10 @@
   --green: #34d399;
   --green-bg: rgba(52, 211, 153, 0.15);
   --red: #f87171;
+  --on-danger: #030712;
+  --danger-ink: var(--red);
+  --success-ink: var(--green);
+  --warning-ink: var(--yellow);
   --red-bg: rgba(248, 113, 113, 0.15);
   --yellow: #fbbf24;
   --yellow-bg: rgba(251, 191, 36, 0.15);
@@ -69,6 +73,10 @@
   --green: #059669;
   --green-bg: rgba(5,150,105,0.12);
   --red: #dc2626;
+  --on-danger: #ffffff;
+  --danger-ink: #b91c1c;
+  --success-ink: #166534;
+  --warning-ink: #92400e;
   --red-bg: rgba(220,38,38,0.1);
   /* Light-theme yellow darkened from #d97706 (amber-600, ~4.0:1 on
      light bg — fails WCAG AA 4.5:1) to #b45309 (amber-700, ~5.7:1).
@@ -107,9 +115,6 @@
 [data-theme="light"] .supp-timeline,
 [data-theme="light"] .alert-card,
 [data-theme="light"] .light-today-strip,
-[data-theme="light"] .light-conditions-now-wrap,
-[data-theme="light"] .light-setup-card,
-[data-theme="light"] .light-setup-summary,
 [data-theme="light"] .light-channels-section,
 [data-theme="light"] .light-explainer,
 [data-theme="light"] .light-data-source-details,

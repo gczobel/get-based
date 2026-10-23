@@ -1,188 +1,784 @@
-# CI test workflow. Runs on every PR + push to main.
-#
-# PRs run affected tests without repository-wide coverage. Main, manual runs,
-# and explicit release verification run the full ./run-tests.sh battery:
-#   - Node-side tests (native-dialog guard, lens-local-utils, dev-server
-#     origin guard)
-#   - Playwright-driven web-app suite
-#   - Cold mobile-load resource budgets
-#   - Focused Firefox smoke coverage for critical browser flows
-
+# Build once; qualify the same immutable shipping artifact on every consumer.
+# Native source coverage and shipping SvelteKit acceptance remain distinct gates.
 name: Tests
-
 on:
   pull_request:
     branches: [main]
   push:
     branches: [main]
+  schedule:
+    - cron: '17 2 * * *'
   workflow_dispatch:
+    inputs:
+      diagnostic:
+        description: Optional focused diagnostics; off runs the normal test matrix
+        type: choice
+        required: false
+        default: 'off'
+        options: ['off', 'webkit-lens-wearable', 'webkit-pwa-routstr']
   workflow_call:
     inputs:
       full_suite:
-        description: 'Run complete regression and coverage for release evidence'
+        description: Run complete regression and coverage for release evidence
         type: boolean
         default: true
-
 permissions:
   contents: read
-
+concurrency:
+  group: tests-${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}-${{ inputs.full_suite == true && 'full' || 'scoped' }}${{ github.event_name == 'workflow_dispatch' && inputs.diagnostic == 'webkit-lens-wearable' && '-webkit-diagnostic' || '' }}${{ github.event_name == 'workflow_dispatch' && inputs.diagnostic == 'webkit-pwa-routstr' && '-webkit-pwa-routstr-diagnostic' || '' }}
+  cancel-in-progress: ${{ (github.event_name == 'pull_request' || github.event_name == 'push') && inputs.full_suite != true }}
+env:
+  GETBASED_KIT_ARTIFACT: ${{ github.workspace }}/dist
+  CI_TEST_PLAN: .local-notes/ci/plan.json
 jobs:
-  test:
+  prepare:
+    if: github.event_name != 'workflow_dispatch' || (inputs.diagnostic != 'webkit-lens-wearable' && inputs.diagnostic != 'webkit-pwa-routstr')
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    env:
-      CI_SCOPE_FULL: ${{ github.event_name != 'pull_request' || inputs.full_suite == true }}
-      CI_TEST_PLAN: /tmp/getbased-pr-test-plan.json
-
+    outputs:
+      full: ${{ steps.plan.outputs.full }}
+      native: ${{ steps.plan.outputs.native }}
+      kit: ${{ steps.plan.outputs.kit }}
+      performance: ${{ steps.plan.outputs.performance }}
+      native_matrix: ${{ steps.plan.outputs.native_matrix }}
+      kit_matrix: ${{ steps.plan.outputs.kit_matrix }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
-
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: 24
           cache: npm
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Require complete authored TypeScript migration
-        run: npm run migration:check
-
-      - name: Select affected PR tests
-        id: scope
-        if: env.CI_SCOPE_FULL != 'true'
-        env:
-          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        run: node scripts/pr-test-scope.mjs --base "$PR_BASE_SHA" --output "$CI_TEST_PLAN"
-
-      - name: Run affected unit tests
-        if: env.CI_SCOPE_FULL != 'true'
-        run: node scripts/pr-test-scope.mjs --run unit --output "$CI_TEST_PLAN"
-
-      - name: Run typecheck
-        run: npm run typecheck
-
-      - name: Check migrated TypeScript with strict options
-        run: npm run typecheck:migration
-
-      - name: Check authored TypeScript tests with strict options
-        run: npm run typecheck:migration-tests
-
-      - name: Run full-app checkJs
-        run: npm run typecheck:checkjs
-
-      - name: Run server checkJs
-        run: npm run typecheck:server
-
-      - name: Run service-worker checkJs
-        run: npm run typecheck:service-worker
-
-      - name: Enforce strict-null debt ratchet
-        run: npm run typecheck:strict-null
-
-      - name: Verify architecture map and boundaries
-        run: npm run architecture:check
-
-      - name: Verify production bundle and performance budgets
-        run: npm run production:check
-
-      - name: Run quality guardrails
-        run: npm run quality
-
-      - name: Enforce critical behavior branch coverage
-        if: env.CI_SCOPE_FULL == 'true'
-        run: npm run test:critical-coverage
-
-      - name: Cache Playwright browsers
-        if: env.CI_SCOPE_FULL == 'true' || steps.scope.outputs.browser == 'true' || steps.scope.outputs.firefox == 'true' || steps.scope.outputs.pwa == 'true'
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
-        with:
-          path: ~/.cache/ms-playwright
-          key: playwright-browsers-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
-          restore-keys: |
-            playwright-browsers-${{ runner.os }}-
-
-      - name: Install full browser engines
-        if: env.CI_SCOPE_FULL == 'true' || steps.scope.outputs.pwa == 'true'
-        run: npx playwright install --with-deps chromium firefox webkit
-
-      - name: Install affected Chromium engine
-        if: env.CI_SCOPE_FULL != 'true' && steps.scope.outputs.pwa != 'true' && steps.scope.outputs.browser == 'true'
-        run: npx playwright install --with-deps chromium
-
-      - name: Install affected Firefox engine
-        if: env.CI_SCOPE_FULL != 'true' && steps.scope.outputs.pwa != 'true' && steps.scope.outputs.firefox == 'true'
-        run: npx playwright install --with-deps firefox
-
-      - name: Resolve catalog file (fetch from private source if creds set, else use stub)
+      - name: Resolve catalog before compiling and freezing build inputs
         env:
           CATALOG_FETCH_URL: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && secrets.CATALOG_FETCH_URL || '' }}
           CATALOG_FETCH_TOKEN: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && secrets.CATALOG_FETCH_TOKEN || '' }}
-        run: node scripts/fetch-catalog.mjs
-
-      - name: Run Firefox smoke suite
-        if: env.CI_SCOPE_FULL == 'true'
-        run: npm run test:firefox
-
-      - name: Verify PWA offline and update lifecycle across browser engines
-        if: env.CI_SCOPE_FULL == 'true'
-        run: npm run test:pwa
-
-      - name: Run affected Chromium tests
-        if: env.CI_SCOPE_FULL != 'true' && steps.scope.outputs.browser == 'true'
-        run: node scripts/pr-test-scope.mjs --run browser --output "$CI_TEST_PLAN"
-
-      - name: Run affected Firefox tests
-        if: env.CI_SCOPE_FULL != 'true' && steps.scope.outputs.firefox == 'true'
-        run: node scripts/pr-test-scope.mjs --run firefox --output "$CI_TEST_PLAN"
-
-      - name: Run affected PWA tests
-        if: env.CI_SCOPE_FULL != 'true' && steps.scope.outputs.pwa == 'true'
-        run: node scripts/pr-test-scope.mjs --run pwa --output "$CI_TEST_PLAN"
-
-      - name: Run test suite with coverage ratchet
-        if: env.CI_SCOPE_FULL == 'true'
-        run: COVERAGE=1 SKIP_TYPECHECK=1 ./run-tests.sh
-
-      - name: Retain complete production coverage
-        if: always() && env.CI_SCOPE_FULL == 'true'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        run: node scripts/fetch-catalog.mts
+      - name: Install and compile once on this runner
+        run: npm ci
+      - name: Enforce compiler, architecture and supply-chain contracts
+        run: |
+          npm run migration:check
+          npm run typecheck
+          npm run typecheck:migration
+          npm run typecheck:migration-tests
+          npm run typecheck:checkjs
+          npm run typecheck:server
+          npm run typecheck:service-worker
+          npm run typecheck:strict-null
+          npm run architecture:check
+          npm run quality
+          npm run vendor:check
+          npm run supply-chain:check
+          node tests/verify-modules.js
+      - name: Select full or affected execution and bounded browser matrices
+        id: plan
+        env:
+          FULL: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || inputs.full_suite == true }}
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          # An initial push or missing history must fall back to full verification.
+          if [ "$FULL" = false ] && { [[ ! "$BASE" =~ ^[a-f0-9]{40}$ ]] || [[ "$BASE" == 0000000000000000000000000000000000000000 ]] || ! git cat-file -e "$BASE^{commit}"; }; then FULL=true; fi
+          args=(--full "$FULL" --output "$CI_TEST_PLAN")
+          if [ "$FULL" = false ]; then args+=(--base "$BASE"); fi
+          node scripts/ci-plan.mjs "${args[@]}"
+      - name: Check the owned development server origin guard
+        run: |
+          node dev-server.js 8123 > /tmp/dev-server.log 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid" 2>/dev/null || true' EXIT
+          ready=false
+          for attempt in {1..40}; do
+            if curl --silent --fail --max-time 1 http://127.0.0.1:8123/ > /dev/null; then ready=true; break; fi
+            sleep 0.25
+          done
+          [ "$ready" = true ]
+          PORT=8123 node tests/test-dev-server-origin.js
+      - name: Build shipping artifact once and enforce offline resource limits
+        run: node scripts/build-sveltekit.mjs --output dist
+      - name: Verify exact assembled shipping contracts
+        run: node node_modules/vitest/vitest.mjs run tests/production-build.test.ts
+      - name: Record the selected SvelteKit collection without launching browsers
+        if: steps.plan.outputs.kit == 'true'
+        run: node scripts/ci-plan.mjs --collect-kit --output "$CI_TEST_PLAN"
+      - name: Seal portable generated outputs after compiler and semantic checks
+        run: node scripts/ci-compiled.mts seal
+      - name: Seal immutable artifact and catalog transport
+        run: node scripts/ci-artifact.mjs seal --artifact dist --transport .local-notes/ci/transport
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: shipping-inputs
+          path: |
+            dist
+            .local-notes/ci/transport
+            .local-notes/ci/compiled
+            .local-notes/ci/plan.json
+            .local-notes/ci/affected.json
+            .local-notes/ci/kit-collection.json
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        if: failure()
+        with:
+          name: prepare-failure
+          path: |
+            /tmp/dev-server.log
+            .local-notes/ci
+          include-hidden-files: true
+          if-no-files-found: warn
+  unit:
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 24
+          cache: npm
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: shipping-inputs
+      - name: Restore the qualified catalog before compilation
+        run: node scripts/ci-artifact.mts restore --artifact dist --transport .local-notes/ci/transport
+      - name: Restore exact generated outputs before dependency installation
+        run: node scripts/ci-compiled.mts restore
+      - name: Install native dependencies and verify reused compiler output
+        env:
+          GETBASED_CI_COMPILED: '1'
+        run: npm ci
+      - name: Verify exact shipping bytes and current authored sources
+        run: node scripts/ci-artifact.mjs verify --artifact dist --transport .local-notes/ci/transport --github-env
+      - name: Install Chromium for resource budgets without shipping cases
+        if: needs.prepare.outputs.full != 'true' && needs.prepare.outputs.performance == 'true' && needs.prepare.outputs.kit != 'true'
+        run: npx --no-install playwright install --with-deps chromium
+      - name: Enforce resource budgets before affected unit tests
+        if: needs.prepare.outputs.full != 'true' && needs.prepare.outputs.performance == 'true' && needs.prepare.outputs.kit != 'true'
+        run: node scripts/sveltekit-performance-budget.mjs --artifact "$GETBASED_KIT_ARTIFACT" --output .local-notes/ci/performance
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        if: always() && needs.prepare.outputs.full != 'true' && needs.prepare.outputs.performance == 'true' && needs.prepare.outputs.kit != 'true'
+        with:
+          name: shipping-performance-budget
+          path: .local-notes/ci/performance
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
+      - name: Full unit coverage and unchanged critical behavior floors
+        if: needs.prepare.outputs.full == 'true'
+        run: |
+          node node_modules/vitest/vitest.mjs run --coverage
+          node node_modules/vitest/vitest.mjs run --config vitest.critical.config.js
+      - name: Affected unit tests and mandatory changed-source checks
+        if: needs.prepare.outputs.full != 'true'
+        run: node scripts/pr-test-scope.mjs --run unit --output .local-notes/ci/affected.json
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        if: always() && needs.prepare.outputs.full == 'true'
+        with:
+          name: unit-coverage
+          path: |
+            tests/.vitest-coverage
+            tests/.critical-coverage
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
+  native:
+    name: Native (${{ matrix.id }})
+    needs: prepare
+    if: needs.prepare.outputs.native == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      # Admit all four Chromium shards plus Firefox, PWA and Display together.
+      # Account concurrency and runner availability still bound actual starts.
+      max-parallel: 7
+      matrix: ${{ fromJSON(needs.prepare.outputs.native_matrix) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 24
+          cache: npm
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: shipping-inputs
+      - name: Restore the qualified catalog before compilation
+        run: node scripts/ci-artifact.mts restore --artifact dist --transport .local-notes/ci/transport
+      - name: Restore exact generated outputs before dependency installation
+        run: node scripts/ci-compiled.mts restore
+      - name: Install native dependencies and verify reused compiler output
+        env:
+          GETBASED_CI_COMPILED: '1'
+        run: npm ci
+      - name: Verify exact shipping bytes and current authored sources
+        run: node scripts/ci-artifact.mjs verify --artifact dist --transport .local-notes/ci/transport --github-env
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-browsers-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+      - name: Install selected headless engines
+        env:
+          ENGINE: ${{ matrix.engine }}
+        run: |
+          if [ "$ENGINE" = all ]; then
+            npx --no-install playwright install --with-deps chromium firefox webkit
+          else
+            npx --no-install playwright install --with-deps "$ENGINE"
+          fi
+      - name: Run selected native suite headlessly
+        env:
+          LANE: ${{ matrix.id }}
+        run: node scripts/ci-plan.mjs --run-native "$LANE" --output "$CI_TEST_PLAN"
+      - name: Qualify every raw source-coverage receipt
+        if: matrix.coverage == true
+        env:
+          LANE: ${{ matrix.id }}
+          SHARD: ${{ matrix.shard }}
+        run: node scripts/ci-results.mjs coverage-inventory --directory ".local-notes/ci/coverage/$LANE" --shard "$SHARD" --output ".local-notes/ci/coverage-inventories/$LANE.json"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        if: always()
+        with:
+          name: native-results-${{ matrix.id }}
+          path: |
+            .local-notes/ci/results
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 14
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        if: always() && matrix.coverage == true
+        with:
+          name: coverage-raw-${{ matrix.id }}
+          path: .local-notes/ci/coverage/${{ matrix.id }}
+          include-hidden-files: true
+          if-no-files-found: error
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        if: always() && matrix.coverage == true
+        with:
+          name: coverage-inventory-${{ matrix.id }}
+          path: .local-notes/ci/coverage-inventories
+          include-hidden-files: true
+          if-no-files-found: error
+  kit:
+    name: Shipping (${{ matrix.id }})
+    needs: prepare
+    if: needs.prepare.outputs.kit == 'true'
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      # Admit Cocoa alongside the four Linux shards without opening all ten lanes.
+      # The short OPFS partition releases capacity for the remaining Cocoa shard;
+      # account concurrency and runner availability still bound actual starts.
+      max-parallel: 8
+      matrix: ${{ fromJSON(needs.prepare.outputs.kit_matrix) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 24
+          cache: npm
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: shipping-inputs
+      - name: Restore the qualified catalog before compilation
+        run: node scripts/ci-artifact.mts restore --artifact dist --transport .local-notes/ci/transport
+      - name: Restore exact generated outputs before dependency installation
+        run: node scripts/ci-compiled.mts restore
+      - name: Install native dependencies and verify reused compiler output
+        env:
+          GETBASED_CI_COMPILED: '1'
+        run: npm ci
+      - name: Verify exact shipping bytes and current authored sources
+        run: node scripts/ci-artifact.mjs verify --artifact dist --transport .local-notes/ci/transport --github-env
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: |
+            ~/.cache/ms-playwright
+            ~/Library/Caches/ms-playwright
+          key: playwright-browsers-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+      - name: Install selected headless engines
+        env:
+          ENGINE: ${{ matrix.engine }}
+        run: |
+          if [ "$ENGINE" = all ]; then
+            npx --no-install playwright install --with-deps chromium firefox webkit
+          else
+            npx --no-install playwright install --with-deps "$ENGINE"
+          fi
+      - name: Enforce resource budgets before the first shipping shard
+        if: needs.prepare.outputs.full != 'true' && needs.prepare.outputs.performance == 'true' && startsWith(matrix.shard, '1/')
+        run: node scripts/sveltekit-performance-budget.mjs --artifact "$GETBASED_KIT_ARTIFACT" --output .local-notes/ci/performance
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        if: always() && needs.prepare.outputs.full != 'true' && needs.prepare.outputs.performance == 'true' && startsWith(matrix.shard, '1/')
+        with:
+          name: shipping-performance-budget
+          path: .local-notes/ci/performance
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
+      - name: Qualify the native Chart font before exact canvas acceptance
+        if: runner.os == 'Linux'
+        run: |
+          set -euo pipefail
+          # Chart.js uses Helvetica from the system font family. Reproduce the
+          # original capture input; never relax its exact pixel assertions.
+          sudo apt-get install --yes --no-install-recommends fonts-urw-base35
+          dpkg-query -W fonts-urw-base35
+          # Keep all host font rules; exclude only the same-name Type1 face.
+          # The qualifier enumerates every regular candidate and pins OTF bytes.
+          native_font_config=$(node scripts/ci-native-fonts.mjs)
+          export FONTCONFIG_FILE="$native_font_config"
+          chart_family='Helvetica Neue,Helvetica,Arial,sans-serif'
+          fc-match -f '%{family}\t%{file}\n' "$chart_family"
+          # Record the renderer inputs as well as the exact font bytes.
+          fc-match -v "$chart_family"
+          for family in 'Helvetica Neue' Helvetica Arial 'Nimbus Sans' 'Noto Sans' 'Liberation Sans' sans-serif; do
+            printf 'family=%s\n' "$family"
+            fc-match -f '%{family}\t%{file}\trgba=%{rgba}\tdpi=%{dpi}\thintstyle=%{hintstyle}\n' "$family"
+          done
+          fc-conflist
+          dpkg-query -W libfontconfig1 libfreetype6 libcairo2 libharfbuzz0b libpixman-1-0
+          for name in FONTCONFIG_FILE FONTCONFIG_PATH FREETYPE_PROPERTIES MOZ_ENABLE_WAYLAND GDK_BACKEND LIBGL_ALWAYS_SOFTWARE; do
+            printf '%s=%s\n' "$name" "${!name-<unset>}"
+          done
+          font_family=$(fc-match -f '%{family}' "$chart_family")
+          font_file=$(fc-match -f '%{file}' "$chart_family")
+          [ "$font_family" = 'Nimbus Sans' ]
+          [ "$font_file" = /usr/share/fonts/opentype/urw-base35/NimbusSans-Regular.otf ]
+          printf '%s  %s\n' 7c25be4d78155523080ab85b10277150657ff7dabbcad7037bdd536c9b6d0d08 "$font_file" | sha256sum --check --strict
+      - name: Run selected shipping acceptance headlessly with finite skip guards
+        id: shipping_acceptance
+        env:
+          LANE: ${{ matrix.id }}
+          # Process lifecycle/native stderr only; never enable protocol/API logs.
+          DEBUG: ${{ runner.os == 'Linux' && matrix.engine == 'webkit' && 'pw:browser' || env.DEBUG }}
+        run: node scripts/ci-plan.mjs --run-kit "$LANE" --output "$CI_TEST_PLAN"
+      - name: DIAGNOSTIC Linux WebKit process and memory evidence after failure
+        if: failure() && runner.os == 'Linux' && matrix.engine == 'webkit' && steps.shipping_acceptance.outcome == 'failure'
+        continue-on-error: true
+        timeout-minutes: 1
+        run: |
+          directory=.local-notes/ci/native-process-evidence
+          mkdir -p "$directory"
+          {
+            date -u +'%Y-%m-%dT%H:%M:%SZ'
+            # Selected host capacity only; no environment or process arguments.
+            awk '/^(MemTotal|MemAvailable|SwapTotal|SwapFree):/' /proc/meminfo
+            cgroup_path=$(awk -F: '$1 == "0" && $2 == "" { print $3; exit }' /proc/self/cgroup)
+            if [ -n "$cgroup_path" ]; then
+              cgroup_directory=$(realpath -m -- "/sys/fs/cgroup$cgroup_path")
+              case "$cgroup_directory" in
+                /sys/fs/cgroup|/sys/fs/cgroup/*)
+                  printf 'current_cgroup=%s\n' "$cgroup_directory"
+                  for file in memory.current memory.events memory.max memory.peak memory.swap.current memory.swap.max; do
+                    printf '\n%s\n' "$file"
+                    if [ -r "$cgroup_directory/$file" ]; then
+                      head -c 4096 -- "$cgroup_directory/$file"
+                    else
+                      printf 'unavailable\n'
+                    fi
+                  done
+                  ;;
+                *) printf 'current_cgroup=unavailable (outside cgroup mount)\n' ;;
+              esac
+            else
+              printf 'current_cgroup=unavailable (no unified cgroup entry)\n'
+            fi
+          } > "$directory/memory.txt"
+          # A failed read is unavailable evidence, never proof that no OOM occurred.
+          set +e
+          timeout 5s sudo -n journalctl -k --boot --no-pager --output=short-monotonic \
+            --grep='(?i)(oom-kill|out of memory|killed process|(?:webkit|WPE(?:Web|Network)|MiniBrowser|NetworkProcess|WebProcess).*(?:segfault|crash|killed|exited|trap))' \
+            --lines=160 2>&1 | head -c 65536 > "$directory/kernel-events.txt"
+          kernel_status=${PIPESTATUS[0]}
+          printf '\njournalctl_status=%s (inspect output; nonzero may mean unavailable or no matches)\n' "$kernel_status" >> "$directory/kernel-events.txt"
+          timeout 5s ps -e -o pid=,ppid=,comm= \
+            | awk '$3 ~ /^(WebKit.*|WPE(Web|Network).*|MiniBrowser|NetworkProcess|WebProcess|bwrap|Xvfb|node)$/ { print; if (++count == 160) exit }' \
+            | head -c 32768 > "$directory/remaining-processes.txt"
+          process_status=${PIPESTATUS[0]}
+          printf '\nps_status=%s (PID/PPID/comm only; exited processes are recorded in pw:browser job logs)\n' "$process_status" >> "$directory/remaining-processes.txt"
+          exit 0
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        if: always()
+        with:
+          name: kit-receipt-${{ matrix.id }}-attempt-${{ github.run_attempt }}
+          path: .local-notes/ci/kit-receipts
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        if: always()
+        with:
+          name: kit-results-${{ matrix.id }}
+          path: |
+            .local-notes/ci/results
+            .local-notes/ci/native-process-evidence
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 14
+  performance:
+    needs: prepare
+    if: needs.prepare.outputs.full == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 24
+          cache: npm
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: shipping-inputs
+      - name: Restore the qualified catalog before compilation
+        run: node scripts/ci-artifact.mts restore --artifact dist --transport .local-notes/ci/transport
+      - name: Restore exact generated outputs before dependency installation
+        run: node scripts/ci-compiled.mts restore
+      - name: Install native dependencies and verify reused compiler output
+        env:
+          GETBASED_CI_COMPILED: '1'
+        run: npm ci
+      - name: Verify exact shipping bytes and current authored sources
+        run: node scripts/ci-artifact.mjs verify --artifact dist --transport .local-notes/ci/transport --github-env
+      - run: npx --no-install playwright install --with-deps chromium
+      - name: Enforce unchanged startup, first-use and offline budgets in isolation
+        run: node scripts/sveltekit-performance-budget.mjs --artifact "$GETBASED_KIT_ARTIFACT" --output .local-notes/ci/performance
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        if: always()
+        with:
+          name: shipping-performance-budget
+          path: .local-notes/ci/performance
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
+  coverage:
+    needs: [prepare, unit, native]
+    if: needs.prepare.outputs.full == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 24
+          cache: npm
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: shipping-inputs
+      - name: Restore the qualified catalog before compilation
+        run: node scripts/ci-artifact.mts restore --artifact dist --transport .local-notes/ci/transport
+      - name: Restore exact generated outputs before dependency installation
+        run: node scripts/ci-compiled.mts restore
+      - name: Install native dependencies and verify reused compiler output
+        env:
+          GETBASED_CI_COMPILED: '1'
+        run: npm ci
+      - name: Verify exact shipping bytes and current authored sources
+        run: node scripts/ci-artifact.mjs verify --artifact dist --transport .local-notes/ci/transport --github-env
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: unit-coverage
+          path: tests
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          pattern: coverage-raw-*
+          path: tests/.playwright-coverage
+          merge-multiple: true
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          pattern: coverage-inventory-*
+          path: .local-notes/ci/coverage-inventories
+          merge-multiple: true
+      - name: Reject missing, extra, corrupt or incomplete source-coverage inputs
+        run: node scripts/ci-results.mjs coverage-verify --inventories .local-notes/ci/coverage-inventories --directory tests/.playwright-coverage --shards 4 --unit tests/.vitest-coverage/coverage-functions.json --unit-format native-functions --output .local-notes/ci/coverage-inputs.json
+      - name: Enforce unchanged combined source coverage denominator and floors
+        env:
+          INCLUDE_VITEST_COVERAGE: '1'
+          VITEST_COVERAGE_FORMAT: native-functions
+          VITEST_COVERAGE_JSON: tests/.vitest-coverage/coverage-functions.json
+          REQUIRE_PLAYWRIGHT_COVERAGE_SHARDS: '1'
+          PLAYWRIGHT_COVERAGE_DIR: tests/.playwright-coverage
+        run: node scripts/playwright-coverage.mjs
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        if: always()
         with:
           name: production-coverage
           path: |
             tests/.coverage.json
             tests/.coverage.md
             tests/.coverage.html
-            tests/.vitest-coverage/coverage-summary.json
+            tests/.vitest-coverage/coverage-functions.json
             tests/.critical-coverage/coverage-summary.json
+            .local-notes/ci/coverage-inputs.json
           include-hidden-files: true
-          if-no-files-found: warn
+          if-no-files-found: error
           retention-days: 14
-
-      - name: Retain affected-test plan
-        if: always() && env.CI_SCOPE_FULL != 'true'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+  test:
+    name: ${{ github.event_name == 'workflow_dispatch' && (inputs.diagnostic == 'webkit-lens-wearable' || inputs.diagnostic == 'webkit-pwa-routstr') && 'DIAGNOSTIC normal gate omitted' || 'test' }}
+    needs: [prepare, unit, native, kit, performance, coverage]
+    if: always() && (github.event_name != 'workflow_dispatch' || (inputs.diagnostic != 'webkit-lens-wearable' && inputs.diagnostic != 'webkit-pwa-routstr'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Require successful preparation before restoring evidence
+        env:
+          PREPARE_RESULT: ${{ needs.prepare.result }}
+        run: test "$PREPARE_RESULT" = success
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
-          name: affected-test-plan
-          path: /tmp/getbased-pr-test-plan.json
-          retention-days: 7
-
-      - name: Smoke the deployed production APIs
-        if: github.event_name == 'push'
+          node-version: 24
+          cache: npm
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        if: needs.prepare.result == 'success'
+        with:
+          name: shipping-inputs
+      - name: Restore qualified catalog
+        if: needs.prepare.result == 'success'
+        run: node scripts/ci-artifact.mts restore --artifact dist --transport .local-notes/ci/transport
+      - name: Restore exact generated outputs
+        run: node scripts/ci-compiled.mts restore
+      - name: Install native dependencies and verify reused compiler output
+        env:
+          GETBASED_CI_COMPILED: '1'
+        run: npm ci
+      - name: Reject unsuccessful or unexpectedly skipped selected jobs
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        run: |
+          node -e 'require("node:fs").writeFileSync("/tmp/ci-needs.json",process.env.NEEDS_JSON)'
+          node scripts/ci-results.mjs aggregate --needs /tmp/ci-needs.json --plan "$CI_TEST_PLAN" --output .local-notes/ci/aggregate.json
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        if: needs.prepare.outputs.kit == 'true'
+        with:
+          pattern: kit-receipt-*
+          path: .local-notes/ci/kit-receipts
+          merge-multiple: false
+      - name: Prove every selected shipping case executed exactly once across all shards
+        if: needs.prepare.outputs.kit == 'true'
+        run: node scripts/ci-results.mjs kit --collection .local-notes/ci/kit-collection.json --reports .local-notes/ci/kit-receipts --output .local-notes/ci/kit-completeness.json
+      - name: Smoke deployed production APIs
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         env:
           EXPECTED_COMMIT_SHA: ${{ github.sha }}
           PRODUCTION_BASE_URL: https://app.getbased.health
         run: node scripts/production-smoke.mjs
-
-      - name: Upload test logs on failure
-        if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        if: always()
         with:
-          name: test-logs
+          name: acceptance-gate
           path: |
-            /tmp/dev-server.log
-            /tmp/getbased-pwa-results
-          if-no-files-found: ignore
+            .local-notes/ci/aggregate.json
+            .local-notes/ci/kit-completeness.json
+            .local-notes/ci/plan.json
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 14
+
+  webkit_diagnostics:
+    name: DIAGNOSTIC WebKit Lens and Wearables (not a release gate)
+    if: github.event_name == 'workflow_dispatch' && inputs.diagnostic == 'webkit-lens-wearable'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      DIAGNOSTIC_DIR: .local-notes/ci/webkit-diagnostics
+      GETBASED_KIT_ACCEPTANCE_GUARD: '1'
+      GETBASED_KIT_GUARD_REPORT: .local-notes/ci/webkit-diagnostics/guard.json
+      PLAYWRIGHT_KIT_OUTPUT_DIR: .local-notes/ci/webkit-diagnostics/results
+      GETBASED_KIT_CASE_SCOPE: all
+      GETBASED_KIT_PROJECT: kit-webkit
+      # Native raster control only; not a release backend change or SIMD mask.
+      WEBKIT_SKIA_ENABLE_CPU_RENDERING: '1'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 24
+          cache: npm
+      - name: Resolve public catalog without private provider credentials
+        run: node scripts/fetch-catalog.mts
+      - name: Install and compile the selected diagnostic revision
+        run: npm ci
+      - name: Install the actual headless WebKit engine and native dependencies
+        run: npx --no-install playwright install --with-deps webkit
+      - name: Qualify identical native Chart fonts and archive renderer inputs
+        if: runner.os == 'Linux'
+        run: |
+          set -euo pipefail
+          mkdir -p "$DIAGNOSTIC_DIR"
+          {
+            set -euo pipefail
+            # Chart.js uses Helvetica from the system font family. Reproduce the
+            # original capture input; never relax its exact pixel assertions.
+            sudo apt-get install --yes --no-install-recommends fonts-urw-base35
+            dpkg-query -W fonts-urw-base35
+            # Keep all host font rules; exclude only the same-name Type1 face.
+            # The qualifier enumerates every regular candidate and pins OTF bytes.
+            native_font_config=$(node scripts/ci-native-fonts.mjs)
+            export FONTCONFIG_FILE="$native_font_config"
+            chart_family='Helvetica Neue,Helvetica,Arial,sans-serif'
+            fc-match -f '%{family}\t%{file}\n' "$chart_family"
+            # Record the renderer inputs as well as the exact font bytes.
+            fc-match -v "$chart_family"
+            for family in 'Helvetica Neue' Helvetica Arial 'Nimbus Sans' 'Noto Sans' 'Liberation Sans' sans-serif; do
+              printf 'family=%s\n' "$family"
+              fc-match -f '%{family}\t%{file}\trgba=%{rgba}\tdpi=%{dpi}\thintstyle=%{hintstyle}\n' "$family"
+            done
+            fc-conflist
+            dpkg-query -W libfontconfig1 libfreetype6 libcairo2 libharfbuzz0b libpixman-1-0
+            for name in FONTCONFIG_FILE FONTCONFIG_PATH FREETYPE_PROPERTIES MOZ_ENABLE_WAYLAND GDK_BACKEND LIBGL_ALWAYS_SOFTWARE; do
+              printf '%s=%s\n' "$name" "${!name-<unset>}"
+            done
+            font_family=$(fc-match -f '%{family}' "$chart_family")
+            font_file=$(fc-match -f '%{file}' "$chart_family")
+            [ "$font_family" = 'Nimbus Sans' ]
+            [ "$font_file" = /usr/share/fonts/opentype/urw-base35/NimbusSans-Regular.otf ]
+            printf '%s  %s\n' 7c25be4d78155523080ab85b10277150657ff7dabbcad7037bdd536c9b6d0d08 "$font_file" | sha256sum --check --strict
+          } 2>&1 | tee "$DIAGNOSTIC_DIR/font-environment.log"
+      - name: Build once and verify the natural diagnostic shipping identity
+        run: |
+          set -euo pipefail
+          mkdir -p "$DIAGNOSTIC_DIR"
+          node scripts/build-sveltekit.mjs --output dist | tee "$DIAGNOSTIC_DIR/build.log"
+          node scripts/ci-artifact.mjs seal --artifact dist --transport "$DIAGNOSTIC_DIR/transport" | tee "$DIAGNOSTIC_DIR/build-seal.json"
+          node scripts/ci-artifact.mjs verify --artifact dist --transport "$DIAGNOSTIC_DIR/transport" --github-env | tee "$DIAGNOSTIC_DIR/build-verify.json"
+          cp dist/build-metrics.json "$DIAGNOSTIC_DIR/build-metrics.json"
+      - name: Run only the two unchanged desktop WebKit diagnostic cases
+        id: diagnostic_cases
+        run: |
+          node node_modules/@playwright/test/cli.js test \
+            --config=playwright.sveltekit.config.js --project=kit-webkit --workers=1 --retries=0 \
+            tests/pwa/sveltekit-lens-shell.spec.ts tests/pwa/sveltekit-wearable-detail.spec.ts
+      - name: Require exact diagnostic scope without producing a release gate
+        if: always() && steps.diagnostic_cases.outcome != 'skipped'
+        run: |
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import fs from 'node:fs';
+          const report = JSON.parse(fs.readFileSync(process.env.GETBASED_KIT_GUARD_REPORT, 'utf8'));
+          const files = ['tests/pwa/sveltekit-lens-shell.spec.ts', 'tests/pwa/sveltekit-wearable-detail.spec.ts'];
+          fs.writeFileSync(process.env.DIAGNOSTIC_DIR + '/scope.json', JSON.stringify({diagnosticOnly: true, releaseGate: false, expectedFiles: files, report}, null, 2));
+          assert.equal(report.execution, true);
+          assert.deepEqual(report.tests.map(test => test.file).sort(), files);
+          assert.deepEqual(report.issues, []);
+          for (const test of report.tests) {
+            assert.equal(test.project, 'kit-webkit');
+            assert.equal(test.attemptCount, 1);
+            assert.equal(test.status, 'passed');
+            assert.equal(test.expectedStatus, 'passed');
+            assert.equal(test.annotations.some(value => ['skip', 'fixme'].includes(value.type)), false);
+          }
+          NODE
+      - name: Label results as focused diagnostics only
+        if: always()
+        run: |
+          printf '%s\n' '## DIAGNOSTIC WebKit run' 'Only canonical Lens Shell and Wearables desktop WebKit cases were selected.' 'This run does not execute the normal matrix or provide the test release gate.' >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        if: always()
+        with:
+          name: diagnostic-webkit-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            .local-notes/ci/webkit-diagnostics/results
+            .local-notes/ci/webkit-diagnostics/guard.json
+            .local-notes/ci/webkit-diagnostics/scope.json
+            .local-notes/ci/webkit-diagnostics/font-environment.log
+            .local-notes/ci/webkit-diagnostics/build.log
+            .local-notes/ci/webkit-diagnostics/build-seal.json
+            .local-notes/ci/webkit-diagnostics/build-verify.json
+            .local-notes/ci/webkit-diagnostics/build-metrics.json
+            .local-notes/ci/webkit-diagnostics/transport/manifest.json
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 7
+
+  webkit_pwa_routstr_diagnostics:
+    name: DIAGNOSTIC Cocoa mobile WebKit Routstr PWA (not a release gate)
+    if: github.event_name == 'workflow_dispatch' && inputs.diagnostic == 'webkit-pwa-routstr'
+    runs-on: macos-15
+    timeout-minutes: 20
+    env:
+      DIAGNOSTIC_DIR: .local-notes/ci/webkit-pwa-routstr-diagnostics
+      GETBASED_KIT_ACCEPTANCE_GUARD: '1'
+      GETBASED_KIT_GUARD_REPORT: .local-notes/ci/webkit-pwa-routstr-diagnostics/guard.json
+      PLAYWRIGHT_KIT_OUTPUT_DIR: .local-notes/ci/webkit-pwa-routstr-diagnostics/results
+      GETBASED_KIT_CASE_SCOPE: all
+      GETBASED_KIT_PROJECT: kit-mobile-webkit
+      GETBASED_PWA_DIAGNOSTIC: routstr-service-worker
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 24
+          cache: npm
+      - name: Resolve public catalog without private provider credentials
+        run: node scripts/fetch-catalog.mts
+      - name: Install and compile the selected diagnostic revision
+        run: npm ci
+      - name: Install the actual headless Cocoa WebKit engine
+        run: npx --no-install playwright install --with-deps webkit
+      - name: Build once and verify the natural diagnostic shipping identity
+        run: |
+          set -euo pipefail
+          mkdir -p "$DIAGNOSTIC_DIR"
+          node scripts/build-sveltekit.mjs --output dist | tee "$DIAGNOSTIC_DIR/build.log"
+          node scripts/ci-artifact.mjs seal --artifact dist --transport "$DIAGNOSTIC_DIR/transport" | tee "$DIAGNOSTIC_DIR/build-seal.json"
+          node scripts/ci-artifact.mjs verify --artifact dist --transport "$DIAGNOSTIC_DIR/transport" --github-env | tee "$DIAGNOSTIC_DIR/build-verify.json"
+          cp dist/build-metrics.json "$DIAGNOSTIC_DIR/build-metrics.json"
+      - name: Run only the unchanged mobile WebKit Routstr PWA case headlessly
+        id: diagnostic_cases
+        run: |
+          set -euo pipefail
+          node node_modules/@playwright/test/cli.js test \
+            --config=playwright.sveltekit.config.js --project=kit-mobile-webkit --workers=1 --retries=0 \
+            tests/pwa/sveltekit-routstr-model-settings.spec.ts 2>&1 | tee "$DIAGNOSTIC_DIR/case.log"
+      - name: Require exactly the executed diagnostic case without producing a release gate
+        if: always() && steps.diagnostic_cases.outcome != 'skipped'
+        run: |
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import fs from 'node:fs';
+          const report = JSON.parse(fs.readFileSync(process.env.GETBASED_KIT_GUARD_REPORT, 'utf8'));
+          const file = 'tests/pwa/sveltekit-routstr-model-settings.spec.ts';
+          const title = 'static Routstr models retain private and regular choices through unavailable-origin cold launch';
+          fs.writeFileSync(process.env.DIAGNOSTIC_DIR + '/scope.json', JSON.stringify({diagnosticOnly: true, releaseGate: false, platform: 'darwin', expectedFile: file, expectedTitle: title, expectedProject: 'kit-mobile-webkit', report}, null, 2));
+          assert.equal(report.execution, true);
+          assert.equal(report.status, 'passed');
+          assert.deepEqual(report.tests.map(test => [test.file, test.title, test.project]), [[file, title, 'kit-mobile-webkit']]);
+          assert.deepEqual(report.issues, []);
+          const test = report.tests[0];
+          assert.equal(test.attemptCount, 1);
+          assert.equal(test.status, 'passed');
+          assert.equal(test.expectedStatus, 'passed');
+          assert.equal(test.declaredExpectedStatus, 'passed');
+          assert.equal(test.outcome, 'expected');
+          for (const annotations of [test.annotations, test.declaredAnnotations]) {
+            assert.equal(annotations.some(value => ['skip', 'fixme'].includes(value.type)), false);
+          }
+          NODE
+      - name: Label results as focused Cocoa diagnostics only
+        if: always()
+        run: |
+          printf '%s\n' '## DIAGNOSTIC Cocoa mobile WebKit Routstr PWA run' 'Only the canonical Routstr model-choice unavailable-origin cold-launch case was selected, with its existing assertions and deadline.' 'This run does not execute the normal matrix or provide the test release gate.' >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        if: always()
+        with:
+          name: diagnostic-webkit-pwa-routstr-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            .local-notes/ci/webkit-pwa-routstr-diagnostics/results
+            .local-notes/ci/webkit-pwa-routstr-diagnostics/guard.json
+            .local-notes/ci/webkit-pwa-routstr-diagnostics/scope.json
+            .local-notes/ci/webkit-pwa-routstr-diagnostics/case.log
+            .local-notes/ci/webkit-pwa-routstr-diagnostics/build.log
+            .local-notes/ci/webkit-pwa-routstr-diagnostics/build-seal.json
+            .local-notes/ci/webkit-pwa-routstr-diagnostics/build-verify.json
+            .local-notes/ci/webkit-pwa-routstr-diagnostics/build-metrics.json
+            .local-notes/ci/webkit-pwa-routstr-diagnostics/transport/manifest.json
+          include-hidden-files: true
+          if-no-files-found: warn
           retention-days: 7

@@ -40,8 +40,9 @@ export async function verifyNodeDepositSession(nodeUrl: string, key: string) {
   if (getRoutstrSessionKey(nodeUrl) !== key) throw new Error('Node session changed before this deposit. Wallet funds were not moved.');
 }
 
-export async function prepareNewNodeSession(nodeUrl: string) {
+export async function prepareNewNodeSession(nodeUrl: string, expectedKey?: string) {
   nodeUrl = canonicalRoutstrUrl(nodeUrl);
+  if (expectedKey !== undefined && expectedKey !== getRoutstrSessionKey(nodeUrl)) throw new Error('Node session changed. Reopen the node controls before starting a new session.');
   const deposit = await _getMeta('pendingDeposit');
   let depositNode: string | undefined;
   if (deposit && typeof deposit === 'object') {
@@ -90,19 +91,21 @@ export async function reconcileRoutstrDeposit() {
   }
   return record;
 }
-export async function depositExternalTokenToNode(nodeUrl: string, token: string) {
+export async function depositExternalTokenToNode(nodeUrl: string, token: string, expectedKey?: string) {
   nodeUrl = canonicalRoutstrUrl(nodeUrl);
   if (await _getMeta('pendingDeposit') as PendingDeposit | string | null) throw new Error('Reconcile the previous node deposit before importing another token');
   const existingKey = getRoutstrSessionKey(nodeUrl);
+  if (expectedKey !== undefined && existingKey !== expectedKey) throw new Error('Node session changed before token import. The token was not submitted.');
   await verifyNodeDepositSession(nodeUrl, existingKey);
   const record = { nodeUrl, token, recoveryToken: token, localCommit: true, existingKey, createdAt: Date.now() };
   await _setMeta('pendingDeposit', record);
   return submitRoutstrDeposit(record);
 }
 
-export async function requestNodeRefund(nodeUrl: unknown, recoveryId?: string, recoveryToken?: string, generation?: string): Promise<NodeRefund & { token: string; recoveryId: string }> {
+export async function requestNodeRefund(nodeUrl: unknown, recoveryId?: string, recoveryToken?: string, generation?: string, expectedKey?: string): Promise<NodeRefund & { token: string; recoveryId: string }> {
   nodeUrl = canonicalRoutstrUrl(nodeUrl);
   let key = getRoutstrSessionKey(nodeUrl as string);
+  if (!recoveryId && expectedKey !== undefined && expectedKey !== key) throw new Error('Node session changed. Reopen the node controls before withdrawing.');
   let journalKey: string;
   let pending: NodeRefund | null;
   if (recoveryId) {

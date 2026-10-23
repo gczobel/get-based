@@ -420,11 +420,11 @@ async function exerciseSupplementEditor(page: Page, stylesFail = false) {
         && JSON.stringify(supplements.getSupplementPeriods(state.importedData.supplements[0])) === JSON.stringify(historyBeforeDoseChange);
       supplements.openSupplementsEditor(0);
 
-      supplements.endSupplement(0);
+      await supplements.endSupplement(0);
       await waitUntil(() => !supplements.renderSupplementsSection().includes('Magnesium Glycinate'), 'ended item hidden from dashboard');
       const endedState = state.importedData.supplements[0]!.lifecycle?.state === 'ended'
         && document.querySelector<HTMLElement>('.supp-list-group-title')?.textContent !== '';
-      supplements.restartSupplement(0);
+      await supplements.restartSupplement(0);
       await waitUntil(() => supplements.renderSupplementsSection().includes('Magnesium Glycinate'), 'restarted item visible on dashboard');
       outcomes.endHidesFromCurrentWhileRestartKeepsHistoryAtHand =
         endedState

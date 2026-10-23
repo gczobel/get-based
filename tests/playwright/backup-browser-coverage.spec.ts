@@ -294,12 +294,13 @@ test('backup browser coverage exercises export import auto backup and folder sta
       folderHost.innerHTML = folderHtml;
       document.body.appendChild(folderHost);
       backup.installBackupActionDelegates(folderHost);
+      if (!await waitFor(() => folderHost.querySelector('[data-backup-action="pick-folder"]'))) throw new Error('Folder component did not mount');
       folderHost.querySelector<HTMLElement>('[data-backup-action="pick-folder"]')?.click();
       await waitFor(() => toasts().some(text => text.includes('Could not set backup folder')));
       outcomes.folderBackupSupportedPickerAndCloneFailurePath =
         backup.getFolderBackupState().supported === true
-        && folderHtml.includes('Set backup folder')
-        && folderHtml.includes('data-backup-action="pick-folder"')
+        && folderHost.textContent?.includes('Set backup folder') === true
+        && !!folderHost.querySelector('[data-backup-action="pick-folder"]')
         && !folderHtml.includes('onclick=')
         && folderWrites.some(entry => entry.name === 'getbased-backup-latest.json' && String(entry.content || '').includes('labcharts-backup'))
         && toasts().some(text => text.includes('Could not set backup folder'));
@@ -346,12 +347,24 @@ test('backup browser coverage exercises IDB errors and folder reauthorization', 
   const results = await page.evaluate(async ({ backupUrl }) => {
     const backup = (await import(backupUrl) as unknown) as Pick<typeof import('../../js/backup.js'), "configureBackupRuntimeDeps" | "openBackupDB" | "buildBackupSnapshot" | "serializeBackupSnapshot" | "parseBackupSnapshot" | "buildFullBackupSnapshot" | "exportEncryptedBackup" | "importEncryptedBackup" | "scheduleAutoBackup" | "getAutoBackupSnapshots" | "restoreAutoBackup" | "getFolderBackupState" | "renderFolderBackupSection" | "installBackupActionDelegates" | "removeFolderBackup" | "initFolderBackup" | "reauthorizeFolderBackup">;
     const outcomes: Record<string, unknown> = {};
+    const folderHost = document.createElement('section');
+    document.body.appendChild(folderHost);
     const saved = {
       indexedDB: Object.getOwnPropertyDescriptor(window, 'indexedDB'),
       showDirectoryPicker: Object.getOwnPropertyDescriptor(window, 'showDirectoryPicker'),
     };
     const originalSetTimeout = window.setTimeout.bind(window);
     const delay = (ms: number) => new Promise((resolve) => originalSetTimeout(resolve, ms));
+    const waitForFolderView = (selector: string) => new Promise<void>((resolve) => {
+      const observer = new MutationObserver(check);
+      function check() {
+        if (!folderHost.querySelector(selector)) return;
+        observer.disconnect();
+        resolve();
+      }
+      observer.observe(folderHost, {childList: true, subtree: true, characterData: true});
+      check();
+    });
     const toasts = () => Array.from(document.querySelectorAll('.notification-toast')).map(el => el.textContent || '');
     const clearToasts = () => document.querySelectorAll('.notification-toast').forEach(el => el.remove());
     let mode = 'open-error';
@@ -428,6 +441,8 @@ test('backup browser coverage exercises IDB errors and folder reauthorization', 
         configurable: true,
         value: async () => folderHandle,
       });
+      folderHost.innerHTML = backup.renderFolderBackupSection();
+      await delay(0);
 
       const openError = await backup.openBackupDB().then(
         () => '',
@@ -453,15 +468,15 @@ test('backup browser coverage exercises IDB errors and folder reauthorization', 
 
       mode = 'folder-handle-denied';
       await backup.initFolderBackup();
-      await delay(20);
+      await waitForFolderView('[data-backup-action="reauthorize-folder"]');
       outcomes.initFolderBackupMarksPermissionLost = backup.getFolderBackupState().permissionLost === true
-        && backup.renderFolderBackupSection().includes('Restore access');
+        && folderHost.textContent?.includes('Restore access') === true;
 
       document.body.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-      await delay(20);
+      await waitForFolderView('.backup-folder-status-ok');
       outcomes.deferredFolderReauthRestoresAccess = requestPermissionCalls === 1
         && backup.getFolderBackupState().permissionLost === false
-        && backup.renderFolderBackupSection().includes('Coverage Backups');
+        && folderHost.textContent?.includes('Coverage Backups') === true;
 
       requestPermissionResult = 'denied';
       await backup.reauthorizeFolderBackup();
@@ -474,6 +489,7 @@ test('backup browser coverage exercises IDB errors and folder reauthorization', 
       outcomes.reauthorizeFolderBackupReportsPromptErrors = requestPermissionCalls === 3
         && toasts().some(text => text.includes('Could not restore access'));
     } finally {
+      folderHost.remove();
       if (saved.indexedDB) Object.defineProperty(window, 'indexedDB', saved.indexedDB);
       else delete (window as { indexedDB?: unknown }).indexedDB;
       if (saved.showDirectoryPicker) Object.defineProperty(window, 'showDirectoryPicker', saved.showDirectoryPicker);

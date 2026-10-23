@@ -213,6 +213,15 @@ function parseDripFlow(value: unknown, nativeDripScale = false) {
   return flowValue(raw);
 }
 
+/** Recognize the existing Drip schema without importing or mutating observations. */
+export function looksLikeDripCycleCsv(text: string) {
+  const rows = parseDelimitedRows(text);
+  if (rows.length < 2) return false;
+  const headers = rows[0]!.map(normalizeKey);
+  return findHeader(headers, [/^date$/, /^day$/, /^datum$/]) >= 0
+    && (headerIndex(headers, 'bleeding.value') >= 0 || findHeader(headers, [/^bleeding$/, /^menstrual flow$/, /^period$/, /^flow$/]) >= 0);
+}
+
 export function parseDripCycleCsv(text: string, fileName = 'drip.csv') {
   const csv = parseDelimitedRows(text);
   if (csv.length < 2) return null;

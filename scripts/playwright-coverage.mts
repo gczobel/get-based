@@ -12,8 +12,9 @@ import { execFileSync } from 'node:child_process';
 import { chromium } from 'playwright';
 import { runBrowserScript } from '../tests/playwright/browser-script-runner.js';
 import { enforceFunctionCoverage, enforceFeatureCoverage, resolveCoverageMinimum } from './coverage-gate.mjs';
-import { isProductionSource, productionSources, sourceFunctions, matchSourceFunction, summarizeFeatures } from './coverage-source.mjs';
+import { isProductionSource, productionSources, productionFunctionIndex, matchSourceFunction, summarizeFeatures } from './coverage-source.mjs';
 import { renderCoverageMarkdown, renderCoverageHtml } from './coverage-report.mjs';
+import {readNativeFunctionCoverage, type NativeCoverageReceipt} from './native-coverage-receipt.mjs';
 import {
   coverageEntryMatchesSource,
   coverageFunctionRange,
@@ -33,7 +34,7 @@ interface RawSpan { start?: RawLoc | null; end?: RawLoc | null; }
 interface RawVitestFile { path?: unknown; statementMap?: Record<string, RawSpan>; s?: Record<string, unknown>; fnMap?: Record<string, { name?: unknown; loc?: RawSpan; decl?: RawSpan }>; f?: Record<string, unknown>; }
 interface RawShard { entries?: RawEntry[]; titlePath?: { slice(start: number): unknown[] } | null; title?: unknown; file?: unknown; label?: unknown; }
 interface CoverageRange { start: number; end: number; }
-interface FileMetrics { file: string; total: number; ranges: CoverageRange[]; functionIndex: CoverageSourceFunction[]; functions: Map<string, { name: string; called: boolean }>; unmappedFunctions: Set<string>; sources: Set<string>; }
+interface FileMetrics { file: string; total: number; ranges: CoverageRange[]; functionIndex: CoverageSourceFunction[]; thirdPartyFunctionIndex: CoverageSourceFunction[]; functions: Map<string, { name: string; called: boolean }>; unmappedFunctions: Set<string>; sources: Set<string>; }
 type CoverageModel = Map<string, FileMetrics>;
 type CoverageSummary = ReturnType<typeof summarizeCoverageModel>;
 type BrowserScriptOptions = Parameters<typeof runBrowserScript>[2];
@@ -48,8 +49,9 @@ const jsonPath = path.join(repoRoot, 'tests', '.coverage.json');
 const coverageBaselinePath = path.join(repoRoot, 'scripts', 'coverage-baseline.json');
 const playwrightCoverageDir = process.env.PLAYWRIGHT_COVERAGE_DIR ||
   path.join(repoRoot, 'tests', '.playwright-coverage');
+const vitestCoverageFormat = process.env.VITEST_COVERAGE_FORMAT || 'istanbul';
 const vitestCoveragePath = process.env.VITEST_COVERAGE_JSON ||
-  path.join(repoRoot, 'tests', '.vitest-coverage', 'coverage-final.json');
+  path.join(repoRoot, 'tests', '.vitest-coverage', vitestCoverageFormat === 'native-functions' ? 'coverage-functions.json' : 'coverage-final.json');
 const includeVitestCoverage = process.env.INCLUDE_VITEST_COVERAGE === '1' ||
   process.env.INCLUDE_VITEST_COVERAGE === 'true';
 const requirePlaywrightCoverageShards = process.env.REQUIRE_PLAYWRIGHT_COVERAGE_SHARDS === '1' ||
@@ -179,13 +181,14 @@ function locToRange(source: string, loc: RawSpan | null | undefined, offsets = l
 }
 
 function getFileMetrics(model: CoverageModel, file: string, total: unknown = 0, source: string | null = null): FileMetrics {
-  const index = model.has(file) ? null : sourceFunctions(sourceForFile(file), file);
+  const index = model.has(file) ? null : productionFunctionIndex(sourceForFile(file), file, repoRoot);
   const metrics: FileMetrics = model.get(file) || {
     file,
     total: 0,
     ranges: [],
-    functionIndex: index!,
-    functions: new Map(index!.map(fn => [`${fn.start}:${fn.end}`, { name: fn.name, called: false }])),
+    functionIndex: index!.owned,
+    thirdPartyFunctionIndex: index!.thirdParty,
+    functions: new Map(index!.owned.map(fn => [`${fn.start}:${fn.end}`, { name: fn.name, called: false }])),
     unmappedFunctions: new Set<string>(),
     sources: new Set<string>(),
   };
@@ -205,6 +208,7 @@ function addCoveredRanges(metrics: FileMetrics, ranges: readonly RawRange[]) {
 
 function addFunction(metrics: FileMetrics, key: string, name: unknown, called: boolean, collector = 'v8') {
   const [start, end] = key.split(':').map(Number);
+  if (matchSourceFunction(metrics.thirdPartyFunctionIndex, start!, end!, collector)) return;
   const sourceFunction = matchSourceFunction(metrics.functionIndex, start!, end!, collector);
   const targetKey = sourceFunction ? `${sourceFunction.start}:${sourceFunction.end}` : key;
   const existing = metrics.functions.get(targetKey);
@@ -218,7 +222,7 @@ function addFunction(metrics: FileMetrics, key: string, name: unknown, called: b
   if (called) metrics.unmappedFunctions.add(`${key} ${name}`);
 }
 
-function addBrowserEntriesToModel(model: CoverageModel, entries: readonly RawEntry[]) {
+export function addBrowserEntriesToModel(model: CoverageModel, entries: readonly RawEntry[]) {
   const canonical = new Map<string, RawEntry>();
 
   for (const entry of entries) {
@@ -274,16 +278,38 @@ function addBrowserEntriesToModel(model: CoverageModel, entries: readonly RawEnt
   }
 }
 
-function readVitestCoverageModel() {
+/** The reader has already qualified raw witnesses, source hashes and exact own keys.
+ * Unknown entries are diagnostics only; native collection claims no byte ranges. */
+export function addNativeFunctionCoverageToModel(model: CoverageModel, coverage: Pick<NativeCoverageReceipt, 'files'>) {
+  for (const file of coverage.files) {
+    const source = sourceForFile(file.file);
+    const metrics = getFileMetrics(model, file.file, source.length, 'vitest-native-functions');
+    for (const fn of file.called) {
+      if (!Number.isSafeInteger(fn.count) || fn.count <= 0) throw new Error('Invalid native positive function count');
+      const target = metrics.functions.get(`${fn.start}:${fn.end}`);
+      if (!target) throw new Error(`Native function is not an exact canonical owned key: ${file.file}:${fn.start}:${fn.end}`);
+      target.called = true;
+    }
+    for (const fn of file.unmapped) if (fn.count > 0) metrics.unmappedFunctions.add(`${fn.start}:${fn.end} native count=${fn.count}: ${fn.reason}`);
+  }
+}
+
+async function readVitestCoverageModel() {
   if (!includeVitestCoverage) return null;
   if (!fs.existsSync(vitestCoveragePath)) throw new Error(`Required Vitest coverage is missing: ${vitestCoveragePath}`);
 
-  const coverage = JSON.parse(fs.readFileSync(vitestCoveragePath, 'utf8')) as Record<string, RawVitestFile>;
+  if (!['istanbul', 'native-functions'].includes(vitestCoverageFormat)) throw new Error('Unknown Vitest coverage format');
   const model: CoverageModel = new Map();
   // Include never-imported runtime modules in the denominator, independently
   // of collector behavior or test discovery.
   for (const file of productionSources(repoRoot, { runtime: true })) getFileMetrics(model, file, sourceForFile(file).length);
 
+  if (vitestCoverageFormat === 'native-functions') {
+    const native = await readNativeFunctionCoverage(vitestCoveragePath, {root: repoRoot});
+    addNativeFunctionCoverageToModel(model, native);
+    return {model, native};
+  }
+  const coverage = JSON.parse(fs.readFileSync(vitestCoveragePath, 'utf8')) as Record<string, RawVitestFile>;
   for (const [coveragePath, fileCoverage] of Object.entries(coverage)) {
     const file = canonicalFile(fileCoverage.path || coveragePath);
     if (!isAppSource(file)) continue;
@@ -306,10 +332,10 @@ function readVitestCoverageModel() {
     }
   }
 
-  return model;
+  return {model, native: null};
 }
 
-function mergeCoverageModels(...models: Array<CoverageModel | null>) {
+export function mergeCoverageModels(...models: Array<CoverageModel | null>) {
   const combined: CoverageModel = new Map();
 
   for (const model of models) {
@@ -328,7 +354,7 @@ function mergeCoverageModels(...models: Array<CoverageModel | null>) {
   return combined;
 }
 
-function summarizeCoverageModel(model: CoverageModel) {
+export function summarizeCoverageModel(model: CoverageModel) {
   const rows = [...model.entries()].map(([file, metrics]) => {
     const fns = [...metrics.functions.values()];
     const fnCalled = fns.filter(fn => fn.called).length;
@@ -345,6 +371,7 @@ function summarizeCoverageModel(model: CoverageModel) {
       uncalledFns: fns.filter(fn => !fn.called).map(fn => fn.name),
       sources: [...metrics.sources].sort(),
       unmappedCalledFunctions: [...metrics.unmappedFunctions].sort(),
+      thirdPartyFunctions: metrics.thirdPartyFunctionIndex.length,
     };
   });
   rows.sort((a, b) => a.fnPct - b.fnPct || b.fnTotal - a.fnTotal);
@@ -422,12 +449,21 @@ function enforceCoverageGate(report: CoverageSummary) {
   );
 }
 
-function writeCoverageReport(entries: readonly RawEntry[], fixtures: readonly (BrowserFixture | FixtureReader)[], options: { playwrightScope?: string } = {}) {
+async function writeCoverageReport(entries: readonly RawEntry[], fixtures: readonly (BrowserFixture | FixtureReader)[], options: { playwrightScope?: string } = {}) {
   const playwrightModel: CoverageModel = new Map();
   addBrowserEntriesToModel(playwrightModel, entries);
   const playwright = summarizeCoverageModel(playwrightModel);
 
-  const vitestModel = readVitestCoverageModel();
+  const unitCoverage = await readVitestCoverageModel();
+  const vitestModel = unitCoverage?.model ?? null;
+  const native = unitCoverage?.native ?? null;
+  const nativeDiagnostics = native ? {
+    producer: native.producer, functionsOnly: true, statements: null, branches: null, bytes: null,
+    receipt: path.relative(repoRoot, vitestCoveragePath).split(path.sep).join('/'),
+    mappingComplete: native.files.every(file => file.unmapped.length === 0),
+    unattributedScripts: native.unattributed,
+    unknownFunctions: native.files.filter(file => file.unmapped.length > 0).map(file => ({file: file.file, entries: file.unmapped})),
+  } : null;
   const vitest = vitestModel ? summarizeCoverageModel(vitestModel) : null;
   const combined = vitest
     ? summarizeCoverageModel(mergeCoverageModels(vitestModel, playwrightModel))
@@ -450,7 +486,7 @@ function writeCoverageReport(entries: readonly RawEntry[], fixtures: readonly (B
     ciRunUrl: process.env.GITHUB_RUN_ID ? `https://github.com/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}` : null,
     runner,
     scope: vitest
-      ? `app-source JavaScript covered by Vitest/Node V8 coverage plus ${options.playwrightScope || 'sampled Playwright Chromium fixtures'}`
+      ? `app-source functions covered by ${native ? 'native Vitest function-only evidence (no unit byte, statement or branch measurement)' : 'Vitest Istanbul coverage'} plus ${options.playwrightScope || 'sampled Playwright Chromium fixtures'}`
       : `loaded app-source JavaScript from ${options.playwrightScope || 'sampled Playwright Chromium fixtures'}`,
     globalPct: combined.globalPct,
     globalFnPct: combined.globalFnPct,
@@ -458,6 +494,7 @@ function writeCoverageReport(entries: readonly RawEntry[], fixtures: readonly (B
     fixtures: fixtures.map(normalizeFixture),
     rows: combined.rows,
     features: summarizeFeatures(combined.rows),
+    nativeFunctionCoverage: nativeDiagnostics,
     reports: {
       combined,
       playwright,
@@ -470,6 +507,10 @@ function writeCoverageReport(entries: readonly RawEntry[], fixtures: readonly (B
   fs.writeFileSync(path.join(repoRoot, 'tests', '.coverage.html'), renderCoverageHtml(report));
   if (process.env.GITHUB_STEP_SUMMARY) fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, renderCoverageMarkdown(report));
 
+  if (nativeDiagnostics) {
+    const unknown = nativeDiagnostics.unknownFunctions.flatMap(file => file.entries);
+    console.log(`Native function mapping: ${unknown.length} unknown entries (${unknown.filter(entry => entry.count > 0).length} positive), ${nativeDiagnostics.unattributedScripts.length} authenticated unattributed scripts; all remain zero-credit diagnostics in the JSON and unit artifact.`);
+  }
   console.log('\n' + '='.repeat(92));
   console.log(vitest
     ? '  COMBINED COVERAGE REPORT (Vitest/Node + Playwright; function coverage primary)'
@@ -513,7 +554,7 @@ async function main() {
       throw new Error(`No readable Playwright coverage shards found in ${playwrightCoverageDir}.`);
     }
     console.log(`Reading ${suiteCoverage.fixtures.length} readable Playwright coverage shard(s) from ${path.relative(repoRoot, playwrightCoverageDir)}`);
-    const report = writeCoverageReport(suiteCoverage.entries, suiteCoverage.fixtures, {
+    const report = await writeCoverageReport(suiteCoverage.entries, suiteCoverage.fixtures, {
       playwrightScope: 'Playwright suite coverage shards',
     });
     enforceCoverageGate(report);
@@ -546,7 +587,7 @@ async function main() {
       }
     }
 
-    const report = writeCoverageReport(entries, COVERAGE_FIXTURES, {
+    const report = await writeCoverageReport(entries, COVERAGE_FIXTURES, {
       playwrightScope: 'sampled Playwright Chromium fixtures',
     });
     if (firstFailure) throw firstFailure;
@@ -619,7 +660,7 @@ async function runCoverageFixture(browser: Browser, testPath: string, options: B
   return { entries, failure };
 }
 
-main().catch(error => {
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) main().catch(error => {
   console.error((error as { stack?: unknown } | null | undefined)?.stack || (error as { message?: unknown } | null | undefined)?.message || String(error));
   process.exit(((error as { exitCode?: unknown } | null | undefined)?.exitCode || 1) as number);
 });

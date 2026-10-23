@@ -1,0 +1,118 @@
+/* Biology Scores component-owned utilities; no reset. */
+@import "tailwindcss/theme.css" layer(gb-theme) prefix(gb);
+@import "tailwindcss/utilities.css" prefix(gb) source(none);
+@import "./ui-tokens.tailwind.css";
+@custom-variant plan-ui (&:is([data-biology-planning-view], [data-biology-planning-view] *));
+@custom-variant device-coarse (@media (pointer: coarse));
+@custom-variant plan-small (@media (max-width: 760px));
+@custom-variant plan-phone (@media (max-width: 650px));
+@custom-variant plan-default (html:not([data-theme]) &);
+@source "../js/biology-planning-classes.ts";
+@source "../js/components/BiologyPlanningCard.svelte";
+@source "../js/components/BiologyNextChecks.svelte";
+@source "../js/components/BiologyCoverageBundle.svelte";
+@source "../js/components/BiologyCoveragePlanner.svelte";
+@source "../js/components/BiologyPlanningPresentation.svelte";
+
+/* Shared Biology Scores marker and methodology reading components. */
+@custom-variant reading-ui (&:is([data-biology-reading-view], [data-biology-reading-view] *));
+@custom-variant reading-mobile (@media (max-width: 700px));
+@custom-variant reading-phone (@media (max-width: 650px));
+@source "../js/biology-reading-classes.ts";
+@source "../js/components/BiologyReadingFacts.svelte";
+@source "../js/components/BiologyInterpretationNotes.svelte";
+@source "../js/components/BiologyMarkerResults.svelte";
+@source "../js/components/BiologyMethodology.svelte";
+@source "../js/components/BiologyReadingPresentation.svelte";
+
+/* Biology question and AI content; domain state remains in its existing services. */
+@custom-variant biology-ai (&:is([data-biology-ai-view], [data-biology-ai-view] *));
+@custom-variant ai-stack (@media (max-width: 640px));
+@custom-variant ai-phone (@media (max-width: 650px));
+@source "../js/biology-ai-classes.ts";
+@source "../js/components/BiologyAIQuestion.svelte";
+@source "../js/components/BiologyAIDot.svelte";
+@source "../js/components/BiologyAISkeleton.svelte";
+@source "../js/components/BiologyAISummary.svelte";
+@source "../js/components/BiologyAIAnswer.svelte";
+@source "../js/components/BiologyAIPresentation.svelte";
+
+/* Biology cards and shared score metrics. */
+@custom-variant biology-card (&:is([data-biology-card-view], [data-biology-card-view] *));
+@custom-variant card-phone (@media (max-width: 650px));
+@custom-variant card-container (@container biology-page (max-width: 650px));
+@custom-variant card-narrow (@media (max-width: 600px));
+@source "../js/biology-card-classes.ts";
+@source "../js/components/BiologyScoreMetric.svelte";
+@source "../js/components/BiologyScoreDetail.svelte";
+@source "../js/components/BiologyCardPresentation.svelte";
+
+/* Coherence overview, contributors and dashboard domain presentation. */
+@custom-variant biology-overview (&:is([data-biology-overview-view], [data-biology-overview-view] *));
+@custom-variant overview-wide (@media (max-width: 1200px));
+@custom-variant overview-medium (@media (max-width: 1000px));
+@custom-variant overview-small (@media (max-width: 720px));
+@custom-variant overview-phone (@media (max-width: 650px));
+@custom-variant overview-narrow (@media (max-width: 600px));
+@custom-variant overview-container (@container biology-page (max-width: 900px));
+@custom-variant overview-container-phone (@container biology-page (max-width: 650px));
+@source "../js/biology-overview-classes.ts";
+@source "../js/components/BiologyContributors.svelte";
+@source "../js/components/BiologyCoherenceOverview.svelte";
+@source "../js/components/BiologyDashboardScore.svelte";
+@source "../js/components/BiologyDashboardCoherence.svelte";
+@source "../js/components/BiologyOverviewPresentation.svelte";
+
+/* Profile and collection context review; request and write ownership stays external. */
+@custom-variant biology-context (&:is([data-biology-context-view], [data-biology-context-view] *));
+@source "../js/biology-context-classes.ts";
+@source "../js/components/BiologyContextPresentation.svelte";
+@source "../js/components/BiologyContextBanner.svelte";
+@source "../js/components/BiologyContextReview.svelte";
+@source "../js/components/BiologyContextManualFields.svelte";
+@source "../js/components/BiologyContextSuggestion.svelte";
+
+/* Public summary and compatibility-lens presentation. */
+@custom-variant biology-summary (&:is([data-biology-summary-view], [data-biology-summary-view] *));
+@custom-variant summary-phone (@media (max-width: 560px));
+@custom-variant summary-narrow (@media (max-width: 600px));
+@custom-variant summary-tablet (@media (max-width: 900px));
+@source "../js/biology-summary-classes.ts";
+@source "../js/components/BiologySummaryPresentation.svelte";
+@source "../js/components/BiologySummaryWidget.svelte";
+@source "../js/components/BiologySummaryHero.svelte";
+@source "../js/components/BiologySummaryCard.svelte";
+@source "../js/components/BiologySummaryStatus.svelte";
+@source "../js/components/BiologySummaryInputs.svelte";
+@source "../js/components/BiologyCompatibilityLens.svelte";
+
+/* Shared lens header, widget chrome and ordering controls. */
+@custom-variant lens-shell (&:where([data-lens-shell-view], [data-lens-shell-view] *));
+@source "../js/lens-shell-classes.ts";
+@source "../js/components/LensShellPresentation.svelte";
+@source "../js/components/LensPageHeader.svelte";
+@source "../js/components/LensPageWidget.svelte";
+@source "../js/components/LensPageGrid.svelte";
+@source "../js/components/LensWidgetTools.svelte";
+
+/* Typed Biology page composition and shared lab date controls. */
+@custom-variant biology-page (&:where([data-biology-page-view], [data-biology-page-view] *));
+@custom-variant lab-range (&:where([data-lab-date-range-view], [data-lab-date-range-view] *));
+@source "../js/biology-page-classes.ts";
+@source "../js/lab-date-range-classes.ts";
+@source "../js/components/BiologyScoresPage.svelte";
+@source "../js/components/BiologyScoreGroup.svelte";
+@source "../js/components/LabDateRange.svelte";
+
+/* Genome import metadata, Body sources and literal lens actions. */
+@custom-variant lens-content (&:where([data-lens-content-view], [data-lens-content-view] *));
+@custom-variant lens-small (@media (max-width: 600px));
+@source "../js/lens-content-classes.ts";
+@source "../js/components/LensActionButtons.svelte";
+@source "../js/components/GenomeImportDetails.svelte";
+@source "../js/components/BodySources.svelte";
+@source "../js/components/LensPageContent.svelte";
+
+/* Dashboard widget and biometric picker utilities share the stable dashboard URL. */
+@import "./dashboard-picker.tailwind.css";
+@custom-variant lens-content-hover (&:hover);

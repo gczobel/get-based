@@ -5,6 +5,8 @@ import { createLegacyAssertions } from './helpers/legacy-assertions.js';
 // Light page view delegated-action source guards.
 
 const src = readRepositorySource('js/light-page-view.js', 'utf8');
+const pillsSrc = readRepositorySource('js/components/LightDashboardPills.svelte', 'utf8');
+const presentationSrc = readRepositorySource('js/components/LightWidgetPrompt.svelte', 'utf8');
 const hooksSrc = readRepositorySource('js/light-page-view-hooks.js', 'utf8');
 const todayAiSrc = readRepositorySource('js/light-today-ai.js', 'utf8');
 const dashboardRenderersSrc = readRepositorySource('js/dashboard-widget-renderers.js', 'utf8');
@@ -42,10 +44,10 @@ assert('Light page view avoids direct window globals',
   !/window\./.test(src));
 assert('Light page feature hook wires exposure dependencies without product recommendation coupling',
   /configureLightPageView\(\{/.test(hooksSrc)
-    && /renderLightTodayHero/.test(hooksSrc)
+    && /getLightTodayHeroView/.test(hooksSrc)
     && /renderDevicesSection/.test(hooksSrc)
     && /renderLightTools/.test(hooksSrc)
-    && /renderChannelMixVerdict/.test(hooksSrc)
+    && /getChannelMixVerdictView/.test(hooksSrc)
     && !/renderChannelDeficitDeviceRecs/.test(hooksSrc)
     && !/loadCatalog/.test(hooksSrc)
     && !/loadLightDevicePresets/.test(hooksSrc)
@@ -63,11 +65,13 @@ assert('Light Today AI renderers are wired without a window facade',
     && dashboardCompositionSrc.includes('renderLightTodayHero: renderLoadedLightTodayHero,')
     && !dashboardCompositionSrc.includes("from './light-today-ai.js'"));
 assert('Light page UI hook wires router and Sun settings leaf dependencies',
-  /import \{ navigate \} from '\.\/views\.js';/.test(uiHooksSrc)
+  /import \{ navigate \} from '\.\/views-runtime\.js';/.test(uiHooksSrc)
     && !/from '\.\/settings-privacy\.js'/.test(uiHooksSrc)
-    && /import \{ renderSunDataSourceSettings \} from '\.\/settings-privacy\.js';/.test(hooksSrc)
+    && /import \{ installSunDataSourceDelegates, getSunDataSourceSettingsView \} from '\.\/settings-privacy\.js';/.test(hooksSrc)
+    && (hooksSrc.match(/^installSunDataSourceDelegates\(\);$/gm) || []).length === 1
+    && hooksSrc.indexOf('installSunDataSourceDelegates();') < hooksSrc.indexOf('configureLightPageView({')
     && !/from '\.\/settings\.js'/.test(uiHooksSrc)
-    && /configureLightPageView\(\{[\s\S]*renderSunDataSourceSettings[\s\S]*\}\);/.test(hooksSrc));
+    && /configureLightPageView\(\{[\s\S]*getSunDataSourceSettingsView[\s\S]*\}\);/.test(hooksSrc));
 assert('Light page hooks and router wiring load behind the feature boundary',
   lightSunModulesSrc.includes("import './light-page-view-hooks.js';")
     && lightSunModulesSrc.includes('configureLightPageView({ navigate });')
@@ -93,10 +97,10 @@ assert('Service worker caches Light page hooks',
 
 assert('Light widget prompt receives action ids instead of JavaScript snippets',
   /function renderLightWidgetPrompt\(status, ctaLabel, ctaAction/.test(src)
-    && /data-light-page-action="\$\{escapeAttr\(ctaAction\)\}"/.test(src)
+    && presentationSrc.includes('data-light-page-action={view.action}') && src.includes("kind: 'prompt'")
     && !/function renderLightWidgetPrompt\(status, ctaLabel, ctaJs/.test(src));
 assert('Dashboard channel pill action passes channel through data attribute',
-  /data-light-page-action="open-channel" data-channel="\$\{escapeAttr\(k\)\}"/.test(src)
+  pillsSrc.includes('data-light-page-action="open-channel" data-channel={pill.key}')
     && /lightPageDeps\.openChannelOnLightPage\(actionEl\.dataset\.channel \|\| ''\)/.test(src));
 
 console.log(`\nResults: ${legacyAssertions.pass} passed, ${legacyAssertions.fail} failed, ${legacyAssertions.pass + legacyAssertions.fail} total`);

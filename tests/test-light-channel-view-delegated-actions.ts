@@ -5,6 +5,8 @@ import { createLegacyAssertions } from './helpers/legacy-assertions.js';
 // Light channel view delegated-action and dependency wiring guards.
 
 const src = readRepositorySource('js/light-channel-view.js', 'utf8');
+const pillsSrc = readRepositorySource('js/components/LightChannelPills.svelte', 'utf8');
+const detailSrc = readRepositorySource('js/components/LightChannelDetail.svelte', 'utf8');
 const hooksSrc = readRepositorySource('js/light-channel-view-hooks.js', 'utf8');
 const uiHooksSrc = readRepositorySource('js/light-channel-view-ui-hooks.js', 'utf8');
 const lightSunModulesSrc = readRepositorySource('js/app-light-sun-modules.js', 'utf8');
@@ -19,7 +21,7 @@ const inlineHandlerRe = /\bon(?:click|change|input|submit|keydown|keyup)=/;
 const directAssignmentRe = /\.(?:onclick|onchange|oninput)\s*=/;
 
 assert('light-channel-view.js has no inline event attributes',
-  !inlineHandlerRe.test(src));
+  !inlineHandlerRe.test(src) && !inlineHandlerRe.test(detailSrc) && !inlineHandlerRe.test(pillsSrc));
 assert('light-channel-view.js avoids direct event property assignment',
   !directAssignmentRe.test(src));
 assert('Light channel view exposes dependency configurator',
@@ -30,9 +32,12 @@ assert('Light channel view avoids direct window globals',
 assert('Light channel actions stay delegated through data attributes',
   /lightChannelActionDelegateRoots = new WeakSet\(\);/.test(src)
     && /root\.addEventListener\('click', handleLightChannelActionClick\)/.test(src)
-    && /data-light-channel-action="toggle-detail"/.test(src)
-    && /data-light-channel-action="quick-log-sun"/.test(src)
-    && /data-light-channel-action="quick-log-device"/.test(src));
+    && /components\/LightChannelPills\.svelte\.html\.js/.test(src)
+    && /data-light-channel-action="toggle-detail"/.test(pillsSrc)
+    && /components\/LightChannelDetail\.svelte\.html\.js/.test(src)
+    && /renderChannelDetail\(\{ view: projectChannelDetail\(/.test(src)
+    && /data-light-channel-action="quick-log-sun"/.test(detailSrc)
+    && /data-light-channel-action="quick-log-device"/.test(detailSrc));
 assert('Light channel feature hook wires runtime dependencies',
   /configureLightChannelView\(\{/.test(hooksSrc)
     && /channelDisplay: CHANNEL_DISPLAY/.test(hooksSrc)

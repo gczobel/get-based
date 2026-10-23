@@ -5,7 +5,10 @@ const moduleUrl = createModuleUrl('chatUiCoverage');
 
 test('chat image attachments cover previews handlers and lightbox controls', async ({ page }) => {
   await page.goto('/app', { waitUntil: 'load' });
-  await page.waitForSelector('#chat-input');
+  await page.waitForSelector('html[data-app-ready]');
+  await page.waitForSelector('#chat-input', {state:'attached'});
+
+  await page.evaluate(async () => { await (await import('/js/chat-loader.js')).openChatPanel(); });
 
   const results = await page.evaluate(async ({ chatImagesUrl }) => {
     const [chatImages, { state }] = await Promise.all([
@@ -64,7 +67,7 @@ test('chat image attachments cover previews handlers and lightbox controls', asy
         'initChatImageHandlers',
       ].every(name => typeof (window as unknown as Record<string, unknown>)[name] === 'undefined');
 
-      outcomes.structuredComposerMenuExposesOriginalPhotoPicker = attachBtn?.style.display === 'flex'
+      outcomes.structuredComposerMenuExposesOriginalPhotoPicker = !!attachBtn && getComputedStyle(attachBtn).display === 'flex'
         && photoAction?.hidden === false
         && input?.getAttribute('accept')?.includes('image/') === true
         && input?.getAttribute('accept')?.includes('.pdf') === false
@@ -75,7 +78,7 @@ test('chat image attachments cover previews handlers and lightbox controls', asy
       await chatImages.addImageAttachment(makeImage('tiny <lab>.png'));
       outcomes.addImageCreatesPreview = chatImages.getPendingAttachments().length === 1
         && chatImages.hasPendingAttachments() === true
-        && preview?.style.display === 'flex'
+        && !!preview && getComputedStyle(preview).display === 'flex'
         && preview?.querySelector('.chat-attach-count')?.textContent === '1/5'
         && preview?.querySelector('img')?.getAttribute('alt') === 'tiny <lab>.png'
         && chatImages.getPendingAttachments()[0]?.base64 === btoa(String.fromCharCode(...pngBytes));
@@ -85,7 +88,7 @@ test('chat image attachments cover previews handlers and lightbox controls', asy
       state.currentThreadId = 'attachment-other-thread';
       chatImages.refreshAttachmentDraft();
       const otherThreadStartsEmpty = chatImages.getPendingAttachments().length === 0
-        && preview?.style.display === 'none';
+        && preview?.hidden === true;
       state.currentThreadId = originalThreadId;
       chatImages.refreshAttachmentDraft();
       outcomes.attachmentsAreScopedPerThread = otherThreadStartsEmpty
@@ -97,7 +100,7 @@ test('chat image attachments cover previews handlers and lightbox controls', asy
 
       chatImages.removeImageAttachment(0);
       outcomes.removeImageClearsPreview = chatImages.getPendingAttachments().length === 0
-        && preview?.style.display === 'none';
+        && preview?.hidden === true;
       outcomes.attachmentChangesRefreshSendButtonThroughConfiguredCallback = sendButtonRefreshes >= 2
         && typeof (window as {updateSendButtonState?:unknown}).updateSendButtonState === 'undefined';
       chatImages.configureChatImages({ updateSendButtonState: undefined });
@@ -242,7 +245,7 @@ test('chat image attachments cover previews handlers and lightbox controls', asy
       const lightbox = document.querySelector('.chat-lightbox');
       outcomes.lightboxOpens = lightbox?.getAttribute('role') === 'dialog'
         && lightbox?.getAttribute('aria-modal') === 'true'
-        && !!lightbox.querySelector('img[alt="Attached image preview"]')
+        && !!lightbox.querySelector('img[alt="Attachment preview"]')
         && document.activeElement === lightbox.querySelector('.chat-lightbox-close');
       lightbox?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
       outcomes.lightboxClickCloses = !document.querySelector('.chat-lightbox');
@@ -282,12 +285,13 @@ test('chat image attachments cover previews handlers and lightbox controls', asy
 
 test('chat thread search covers message results clearing and jump highlighting', async ({ page }) => {
   await page.goto('/app', { waitUntil: 'load' });
-  await page.waitForSelector('#chat-thread-search');
+  await page.waitForSelector('#chat-thread-search', { state: 'attached' });
 
   const results = await page.evaluate(async ({ threadSearchUrl }) => {
-    const [{ state }, threadSearch] = await Promise.all([
+    const [{ state }, threadSearch, navigation] = await Promise.all([
       import('/js/state.js'),
       (import(threadSearchUrl) as Promise<unknown>) as Promise<Pick<typeof import('../../js/chat-thread-search.js'), "configureChatThreadSearch" | "filterThreadList" | "jumpToSearchResult" | "invalidateThreadContentCache">>,
+      import('/js/chat-thread-list-view.js'),
     ]);
     const outcomes: Record<string, unknown> = {};
     const storage = new Map(Array.from({ length: localStorage.length }, (_, i) => {
@@ -324,8 +328,8 @@ test('chat thread search covers message results clearing and jump highlighting',
     try {
       state.currentProfile = 'chat-search-profile';
       (state as {chatThreads: unknown}).chatThreads = [
-        { id: 'thread_a', name: 'Ferritin <Plan>' },
-        { id: 'thread_b', name: 'Sleep Notes' },
+        { id: 'thread_a', name: 'Ferritin <Plan>', createdAt: '2026-10-07T12:00:00Z', updatedAt: '2026-10-07T12:00:00Z', messageCount: 2 },
+        { id: 'thread_b', name: 'Sleep Notes', createdAt: '2026-10-07T12:00:00Z', updatedAt: '2026-10-07T12:00:00Z', messageCount: 1 },
       ];
       state.currentThreadId = 'thread_b';
       (state as {chatHistory: unknown}).chatHistory = messagesByThread.thread_b;
@@ -338,14 +342,7 @@ test('chat thread search covers message results clearing and jump highlighting',
         getChatThreadKey: (threadId: unknown) => `chat-search-${threadId}`,
         renderThreadList(filter: unknown) {
           renderCalls.push(filter || '');
-          const list = document.getElementById('chat-thread-list');
-          if (!list) return;
-          const visible = state.chatThreads.filter(thread =>
-            !filter || thread.name.toLowerCase().includes(String(filter).toLowerCase())
-          );
-          list.innerHTML = visible.length
-            ? visible.map(thread => `<div class="chat-thread-item">${thread.name}</div>`).join('')
-            : '<div>No matching threads</div>';
+          navigation.renderChatThreadList('recent', String(filter || ''));
         },
         async switchToThread(threadId: unknown) {
           (state as {currentThreadId: unknown}).currentThreadId = threadId;
@@ -354,6 +351,7 @@ test('chat thread search covers message results clearing and jump highlighting',
         },
       });
 
+      navigation.renderChatThreadList('recent');
       const input = (document.getElementById('chat-thread-search') as HTMLInputElement | null);
       input!.value = 'ferritin';
       threadSearch.filterThreadList('ferritin');
@@ -475,7 +473,7 @@ test('chat panel browser coverage toggles web search and panel chrome', async ({
       outcomes.webSearchTogglePersistsOnAndShowsForProvider =
         chatPanel.getChatWebSearchEnabled() === true
         && localStorage.getItem('labcharts-chat-websearch') === 'on'
-        && label?.style.display === '';
+        && label?.hidden === false;
 
       chatPanel.setChatWebSearchEnabled(false);
       outcomes.webSearchTogglePersistsOff =
@@ -484,7 +482,7 @@ test('chat panel browser coverage toggles web search and panel chrome', async ({
 
       localStorage.setItem('labcharts-ai-provider', 'custom');
       chatPanel.refreshWebSearchToggle();
-      outcomes.webSearchToggleHidesForUnsupportedProvider = label?.style.display === 'none';
+      outcomes.webSearchToggleHidesForUnsupportedProvider = label?.hidden === true;
 
       localStorage.setItem('labcharts-ai-provider', 'ollama');
       localStorage.setItem(threadIndexKey, '{bad json');
@@ -599,6 +597,8 @@ test('mobile chat panel behaves as a modal and restores the page on close', asyn
 
 test('chat summaries cover saved summary modal actions without network calls', async ({ page }) => {
   await page.goto('/app', { waitUntil: 'load' });
+  await page.waitForSelector('#chat-panel', { state: 'attached' });
+  await page.evaluate(async () => { await (await import('/js/chat-loader.js')).openChatPanel(); });
   await page.waitForSelector('#chat-panel');
 
   const results = await page.evaluate(async ({ summariesUrl }) => {
@@ -716,8 +716,10 @@ test('chat summaries cover saved summary modal actions without network calls', a
         print() { printed.push('printed'); },
       });
       summaries.printSummary();
-      outcomes.printSummaryWritesWindow = printed.some(item => String(item).includes('Wellness &lt;Plan&gt; - Summary'))
-        && printed.includes('printed');
+      const printedDocument = new DOMParser().parseFromString(String(printed[0]), 'text/html');
+      outcomes.printSummaryWritesWindow = printedDocument.title === 'Wellness <Plan> - Summary'
+        && !printedDocument.querySelector('script,img,[onclick]')
+        && printed.includes('closed') && printed.includes('printed');
 
       await summaries.deleteSavedSummary('s_new');
       outcomes.deleteSavedSummaryRemovesItemAndCloses = !(state.importedData.chatSummaries as {id?: unknown}[]).some(s => s.id === 's_new')
@@ -781,7 +783,6 @@ test('chat discussion picker lifecycle and resume binding cover browser state pa
       currentThreadId: state.currentThreadId,
       currentChatPersonality: state.currentChatPersonality,
       messagesHTML: document.getElementById('chat-messages')?.innerHTML,
-      inputHTML: document.querySelector('.chat-input-area')?.innerHTML,
     };
     const personas = CHAT_PERSONALITIES.slice(0, 2).map(p => ({ id: p.id, name: p.name, icon: p.icon }));
 
@@ -865,12 +866,10 @@ test('chat discussion picker lifecycle and resume binding cover browser state pa
       (state as {chatThreads: unknown}).chatThreads = original.chatThreads;
       state.currentThreadId = original.currentThreadId;
       state.currentChatPersonality = original.currentChatPersonality;
-      document.querySelector('.discuss-persona-picker')?.remove();
-      document.querySelector('.chat-discussion-mode')?.remove();
+      picker.removeDiscussPersonaPicker();
+      lifecycle.cleanupDiscussionState();
       const messages = document.getElementById('chat-messages');
       if (messages && original.messagesHTML != null) messages.innerHTML = original.messagesHTML;
-      const inputArea = document.querySelector('.chat-input-area');
-      if (inputArea && original.inputHTML != null) inputArea.innerHTML = original.inputHTML;
       localStorage.clear();
       for (const [key, value] of storage) {
         if (key && value != null) localStorage.setItem(key, value);

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { dataModuleSource } from './helpers/data-module-source.js';
-import { syncPushSourceContracts } from './helpers/sync-push-source-contracts.js';
+import { syncPushSourceContracts, syncChatSaveSourceContracts, syncHealthGoalsSourceContracts, syncPullEncryptionSourceContract } from './helpers/sync-push-source-contracts.js';
 import { readServiceWorkerSource } from '../scripts/service-worker-source.js';
 import { createLegacyAssertions } from './helpers/legacy-assertions.js';
 // test-sync.js — Verify sync module exports, payload format, settings UI
@@ -53,6 +53,8 @@ const syncStorageCleanup = await import('../js/sync-storage-cleanup.js');
 await import('../js/sync.js');
 const settingsSyncPanel = await import('../js/settings-sync-panel.js');
 await import('../js/settings.js');
+const {syncLegacyDiagnoseContracts} = await import('./helpers/sync-legacy-diagnose-contracts.js');
+const diagnosePresentationContracts = syncLegacyDiagnoseContracts();
 
   const syncSrc = await fetchWithRetry('js/sync.js');
   const syncConfigureSrc = await fetchWithRetry('js/sync-configure.js');
@@ -102,10 +104,16 @@ await import('../js/settings.js');
   const syncDiagnoseCutoverActionsSrc = await fetchWithRetry('js/sync-diagnose-cutover-actions.js');
   const syncDiagnoseRuntimeSrc = await fetchWithRetry('js/sync-diagnose-runtime.js');
   const syncDiagnoseUiSrc = await fetchWithRetry('js/sync-diagnose-ui.js');
+  const syncDiagnoseImplSrc = await fetchWithRetry('js/sync-diagnose-ui-impl.js');
   const syncDiagnoseRenderSrc = await fetchWithRetry('js/sync-diagnose-render.js');
+  const syncDiagnosePresentationSrc = await fetchWithRetry('js/sync-diagnose-presentation.js');
+  const syncDiagnoseOwnerSrc = await fetchWithRetry('js/components/SyncDiagnoseModal.svelte');
+  const syncDiagnoseProjectorSrc = await fetchWithRetry('js/sync-diagnose-projector.js');
   const syncActionsSrc = await fetchWithRetry('js/sync-actions.js');
   const syncSaveHooksFacadeSrc = await fetchWithRetry('js/sync-save-hooks.js');
-  const syncSaveHooksSrc = (await fetchWithRetry('js/sync-save-hooks-core.js')).replace(/\s+/g, ' ');
+  const rawSyncSaveHooksSrc = await fetchWithRetry('js/sync-save-hooks-core.js');
+  const syncSaveHooksSrc = rawSyncSaveHooksSrc.replace(/\s+/g, ' ');
+  const syncChatSaveContracts = syncChatSaveSourceContracts(rawSyncSaveHooksSrc);
   const syncStorageCleanupSrc = await fetchWithRetry('js/sync-storage-cleanup.js');
   const syncPushSrc = await fetchWithRetry('js/sync-push.js');
   const syncPushContracts = syncPushSourceContracts(syncPushSrc);
@@ -132,12 +140,21 @@ await import('../js/settings.js');
   const syncRelayHealthSrc = await fetchWithRetry('js/sync-relay-health.js');
   const syncStateSrc = await fetchWithRetry('js/sync-state.js');
   const settingsSrc = await fetchWithRetry('js/settings.js');
+  const settingsPanelsSrc = await fetchWithRetry('js/components/SettingsPanels.svelte');
   const settingsSyncPanelSrc = [
     await fetchWithRetry('js/settings-sync-panel.js'),
     await fetchWithRetry('js/settings-sync-panel-impl.js'),
     await fetchWithRetry('js/settings-sync-panel-render.js'),
+    await fetchWithRetry('js/components/AgentAccessSettings.svelte'),
+    await fetchWithRetry('js/components/SyncSettings.svelte'),
+    await fetchWithRetry('js/settings-sync-component.js'),
+    await fetchWithRetry('js/components/SyncDialog.svelte'),
+    await fetchWithRetry('js/settings-sync-restore-ui.js'),
+    await fetchWithRetry('js/sync-dialog-controller.js'),
+    await fetchWithRetry('js/sync-dialog-classes.js'),
   ].join('\n');
-  const settingsSyncRestoreUiSrc = await fetchWithRetry('js/settings-sync-restore-ui.js');
+  const settingsSyncRestoreUiSrc = [await fetchWithRetry('js/settings-sync-restore-ui.js'), await fetchWithRetry('js/components/SyncDialog.svelte')].join('\n');
+  const syncDialogControllerSrc = await fetchWithRetry('js/sync-dialog-controller.js');
   const dataSrc = dataModuleSource(await fetchWithRetry('js/data.js'), await fetchWithRetry('js/data-core.js'));
   const startupOrchestratorSrc = await fetchWithRetry('js/startup-orchestrator.js');
   const startupUiSrc = await fetchWithRetry('js/startup-ui.js');
@@ -157,6 +174,8 @@ await import('../js/settings.js');
     await fetchWithRetry('js/context-card-lifestyle-editors-impl.js'),
     await fetchWithRetry('js/context-card-lifestyle-special-editors.js'),
   ].join('\n');
+  const healthGoalsViewSrc = await fetchWithRetry('js/context-health-goals-view.js');
+  const healthGoalsPresentationSrc = await fetchWithRetry('js/components/ContextHealthGoals.svelte');
   const chatSummariesSrc = await fetchWithRetry('js/chat-summaries.js');
   const markerDetailModalSrc = [
     await fetchWithRetry('js/marker-detail-modal.js'),
@@ -444,16 +463,21 @@ await import('../js/settings.js');
     syncConfigureSrc.includes('getAppOwner: getSyncAppOwner')
       && syncMessengerSrc.includes('signAgentContextRequest')
       && syncMessengerSrc.includes('agent-context:${ownerId}:${timestamp}:${tokenHash}:${profileId || \'default\'}:${contextHash}')
-      && syncMessengerSrc.includes('owner: currentAppOwner()')
+      && syncMessengerSrc.includes('owner: origin.owner')
+      && syncMessengerSrc.includes('const scope = captureAgentAccessOperationScope()')
+      && syncMessengerSrc.includes('writeKey = ownerWriteKeyBytes(current)?.slice()')
+      && syncMessengerSrc.includes('if (!scope.isCurrent()')
       && syncMessengerSrc.includes('ownerId: ownerProof.ownerId')
       && syncMessengerSrc.includes('signature: ownerProof.signature'));
   assert('Agent Access context push respects Manage Context source toggles',
-    syncConfigureSrc.includes("from './lab-context.js'")
-      && syncConfigureSrc.includes('buildLabContext,')
+    syncConfigureSrc.includes("from './lab-context-wearables.js'")
+      && syncConfigureSrc.includes("from './lab-context-loader.js'")
+      && syncConfigureSrc.includes('configureSyncMessengerContextPreparation(loadLabContextBuilder)')
+      && syncConfigureSrc.includes('buildLabContext: buildDefaultSyncMessengerContext')
       && syncConfigureSrc.includes('buildWearableSeriesSection,')
       && syncConfigureSrc.includes('getAgentWearableSeriesDays,')
       && !syncMessengerSrc.includes("import('./lab-context.js')")
-      && syncMessengerSrc.includes('const baseContext = buildLabContext()')
+      && syncMessengerSrc.includes('const baseContext = preparedBuild ? preparedBuild() : buildLabContext()')
       && syncMessengerSrc.includes('buildWearableSeriesSection(seriesDays)')
       && !syncMessengerSrc.includes('buildLabContext({ skipGroupFilter: true, ignoreContextToggles: true })'));
   assert('service worker precaches sync-messenger.js',
@@ -518,7 +542,7 @@ await import('../js/settings.js');
       && syncDiagnoseUiSrc.includes('export function configureSyncDiagnoseUI')
       && syncDiagnoseUiSrc.includes('configureSyncDiagnoseActions({')
       && syncDiagnoseUiSrc.includes("from './sync-diagnose-actions.js'")
-      && syncDiagnoseUiSrc.includes("from './sync-diagnose-render.js'")
+      && syncDiagnoseImplSrc.includes("from './sync-diagnose-render.js'")
       && syncDiagnoseUiSrc.includes('export async function showSyncDiagnose')
       && syncDiagnoseUiSrc.includes('export async function copySyncDiagnose')
       && syncDiagnoseUiSrc.includes('confirmBackfillBlockers, confirmCompactRelay, confirmDisablePhase2')
@@ -531,11 +555,13 @@ await import('../js/settings.js');
     syncDiagnoseRenderSrc.includes('export function renderSyncDiagnoseModal')
       && syncDiagnoseRenderSrc.includes('export function syncDiagnoseActionAttrs')
       && syncDiagnoseRenderSrc.includes('data-sync-diagnose-action')
-      && syncDiagnoseRenderSrc.includes('function renderRelayHealthPanel')
-      && syncDiagnoseRenderSrc.includes('function renderRelayStoragePanel')
-      && syncDiagnoseRenderSrc.includes('function renderDeltaTelemetryPanel')
-      && syncDiagnoseRenderSrc.includes('function renderCutoverPanel')
-      && !/\son(?:click|change|input|keydown|submit)=["']/.test(syncDiagnoseRenderSrc));
+      && syncDiagnoseRenderSrc.includes('return renderSyncDiagnosePresentation({ diagnostics, healthVerdict, quota, isDebug, cutoverEnabled })')
+      && syncDiagnosePresentationSrc.includes("from './components/SyncDiagnoseModal.svelte.html.js'")
+      && syncDiagnosePresentationSrc.includes('return diagnoseHTML({ view: projectSyncDiagnose(input) })')
+      && ['Health', 'Storage', 'Telemetry', 'Cutover'].every(panel => syncDiagnoseProjectorSrc.includes(`function project${panel}(`))
+      && ['health', 'storage', 'telemetry', 'cutover'].every(panel => syncDiagnoseOwnerSrc.includes(`{#snippet ${panel}(`))
+      && diagnosePresentationContracts.panels && diagnosePresentationContracts.hostile
+      && !/\son(?:click|change|input|keydown|submit)=["']/.test(syncDiagnoseRenderSrc + syncDiagnoseOwnerSrc));
   assert('service worker precaches sync-diagnose-render.js',
     serviceWorkerSrc.includes("'/js/sync-diagnose-render.js'"));
   assert('sync-diagnose-actions.js is the Sync Diagnose action facade',
@@ -794,9 +820,11 @@ await import('../js/settings.js');
       && notesSrc.includes('if (currentEditorIndex() === undefined) notifyStaleNote()')
       && notesSrc.includes('session.profile !== state.currentProfile || session.data !== state.importedData')
       && notesSrc.includes('JSON.stringify(session.note) === session.fingerprint')
-      && contextCardLifestyleEditorsSrc.includes('refreshOpenHealthGoalsModalOnSync')
-      && contextCardLifestyleEditorsSrc.includes("bindDetailModalSyncRefresh('healthGoals', refreshOpenHealthGoalsModalOnSync)")
-      && contextCardLifestyleEditorsSrc.includes("modal.dataset.syncRefreshKind = 'healthGoals'"));
+      && contextCardLifestyleEditorsSrc.includes("from './context-health-goals-view.js'")
+      && healthGoalsViewSrc.includes("from './components/ContextHealthGoals.svelte.native.js'")
+      && syncHealthGoalsSourceContracts(healthGoalsViewSrc)
+      && healthGoalsViewSrc.includes("modal.dataset.syncRefreshKind = 'healthGoals'")
+      && /export function refresh\(value: unknown\): void\s*\{\s*goals = value;\s*\}/.test(healthGoalsPresentationSrc));
   {
     const syncedArraySurfaces = ['entries', 'notes', 'supplements', 'healthGoals', 'chatSummaries', 'changeHistory'];
     const helperOwnedFiles = new Set(['js/data-merge.js']);
@@ -1032,7 +1060,8 @@ await import('../js/settings.js');
   }
   assert('Sync diagnose includes tombstone rows and deleted-state column',
     /tombstoneRows[\s\S]{0,300}isDeleted:\s*true/.test(syncDiagnosticsSnapshotSrc)
-      && syncDiagnoseRenderSrc.includes('<th>deleted</th>'));
+      && syncDiagnoseOwnerSrc.includes('<th>deleted</th>')
+      && diagnosePresentationContracts.tombstones);
   assert('applyRemoteTombstones wipes the local imported blob for tombstoned profiles',
     /applyRemoteTombstones[\s\S]{0,4000}wipeProfileLocal\(tombId\)/.test(syncTombstonesSrc)
       && /wipeProfileLocal[\s\S]{0,300}await clearProfileStorage\(profileId\)/.test(syncTombstonesSrc));
@@ -1187,20 +1216,23 @@ await import('../js/settings.js');
   // without SSH access. Refresh probes /self/owner-storage to replace
   // the local estimate with the relay's authoritative value.
   assert('Sync diagnose modal wires the self-serve Reduce storage button',
-    syncDiagnoseRenderSrc.includes("syncDiagnoseActionAttrs('compact-relay')")
-      && syncDiagnoseRenderSrc.includes('Reduce storage…')
-      && syncDiagnoseUiSrc.includes("action === 'compact-relay'")
-      && syncDiagnoseUiSrc.includes('confirmCompactRelay(actionEl)'));
+    syncDiagnoseOwnerSrc.includes('data-sync-diagnose-action="compact-relay"')
+      && syncDiagnoseOwnerSrc.includes('Reduce storage…')
+      && diagnosePresentationContracts.compact
+      && syncDiagnoseImplSrc.includes("action === 'compact-relay'")
+      && syncDiagnoseImplSrc.includes('confirmCompactRelay(actionEl)'));
   assert('Sync diagnose modal wires the Refresh-from-relay button',
-    syncDiagnoseRenderSrc.includes("syncDiagnoseActionAttrs('refresh-relay-storage')")
-      && syncDiagnoseUiSrc.includes("action === 'refresh-relay-storage'")
-      && syncDiagnoseUiSrc.includes('refreshRelayStorage(actionEl)'));
+    syncDiagnoseOwnerSrc.includes('data-sync-diagnose-action="refresh-relay-storage"')
+      && diagnosePresentationContracts.refresh
+      && syncDiagnoseImplSrc.includes("action === 'refresh-relay-storage'")
+      && syncDiagnoseImplSrc.includes('refreshRelayStorage(actionEl)'));
   assert('Sync status leads with plain-language health and hides raw diagnostics by default',
-    syncDiagnoseRenderSrc.includes('Sync looks healthy')
-      && syncDiagnoseRenderSrc.includes('Compare the Sync identity code first')
-      && syncDiagnoseRenderSrc.includes('<details class="sync-diagnose-technical">')
-      && syncDiagnoseRenderSrc.indexOf('renderStatusSummary(d, healthVerdict, quota)')
-        < syncDiagnoseRenderSrc.indexOf('<details class="sync-diagnose-technical">'));
+    syncDiagnoseProjectorSrc.includes('Sync looks healthy')
+      && syncDiagnoseOwnerSrc.includes('Compare the Sync identity code first')
+      && syncDiagnoseOwnerSrc.includes('class="sync-diagnose-technical"')
+      && syncDiagnoseOwnerSrc.indexOf('{@render summary(view.summary)}')
+        < syncDiagnoseOwnerSrc.indexOf('class="sync-diagnose-technical"')
+      && diagnosePresentationContracts.summary);
   assert('Sync status presentation is available without opening lazy-loaded Settings',
     modalSharedCssSrc.includes('.sync-diagnose-modal')
       && modalSharedCssSrc.includes('.sync-diagnose-summary')
@@ -1212,7 +1244,8 @@ await import('../js/settings.js');
     syncDiagnoseRelayActionsSrc.includes('Reduce storage (currently ~${mb} MB)?')
       && syncDiagnoseRelayActionsSrc.includes('Relay storage was reduced, but the rebuild did not finish')
       && !syncDiagnoseRelayActionsSrc.includes('Relay was compacted')
-      && syncDiagnoseRenderSrc.includes('Choose Reduce storage soon'));
+      && syncDiagnoseProjectorSrc.includes('Choose Reduce storage soon')
+      && diagnosePresentationContracts.storageCopy);
   assert('compactOwnerSelfServe POSTs to /self/compact-owner with HMAC body',
     /compactOwnerSelfServe[\s\S]{0,800}\/self\/compact-owner[\s\S]{0,400}JSON\.stringify\(\{\s*ownerId,\s*timestamp,\s*signature\s*\}\)/.test(syncRelayHealthSrc));
   assert('compactOwnerSelfServe catches fetch rejection before checking response status',
@@ -1223,10 +1256,23 @@ await import('../js/settings.js');
     /_signSelfRequest[\s\S]{0,1000}\$\{context\}:\$\{ownerId\}:\$\{timestamp\}[\s\S]{0,400}name:\s*'HMAC',\s*hash:\s*'SHA-256'/.test(syncRelayHealthSrc));
   assert('_signSelfRequest signs with the owner writeKey (not mnemonic)',
     /_signSelfRequest[\s\S]{0,800}owner\.writeKey/.test(syncRelayHealthSrc));
+  // URL ownership moved to the shared validated settings helper. Exercise the
+  // original invariants through that actual owner rather than its old location.
+  const selfService = await import('../js/sync-relay-self-service.js');
   assert('_getSelfBaseUrl swaps wss → https and ws → http',
-    /_getSelfBaseUrl[\s\S]{0,800}wss:[\s\S]{0,100}https:[\s\S]{0,200}ws:[\s\S]{0,100}http:/.test(syncRelayHealthSrc));
-  assert('_getSelfBaseUrl honors labcharts-self-url localStorage override (self-host escape hatch)',
-    /SELF_URL_OVERRIDE_KEY\s*=\s*'labcharts-self-url'[\s\S]{0,800}_getSelfBaseUrl[\s\S]{0,400}getItem\(SELF_URL_OVERRIDE_KEY\)[\s\S]{0,200}\^https\?:/.test(syncRelayHealthSrc));
+    syncRelayHealthSrc.includes('resolveRelaySelfServiceUrl')
+      && selfService.resolveRelaySelfServiceUrl('wss://relay.example.test:8443/ws') === 'https://relay.example.test:8443'
+      && selfService.resolveRelaySelfServiceUrl('ws://relay.example.test:8443/ws') === 'http://relay.example.test:8443');
+  const previousSelfServiceUrl = localStorage.getItem('labcharts-self-url');
+  try {
+    localStorage.setItem('labcharts-self-url', 'https://self.example.test:4443/');
+    assert('_getSelfBaseUrl honors labcharts-self-url localStorage override (self-host escape hatch)',
+      syncRelayHealthSrc.includes('getRelaySelfServiceUrl()')
+        && selfService.resolveRelaySelfServiceUrl('wss://relay.example.test', selfService.getRelaySelfServiceUrl()) === 'https://self.example.test:4443');
+  } finally {
+    if (previousSelfServiceUrl === null) localStorage.removeItem('labcharts-self-url');
+    else localStorage.setItem('labcharts-self-url', previousSelfServiceUrl);
+  }
   assert('Cap is 50 MB (RELAY_OWNER_QUOTA_BYTES)',
     /RELAY_OWNER_QUOTA_BYTES = 50 \* 1024 \* 1024/.test(syncRelayHealthSrc));
 
@@ -1557,9 +1603,7 @@ await import('../js/settings.js');
     !/if\s*\(\s*remoteUpdated\s*<\s*localUpdated\s*\)/.test(syncPullSrc),
     'skip-decisions before merge regress to clock-skew/stale-hash bugs');
   assert('onSyncReceived guards on _pulling', syncPullSrc.includes('_pulling') && syncPullSrc.includes('_pulling = true'));
-  assert('Pull handles encryption',
-    (syncPullMergeSrc.match(/await encryptedGetItem\(localKey,\s*\{\s*throwOnDecryptError:\s*true\s*\}\)/g)?.length === 2)
-      && syncPullMergeSrc.includes('await encryptedSetItem(localKey, JSON.stringify(committed))'));
+  assert('Pull handles encryption', syncPullEncryptionSourceContract(syncPullMergeSrc));
   assert('Pull merges profiles with allowlist', syncPullMergeSrc.includes('SYNC_PROFILE_FIELDS') && syncPullMergeSrc.includes('saveProfiles(profiles)'));
   // v1.7.4: pull re-renders whatever view the user is on, not just dashboard
   // (so a Light & Sun page picks up newly-merged sun sessions immediately
@@ -1645,11 +1689,13 @@ await import('../js/settings.js');
       && /replaceSettingsSyncPanelPlaceholders[\s\S]{0,700}renderSyncSection\(\)[\s\S]{0,400}renderMessengerSection\(\)/.test(settingsSyncPanelSrc));
   assert('settings-sync-panel imports sync functions', settingsSyncPanelSrc.includes("from './sync.js'"));
   assert('renderSyncSection exists', settingsSyncPanelSrc.includes('function renderSyncSection'));
-  assert('Sync section in Data tab', settingsSrc.includes('Cross-Device Sync'));
-  assert('Connected indicator with green dot', settingsSyncPanelSrc.includes('#22c55e') && settingsSyncPanelSrc.includes('Connected to relay'));
-  assert('Mnemonic display with mask', settingsSyncPanelSrc.includes('sync-mnemonic') && settingsSyncPanelSrc.includes('MNEMONIC_MASK'));
+  assert('Sync section in Data tab',
+    /data-tab-panel="data"[\s\S]{0,700}Cross-Device Sync[\s\S]{0,200}id="sync-section"/.test(settingsPanelsSrc)
+      && /id="sync-section"[\s\S]{0,300}data-sync-settings-root[\s\S]{0,300}data-settings-sync-placeholder="sync"/.test(settingsPanelsSrc));
+  assert('Connected indicator with green dot', settingsSyncPanelSrc.includes('gb:sync:bg-success') && settingsSyncPanelSrc.includes('Connected to relay'));
+  assert('Mnemonic display with mask', settingsSyncPanelSrc.includes('sync-mnemonic') && settingsSyncPanelSrc.includes('const mask ='));
   assert('Mnemonic toggle button has id', settingsSyncPanelSrc.includes('sync-mnemonic-toggle'));
-  assert('Mnemonic toggle uses getElementById', settingsSyncPanelSrc.includes("getElementById('sync-mnemonic-toggle')"));
+  assert('Mnemonic toggle uses the current owned view and live service value', settingsSyncPanelSrc.includes('getSyncSettingsView()?.toggleMnemonic(mnemonic)') && settingsSyncPanelSrc.includes('const mnemonic = getMnemonic()') && settingsSyncPanelSrc.includes('export function toggleMnemonic(value: string)'));
   assert('Settings shows a safe Sync identity comparison code',
     settingsSyncPanelSrc.includes('sync-identity-code')
       && settingsSyncPanelSrc.includes('same 24-word Data Sync identity')
@@ -1676,19 +1722,16 @@ await import('../js/settings.js');
   assert('showSyncSetupModal exists', settingsSyncPanelSrc.includes('function showSyncSetupModal'));
   assert('Setup modal has two choices', settingsSyncPanelSrc.includes('New setup') && settingsSyncPanelSrc.includes('Join existing'));
   assert('syncSetupNew generates mnemonic', settingsSyncPanelSrc.includes('async function syncSetupNew') || settingsSyncPanelSrc.includes('syncSetupNew'));
-  assert('syncSetupNew has double-click guard', settingsSyncPanelSrc.includes('_syncSetupInProgress'));
-  assert('syncSetupNew shows mnemonic in cleartext', settingsSyncPanelSrc.includes('escapeHTML(mnemonic)'));
+  assert('syncSetupNew has double-click guard', syncDialogControllerSrc.includes('cannotStart()') && syncDialogControllerSrc.includes('busy = true'));
+  assert('syncSetupNew shows mnemonic in cleartext', settingsSyncPanelSrc.includes('{generatedPhrase}') && !settingsSyncPanelSrc.includes('{@html generatedPhrase}'));
   assert('syncSetupNew requires checkbox acknowledgment', settingsSyncPanelSrc.includes('I have saved my mnemonic'));
-  assert('Done button has disabled styling', settingsSyncPanelSrc.includes("opacity:0.45") || settingsSyncPanelSrc.includes("opacity: 0.45"));
+  assert('Done button has disabled styling', settingsSyncPanelSrc.includes('gb:sync-dialog:disabled:opacity-45') && settingsSyncPanelSrc.includes('disabled={!savedPhrase}'));
   assert('syncSetupRestore shows textarea', settingsSyncPanelSrc.includes('function syncSetupRestore'));
   assert('syncSetupDoRestore validates 24 words', settingsSyncPanelSrc.includes("words.length !== 24"));
-  const syncSetupRestoreFlowSrc = settingsSyncPanelSrc.slice(
-    settingsSyncPanelSrc.indexOf('async function syncSetupDoRestore'),
-    settingsSyncPanelSrc.indexOf('async function updateRelayStatus'),
-  );
+  const syncSetupRestoreFlowSrc = syncDialogControllerSrc.slice(syncDialogControllerSrc.indexOf('async function restoreIdentity'));
   assert('syncSetupDoRestore keeps a failed join visible and retryable',
     syncSetupRestoreFlowSrc.includes('Could not join. Verify all 24 words and try again.')
-      && syncSetupRestoreFlowSrc.includes('setSyncSetupRestoreBusy(false)')
+      && syncSetupRestoreFlowSrc.includes('owner.patch({ pending: false')
       && !syncSetupRestoreFlowSrc.includes('await disableSync()'));
   assert('syncSetupRestore protects mnemonic entry from mobile text mutation',
     settingsSyncPanelSrc.includes('autocapitalize="none"')
@@ -1698,7 +1741,12 @@ await import('../js/settings.js');
   assert('closeSyncSetup disables sync if started', settingsSyncPanelSrc.includes('async function closeSyncSetup') && settingsSyncPanelSrc.includes('disableSync'));
   assert('closeSyncSetup releases _syncToggling', settingsSyncPanelSrc.includes('_syncToggling = false'));
   assert('closeSyncSetup handles cleanup failure before releasing toggle',
-    /export async function closeSyncSetup\(\)[\s\S]{0,500}await disableSync\(\);[\s\S]{0,260}catch \(e\)[\s\S]{0,220}setup close cleanup failed[\s\S]{0,260}finally[\s\S]{0,260}_releaseSyncToggle\(\)/.test(settingsSyncPanelSrc));
+    syncDialogControllerSrc.includes('async function cancelSetup()')
+      && syncDialogControllerSrc.includes('await services.disable()')
+      && syncDialogControllerSrc.includes('Sync cleanup failed')
+      && syncDialogControllerSrc.includes('finally {')
+      && syncDialogControllerSrc.includes('services.release()')
+      && syncDialogControllerSrc.includes('services.ownerId() === session.createdOwnerId'));
   assert('Clipboard auto-clear after 60s', settingsSyncPanelSrc.includes('60000') && settingsSyncPanelSrc.includes("writeText('')"));
   assert('loadMnemonic retry timer is cancellable', settingsSyncPanelSrc.includes('_mnemonicRetryTimer') && settingsSyncPanelSrc.includes('clearTimeout(_mnemonicRetryTimer)'));
   assert('Dynamic relay status indicator', settingsSyncPanelSrc.includes('updateRelayStatus') && settingsSyncPanelSrc.includes('sync-status-dot'));
@@ -1858,7 +1906,9 @@ await import('../js/settings.js');
   assert('onChatSaved exported', exportBlockIncludes(syncSrc, ['onChatSaved']));
   assert('onChatSaved has debounce', syncSaveHooksSrc.includes('_chatSyncTimers') && syncSaveHooksSrc.includes('10000'));
   assert('onChatSaved uses the profile push retry helper instead of one-shot push while syncing',
-    /function onChatSaved[\s\S]{0,700}scheduleProfilePush\(profileId,\s*data\)/.test(syncSaveHooksSrc));
+    syncChatSaveContracts.latestDataBeforeRetry
+      && syncChatSaveContracts.noOneShotPush
+      && syncChatSaveContracts.retryWhileSyncing);
   assert('chat thread deletes record tombstones before syncing index',
     await fetchWithRetry('js/chat-threads.js').then(s =>
       /export async function deleteThread[\s\S]*?saveChatThreadIndex\(\{ sync: false \}\)[\s\S]*?recordDeletedChatThread\(threadId\);\s*onChatSaved\(\)/.test(s)));
@@ -2419,7 +2469,9 @@ await import('../js/settings.js');
   assert('Diagnose Copy text includes Phase 2 readiness section',
     /Phase 2 cutover readiness:/.test(syncDiagnosticsTextSrc));
   assert('Diagnose modal renders cutover panel with blocker breakdown',
-    /<b>Lean sync mode<\/b>/.test(deltaSearchSrc) && /haven't been re-pushed yet/.test(deltaSearchSrc));
+    /<b>Lean sync mode<\/b>/.test(syncDiagnoseOwnerSrc)
+      && /haven't been re-pushed yet/.test(syncDiagnoseOwnerSrc)
+      && diagnosePresentationContracts.cutoverBreakdown);
 
   // Live: synthesize an importedData object and call the module export with
   // a known profile, then verify the surface classification is right.
@@ -2510,9 +2562,12 @@ await import('../js/settings.js');
   assert('confirmEnablePhase2 re-checks readiness as defence-in-depth',
     /confirmEnablePhase2[\s\S]{0,400}getDeltaCutoverReadiness\(state\.currentProfile\)[\s\S]{0,200}!r\?\.ready/.test(deltaSearchSrc));
   assert('Cutover modal button gated when not ready (disabled attribute)',
-    /syncDiagnoseActionAttrs\('enable-phase2'\)[\s\S]{0,320}disabled/.test(syncDiagnoseRenderSrc));
+    syncDiagnoseOwnerSrc.includes('data-sync-diagnose-action="enable-phase2"')
+      && syncDiagnoseOwnerSrc.includes('style={syncInlineStyles.disabledAction} disabled')
+      && diagnosePresentationContracts.cutoverGating);
   assert('Cutover modal shows lean-mode ON badge when enabled',
-    /cutoverBadge\s*=\s*cutoverEnabled[\s\S]{0,400}>ON</.test(deltaSearchSrc));
+    /\{#if c\.enabled\}<span[\s\S]{0,100}>ON<\/span>/.test(syncDiagnoseOwnerSrc)
+      && diagnosePresentationContracts.cutoverEnabled);
   assert('Cutover handlers stay module-only',
     typeof syncCutover.enablePhase2Cutover === 'function'
       && typeof syncCutover.disablePhase2Cutover === 'function'

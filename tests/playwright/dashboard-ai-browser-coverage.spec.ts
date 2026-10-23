@@ -21,7 +21,6 @@ test('dashboard AI browser coverage exercises CTA rendering picker routing and D
     const apiRuntime = await import('/js/api-runtime.js');
     const apiVenice = await import('/js/api-venice.js');
     const lens = await import('/js/lens.js');
-    const walletRenderers = await import('/js/provider-wallet-panel-renderers.js');
     const { state } = await import('/js/state.js');
     const contextCardsRuntime = await import('/js/context-cards-runtime.js');
     const dnaBridge = await import('/js/dna-runtime-bridge.js');
@@ -121,9 +120,13 @@ test('dashboard AI browser coverage exercises CTA rendering picker routing and D
         !!host.querySelector<HTMLElement>('.dashboard-cta[aria-label="Protect your data"]');
 
       const kbHtml = dashboardAi.renderKnowledgeBaseSection();
+      const kbNative = document.createElement('template'); kbNative.innerHTML = kbHtml;
       outcomes.renderKnowledgeBaseSectionShowsConfiguredExternalLibrary = kbHtml.includes('Knowledge Base')
-        && kbHtml.includes('Research &lt;Vault&gt;')
-        && kbHtml.includes('query rewriting on');
+        // Genuine Svelte text encoding escapes '<'; the native text remains exact.
+        && kbHtml.includes('Research &lt;Vault>')
+        && kbHtml.includes('query rewriting on')
+        && kbNative.content.querySelector('.lens-section-text')?.textContent === 'Research <Vault> · query rewriting on'
+        && !kbNative.content.querySelector('vault,script,[onclick]');
 
       localStorage.setItem('labcharts-lens-config', JSON.stringify({ enabled: false, backend: 'external-server', url: '', name: '' }));
       outcomes.renderKnowledgeBaseSectionHidesWhenUnconfigured = dashboardAi.renderKnowledgeBaseSection() === '';
@@ -184,7 +187,7 @@ test('dashboard AI browser coverage exercises CTA rendering picker routing and D
       host.querySelector<HTMLElement>('[data-dashboard-ai-action="setup-backup"]')?.click();
       host.querySelector<HTMLElement>('[data-dashboard-ai-action="open-data-protection-picker"]')?.click();
       await dashboardAi.loadDashboardAIModule();
-      await Promise.resolve();
+      for (let attempt = 0; attempt < 200 && !document.querySelector('#data-protection-picker-overlay.show'); attempt++) await new Promise(resolve => savedGlobals.setTimeout.call(window, resolve, 10));
       outcomes.dashboardAiDelegatedCtasRouteClicks =
         calls.includes('encryption')
         && calls.includes('sync')
@@ -193,7 +196,7 @@ test('dashboard AI browser coverage exercises CTA rendering picker routing and D
       document.querySelector<HTMLElement>('#data-protection-picker-overlay')?.remove();
 
       const clickPickerCard = async (openPicker: () => unknown, selector: string) => {
-        openPicker();
+        await openPicker();
         await Promise.resolve();
         const overlay = document.querySelector<HTMLElement>('.confirm-overlay.show');
         overlay?.querySelector<HTMLElement>(selector)?.click();
@@ -221,7 +224,8 @@ test('dashboard AI browser coverage exercises CTA rendering picker routing and D
       lens.closeKnowledgeBaseModal();
       outcomes.pickersScheduleFocusTimers = timers.some(delay => delay === 50);
 
-      dashboardAi.openContextModal();
+      await dashboardAi.openContextModal();
+      for (let attempt = 0; attempt < 200 && document.querySelector('[data-context-hub-view]')?.getAttribute('data-context-save-state') !== 'idle'; attempt++) await new Promise(resolve => savedGlobals.setTimeout.call(window, resolve, 10));
       const contextToggle = /** @type {HTMLInputElement | null} */ (
         document.querySelector<HTMLElement>('#context-hub-overlay [data-context-toggle]')
       );
@@ -229,6 +233,7 @@ test('dashboard AI browser coverage exercises CTA rendering picker routing and D
         (contextToggle as HTMLInputElement).checked = !(contextToggle as HTMLInputElement).checked;
         contextToggle.dispatchEvent(new Event('change', { bubbles: true }));
       }
+      for (let attempt = 0; attempt < 200 && document.querySelector('[data-context-hub-view]')?.getAttribute('data-context-save-state') !== 'idle'; attempt++) await new Promise(resolve => savedGlobals.setTimeout.call(window, resolve, 10));
       outcomes.contextToggleUsesConfiguredModuleCallback = calls.includes('context-status')
         && !('updateChatContextStatus' in window);
       document.querySelector<HTMLElement>('#context-hub-overlay')?.remove();
@@ -240,11 +245,14 @@ test('dashboard AI browser coverage exercises CTA rendering picker routing and D
       outcomes.unknownAiActionHasNoHandler =
         aiActionDelegates.getRegisteredAIActionHandler('coverage-unknown') === null;
       outcomes.emptyVeniceSessionClearsSafely = apiVenice.clearVeniceE2EESession() === false;
-      const seedMarkup = walletRenderers.walletSeedManagementHtml('alpha <coverage>');
-      outcomes.walletSeedManagementEscapesSharedImportButtonMarkup =
-        seedMarkup.includes('class="import-btn import-btn-secondary"')
-        && seedMarkup.includes('alpha &lt;coverage&gt;')
-        && !seedMarkup.includes('alpha <coverage>');
+      const seedOwner = await import('/js/wallet-seed-component.js');
+      const seedHost = document.createElement('div'); document.body.append(seedHost);
+      const seedView = seedOwner.mountWalletSeed(seedHost, { copy: () => {}, create: () => {}, restore: () => {}, continue: () => {} });
+      seedView.setMnemonic('alpha <coverage>'); seedView.setState({ mode: 'manage', pending: false, status: { text: '', tone: 'secondary' } });
+      seedHost.querySelector<HTMLButtonElement>('#wallet-seed-display')!.click();
+      outcomes.walletSeedManagementEscapesSharedImportButtonMarkup = seedHost.innerHTML.includes('alpha &lt;coverage&gt;')
+        && seedHost.textContent!.includes('alpha <coverage>') && !seedHost.querySelector('coverage') && !seedHost.querySelector('[data-clipboard-text]');
+      seedOwner.disposeWalletSeed(); seedHost.remove();
 
       dashboardAi.triggerDNAFilePicker();
       const input = document.getElementById('dna-dashboard-input');

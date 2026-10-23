@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => {
   const importModule = {
     classifyImportFiles: vi.fn(),
+    confirmImportSelection: vi.fn(),
     handleCycleImportFile: vi.fn(),
     handleTextFile: vi.fn(),
     handleImageFile: vi.fn(),
@@ -74,6 +75,7 @@ async function runInput(files: FileFixture[]) {
 describe('import file input runtime routing', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.importModule.confirmImportSelection.mockResolvedValue(true);
     mocks.loadImportUI.mockResolvedValue(mocks.importModule);
     mocks.importModule.classifyImportFiles.mockResolvedValue(importBuckets());
     mocks.hasDropZoneMtDNAHandler.mockReturnValue(true);
@@ -253,6 +255,7 @@ describe('mixed selection boundaries', () => {
   beforeEach(async () => {
     ({ state } = await import('../js/state.js'));
     vi.resetAllMocks(); state.currentProfile = 'origin'; (state as unknown as {importedData: unknown}).importedData = {};
+    mocks.importModule.confirmImportSelection.mockResolvedValue(true);
     mocks.loadImportUI.mockResolvedValue(mocks.importModule);
     mocks.importModule.classifyImportFiles.mockResolvedValue(importBuckets());
   });
@@ -301,6 +304,7 @@ describe('overlapping picker invocations', () => {
     mocks.isDropZoneImportRunning.mockImplementation(() => importDispatch.busy);
     const { state } = await import('../js/state.js');
     state.currentProfile = 'origin'; (state as unknown as {importedData: unknown}).importedData = {};
+    mocks.importModule.confirmImportSelection.mockResolvedValue(true);
     mocks.loadImportUI.mockResolvedValue(mocks.importModule);
     mocks.importModule.classifyImportFiles.mockImplementation(async (files: FileFixture[]) => importBuckets({ textFiles: files }));
   });
@@ -338,5 +342,19 @@ it('releases the picker lock when classification rejects', async () => {
   mocks.loadImportUI.mockResolvedValue(mocks.importModule);
   mocks.importModule.classifyImportFiles.mockRejectedValueOnce(new Error('classification failed'));
   await expect(runInput([makeFile('bad.csv')])).rejects.toThrow('classification failed');
+  expect(importDispatch.busy).toBe(false);
+});
+
+it.each(['cancel', 'profile', 'data'])('does not dispatch after selection confirmation %s', async outcome => {
+  const {state} = await import('../js/state.js');
+  const file = makeFile('report.pdf');
+  mocks.importModule.classifyImportFiles.mockResolvedValue(importBuckets({pdfFiles: [file]}));
+  mocks.importModule.confirmImportSelection.mockImplementationOnce(async () => {
+    if (outcome === 'profile') state.currentProfile = 'replacement';
+    if (outcome === 'data') (state as {importedData: unknown}).importedData = {};
+    return outcome !== 'cancel';
+  });
+  await runInput([file]);
+  expect(mocks.importModule.handlePDFFile).not.toHaveBeenCalled();
   expect(importDispatch.busy).toBe(false);
 });

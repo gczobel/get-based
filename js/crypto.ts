@@ -1,4 +1,5 @@
 import { bytesToBase64 as toBase64, _base64ToBytes as fromBase64 } from './base64.js';
+import { hasWhoopStorageDataToken } from './wearables-whoop-storage-contract.js';
 import { configureValidRuntimeCallbacks } from './runtime-callbacks.js';
 // crypto.ts — Encryption at rest, backup/restore, cross-tab sync
 
@@ -52,6 +53,10 @@ import {
   maybeShowEncryptionNudge,
   renderBackupSection,
   renderEncryptionSection,
+  prepareBackupSection,
+  prepareEncryptionSection,
+  hydrateProtectionSettings,
+  disposeSettingsProtection,
   showEnableEncryptionModal,
   showPassphraseModal,
   toggleBackupSnapshots,
@@ -67,6 +72,10 @@ export {
   maybeShowEncryptionNudge,
   renderBackupSection,
   renderEncryptionSection,
+  prepareBackupSection,
+  prepareEncryptionSection,
+  hydrateProtectionSettings,
+  disposeSettingsProtection,
   showEnableEncryptionModal,
   toggleBackupSnapshots,
 };
@@ -139,8 +148,10 @@ const whoopStorageDeps = {
   getMeta,
   setMeta,
 };
-const transformWhoopStorage = (key: string, value: string, mode: string, encrypted = false) => import('./wearables-whoop-storage.js')
-  .then(module => module.transformWhoopStorageValue(key, value, mode, encrypted, whoopStorageDeps));
+const transformWhoopStorage = (key: string, value: string, mode: string, encrypted = false) => hasWhoopStorageDataToken(value)
+  ? import('./wearables-whoop-storage.js')
+    .then(module => module.transformWhoopStorageValue(key, value, mode, encrypted, whoopStorageDeps))
+  : Promise.resolve({ value, storedValue: value, migrated: false });
 
 // ═══════════════════════════════════════════════
 // KEY LIFECYCLE

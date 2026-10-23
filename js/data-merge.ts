@@ -131,7 +131,7 @@ const LOCAL_WINS_MAP_FIELDS = [
 const TOMBSTONE_META_KEY = '_deletedAt';
 const TOMBSTONE_CLEAR_META_KEY = '_deletedClearedAt';
 
-function mergePlainMap(localMap: unknown, remoteMap: unknown) {
+function mergePlainMap(localMap: unknown, remoteMap: unknown): SyncRecord | undefined {
   const hasLocal = localMap && typeof localMap === 'object' && !Array.isArray(localMap);
   const hasRemote = remoteMap && typeof remoteMap === 'object' && !Array.isArray(remoteMap);
   if (!hasLocal && !hasRemote) return undefined;
@@ -496,6 +496,12 @@ export function mergeImportedData<Data extends MergeData>(local: Data | null | u
 
   for (const field of LOCAL_WINS_MAP_FIELDS) {
     const mergedMap = mergePlainMap(local[field], remote[field]);
+    if (mergedMap && field === 'manualBodyReadings') {
+      for (const key of Object.keys(mergedMap)) {
+        const remoteValue = (remote[field] as SyncRecord | undefined)?.[key];
+        if (pickTimestamp(remoteValue) > pickTimestamp(mergedMap[key])) mergedMap[key] = remoteValue;
+      }
+    }
     if (mergedMap) out[field] = mergedMap;
   }
 
@@ -663,7 +669,9 @@ export function localHasRowsRemoteLacks(local: OptionalMergeData, remote: Option
       : {};
     for (const [key, value] of Object.entries(localMap)) {
       if (!Object.prototype.hasOwnProperty.call(remoteMap, key)) return true;
-      if (JSON.stringify(value) !== JSON.stringify(remoteMap[key])) return true;
+      if (field === 'manualBodyReadings') {
+        if (pickTimestamp(value) > pickTimestamp(remoteMap[key])) return true;
+      } else if (JSON.stringify(value) !== JSON.stringify(remoteMap[key])) return true;
     }
   }
   for (const path of ID_KEYED_ARRAYS) {
@@ -752,14 +760,18 @@ export function recordTombstone(importedData: OptionalMergeData, arrayPath: stri
   } else {
     importedData._deleted[arrayPath] = [id];
   }
-  ensurePathMeta(importedData, TOMBSTONE_META_KEY, arrayPath)[id] = Date.now();
+  // Preserve local intent order if the clock has not advanced since a restore.
+  const deletedAt = Math.max(Date.now(), readMetaAt(importedData, TOMBSTONE_CLEAR_META_KEY, arrayPath, id) + 1, readMetaAt(importedData, TOMBSTONE_META_KEY, arrayPath, id));
+  ensurePathMeta(importedData, TOMBSTONE_META_KEY, arrayPath)[id] = deletedAt;
   deletePathMeta(importedData, TOMBSTONE_CLEAR_META_KEY, arrayPath, id);
 }
 
 export function clearTombstone(importedData: OptionalMergeData, arrayPath: string, id: unknown) {
   if (!importedData || typeof importedData !== 'object') return;
   if (typeof id !== 'string' || !id) return;
-  ensurePathMeta(importedData, TOMBSTONE_CLEAR_META_KEY, arrayPath)[id] = Date.now();
+  // An explicit restore must beat its observed deletion even within one clock tick.
+  const restoredAt = Math.max(Date.now(), readMetaAt(importedData, TOMBSTONE_META_KEY, arrayPath, id) + 1, readMetaAt(importedData, TOMBSTONE_CLEAR_META_KEY, arrayPath, id));
+  ensurePathMeta(importedData, TOMBSTONE_CLEAR_META_KEY, arrayPath)[id] = restoredAt;
   deletePathMeta(importedData, TOMBSTONE_META_KEY, arrayPath, id);
   const deleted = importedData._deleted;
   if (!deleted || typeof deleted !== 'object') return;

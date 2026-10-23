@@ -1,0 +1,54 @@
+<script lang="ts">
+  import ContextCatalogIcon from './ContextCatalogIcon.svelte';
+  import ContextFoodContaminantsBadge from './ContextFoodContaminantsBadge.svelte';
+  import ContextNutritionLink from './ContextNutritionLink.svelte';
+  import ContextCardStatus from './ContextCardStatus.svelte';
+  import ContextNotes from './ContextNotes.svelte';
+  import type { ContextCatalogView } from '../context-card-catalog-presentation.js';
+  import { CONTEXT_CARD, CONTEXT_OPEN, CONTEXT_ACTION, CONTEXT_INFO, CONTEXT_FOCUS } from '../context-card-catalog-classes.js';
+  let { view }: { view: ContextCatalogView } = $props();
+</script>
+<section data-context-cards-view data-context-notes-ticket={view.notesTicket} class="profile-context-section gb:context-catalog:[container-type:inline-size] gb:context-catalog:mt-4"
+  aria-label={view.embedded ? 'Your health context' : undefined} aria-labelledby={view.embedded ? undefined : `${view.renderId}-section-title`}>
+  <div class="context-section-header gb:context-catalog:flex gb:context-catalog:items-start gb:context-catalog:justify-between gb:context-catalog:gap-4 gb:context-catalog:mb-4 gb:context-catalog:[@media(max-width:480px)]:flex-col gb:context-catalog:[@media(max-width:480px)]:gap-2.5">
+    <div class="context-section-intro gb:context-catalog:min-w-0">
+      {#if !view.embedded}<div class="context-section-title gb:context-catalog:mb-0 gb:context-catalog:text-ink gb:context-catalog:text-[15px] gb:context-catalog:font-bold gb:context-catalog:normal-case gb:context-catalog:tracking-normal gb:context-catalog:[.chat-context-cards_&]:block gb:context-catalog:[.chat-context-cards_&]:mb-2 gb:context-catalog:[.chat-context-cards_&]:tracking-[0.04em]" id={`${view.renderId}-section-title`}>Your health context</div>{/if}
+      <div class="context-section-subtitle gb:context-catalog:max-w-[720px] gb:context-catalog:text-[13px] gb:context-catalog:text-muted gb:context-catalog:leading-[1.5] gb:context-catalog:mt-1 gb:context-catalog:[.chat-context-cards_&]:mb-2.5">{view.subtitle}</div>
+    </div>
+    <div class="context-section-tools gb:context-catalog:flex gb:context-catalog:items-center gb:context-catalog:justify-end gb:context-catalog:gap-2 gb:context-catalog:flex-wrap gb:context-catalog:shrink-0 gb:context-catalog:[@media(max-width:480px)]:w-full gb:context-catalog:[@media(max-width:480px)]:justify-start">
+      <span class="context-progress-text gb:context-catalog:text-muted gb:context-catalog:text-[12px] gb:context-catalog:font-semibold gb:context-catalog:whitespace-nowrap" aria-label={`${view.addedCount} of ${view.cards.length} context areas added`}>{view.addedCount} of {view.cards.length} added</span>
+      {#if view.refresh}<button type="button" class="ctx-refresh-all-btn {CONTEXT_ACTION} {CONTEXT_FOCUS} gb:context-catalog:bg-secondary-surface gb:context-catalog:text-secondary gb:context-catalog:font-[650] gb:context-catalog:py-1 gb:context-catalog:px-2.5 gb:context-catalog:transition-colors gb:context-catalog:duration-200 gb:context-catalog:motion-reduce:transition-none" data-context-card-action="refresh-all-health-dots" aria-label="Refresh AI context insights"><span class="ctx-refresh-all-icon gb:context-catalog:text-[15px] gb:context-catalog:leading-none" aria-hidden="true">↻</span><span class="ctx-refresh-all-label gb:context-catalog:[@media(max-width:375px)]:hidden">Refresh insights</span></button>{/if}
+    </div>
+  </div>
+  {#if view.demo}
+    <div class="demo-context-ai-bar demo-context-ai-{view.demo.kind} gb:context-catalog:flex gb:context-catalog:items-center gb:context-catalog:justify-between gb:context-catalog:gap-3 gb:context-catalog:-mt-1 gb:context-catalog:mb-3.5 gb:context-catalog:py-2.5 gb:context-catalog:px-3 gb:context-catalog:border gb:context-catalog:border-line gb:context-catalog:rounded-control gb:context-catalog:bg-[color-mix(in_srgb,var(--bg-secondary)_78%,transparent)] gb:context-catalog:[@media(max-width:480px)]:items-start gb:context-catalog:[@media(max-width:480px)]:flex-col" role="group" aria-label="Demo AI status">
+      <div class="demo-context-ai-copy gb:context-catalog:min-w-0 gb:context-catalog:text-secondary gb:context-catalog:text-[12px] gb:context-catalog:leading-[1.45]"><span class="demo-context-ai-title gb:context-catalog:font-[750] gb:context-catalog:mr-[5px] {view.demo.kind === 'local' ? 'gb:context-catalog:text-success' : view.demo.kind === 'paid-live' ? 'gb:context-catalog:text-accent' : 'gb:context-catalog:text-ink'}">{view.demo.title}</span>{view.demo.copy}</div>
+      {#if view.demo.action}<button type="button" class="demo-context-ai-action {CONTEXT_ACTION} {CONTEXT_FOCUS} gb:context-catalog:flex-[0_0_auto] gb:context-catalog:py-[5px] gb:context-catalog:px-2.5 gb:context-catalog:bg-surface gb:context-catalog:text-ink gb:context-catalog:font-bold" data-context-card-action={view.demo.action}>{view.demo.actionLabel}</button>{/if}
+    </div>
+  {/if}
+  <div class="profile-context-cards gb:context-catalog:grid gb:context-catalog:grid-cols-1 gb:context-catalog:gap-3.5 gb:context-catalog:mb-[18px] gb:context-catalog:@min-[580px]:grid-cols-2 gb:context-catalog:@min-[860px]:grid-cols-3 gb:context-catalog:[.chat-context-cards_&]:grid-cols-1 gb:context-catalog:[.chat-context-cards_&]:gap-2 gb:context-catalog:[.chat-context-cards_&]:mb-0 gb:context-catalog:[.chat-panel-fullscreen_.chat-context-cards_&]:@min-[580px]:grid-cols-2 gb:context-catalog:[.chat-panel-fullscreen_.chat-context-cards_&]:@min-[860px]:grid-cols-3">
+    {#each view.cards as card (card.key)}
+      {@const explanationId = `${view.renderId}-explanation-${card.key}`}
+      <article class="context-card {card.filled ? 'context-card-added' : 'context-card-empty gb:context-catalog:border-dashed'} {CONTEXT_CARD}" data-context-card-key={card.key}>
+        <button type="button" class="context-card-open {CONTEXT_OPEN}" aria-label={`${card.filled ? 'Edit' : 'Add'} ${card.label}`} data-context-card-action="open-editor" data-context-card-editor={card.editor}></button>
+        <div class="context-card-header gb:context-catalog:flex gb:context-catalog:items-center gb:context-catalog:gap-2 gb:context-catalog:mb-2 gb:context-catalog:shrink-0 gb:context-catalog:min-w-0">
+          <span class="context-card-icon gb:context-catalog:inline-flex gb:context-catalog:items-center gb:context-catalog:justify-center gb:context-catalog:flex-[0_0_18px] gb:context-catalog:size-[18px] gb:context-catalog:text-muted gb:context-catalog:transition-colors gb:context-catalog:duration-150 gb:context-catalog:[&_svg]:block gb:context-catalog:[&_svg]:size-[18px] gb:context-catalog:[&_svg]:stroke-current gb:context-catalog:[.context-card:hover_&]:text-accent gb:context-catalog:[.context-card:has(.context-card-open:focus-visible)_&]:text-accent" aria-hidden="true"><ContextCatalogIcon icon={card.icon}/></span>
+          <span class="context-card-title gb:context-catalog:min-w-0 gb:context-catalog:flex-1 gb:context-catalog:inline-flex gb:context-catalog:items-center gb:context-catalog:gap-[7px]">
+            <span class="context-card-label gb:context-catalog:min-w-0 gb:context-catalog:font-bold gb:context-catalog:text-ink gb:context-catalog:leading-[1.3] {card.key === 'loveLife' ? 'gb:context-catalog:text-[13px] gb:context-catalog:tracking-[-0.01em] gb:context-catalog:whitespace-nowrap' : 'gb:context-catalog:text-sm'}">{card.label}</span>
+            <span data-context-status-host data-context-status-slot="indicator" data-context-status-key={card.key} data-context-status-label={card.label} data-context-status-render={view.renderId} data-context-status-ticket={view.statusTicket} class="gb:context-catalog:contents"><svelte:boundary><ContextCardStatus slot="indicator" cardKey={card.key} renderId={view.renderId} ticket={view.statusTicket || ''} localSummary={card.summary} cardLabel={card.label} /></svelte:boundary></span>
+          </span>
+          <span data-context-status-host data-context-status-slot="tips" data-context-status-key={card.key} data-context-status-label={card.label} data-context-status-render={view.renderId} data-context-status-ticket={view.statusTicket} class="gb:context-catalog:contents"><svelte:boundary><ContextCardStatus slot="tips" cardKey={card.key} renderId={view.renderId} ticket={view.statusTicket || ''} localSummary={card.summary} cardLabel={card.label} /></svelte:boundary></span>
+          <button type="button" class="context-info-icon {CONTEXT_INFO} {CONTEXT_FOCUS}" aria-label={`Why ${card.label} matters`} aria-expanded="false" aria-controls={explanationId} data-context-card-action="toggle-explanation" data-context-card-explanation={explanationId}>i</button>
+        </div>
+        {#if card.summary}<div data-context-status-host data-context-status-slot="summary" data-context-status-key={card.key} data-context-status-label={card.label} data-context-status-render={view.renderId} data-context-status-ticket={view.statusTicket} data-context-local-summary={card.summary} class="gb:context-catalog:contents"><svelte:boundary><ContextCardStatus slot="summary" cardKey={card.key} renderId={view.renderId} ticket={view.statusTicket || ''} localSummary={card.summary} cardLabel={card.label} /></svelte:boundary></div>
+        {:else}<div class="context-card-placeholder gb:context-catalog:text-[13px] gb:context-catalog:text-secondary gb:context-catalog:leading-[1.5]">{card.placeholder}</div>{/if}
+        <div class="context-card-explanation gb:context-catalog:relative gb:context-catalog:z-[2] gb:context-catalog:mt-2.5 gb:context-catalog:pt-2.5 gb:context-catalog:border-t gb:context-catalog:border-line gb:context-catalog:text-secondary gb:context-catalog:text-[12px] gb:context-catalog:leading-[1.5] gb:context-catalog:[&[hidden]]:hidden" id={explanationId} hidden>{card.tooltip}</div>
+        {#if card.contaminants !== null}<ContextFoodContaminantsBadge count={card.contaminants}/>{/if}{#if card.nutrition !== null}<ContextNutritionLink view={card.nutrition}/>{/if}
+        <div data-context-status-host data-context-status-slot="insight" data-context-status-key={card.key} data-context-status-label={card.label} data-context-status-render={view.renderId} data-context-status-ticket={view.statusTicket} class="gb:context-catalog:contents"><svelte:boundary><ContextCardStatus slot="insight" cardKey={card.key} renderId={view.renderId} ticket={view.statusTicket || ''} localSummary={card.summary} cardLabel={card.label} /></svelte:boundary></div>
+      </article>
+    {/each}
+  </div>
+  <div data-context-notes-host data-context-notes-render={view.renderId} data-context-notes-ticket={view.notesTicket} class="gb:context-catalog:contents">
+    <svelte:boundary><ContextNotes renderId={view.renderId} initial={{ ticket: view.notesTicket || '', notes: view.notes, status: view.notesStatus || 'Saved as you type', saved: view.notesSaved ?? null }} /></svelte:boundary>
+  </div>
+</section>

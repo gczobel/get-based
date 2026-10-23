@@ -1,25 +1,34 @@
+import { renderHTML as renderEmptyPresentation } from './components/ChatEmptyState.svelte.html.js';
+import { projectChatEmpty, type ChatEmptyKind } from './chat-empty-presentation.js';
 import { configureRuntimeFunctions } from './runtime-callbacks.js';
 // chat-empty-state.js — chat empty states and onboarding message HTML
 
 import { state } from './state.js';
+import { disposeChatProviderSetup, renderChatProviderSetup } from './chat-provider-setup-component.js';
+import { disposeChatProfileSetup, renderChatProfileSetup } from './chat-profile-setup-component.js';
+import { disposeChatOptionalSetup, renderChatOptionalSetup, isChatOptionalSetupActionCurrent } from './chat-optional-setup-component.js';
+import { projectChatOptionalSetup } from './chat-optional-onboarding-presentation.js';
+import { projectChatProfileLatitude } from './chat-profile-onboarding.js';
+import { projectOnboardingProgress } from './chat-onboarding-presentation.js';
+import { renderAppExtensionOnboardingSlot } from './app-extension-runtime.js';
 import { isAIPaused } from './api.js';
 import { hasChatResponseBackend } from './chat-backend-selection.js';
 import { getActiveData } from './data.js';
 import { getProfileHeight, getProfileLocation, getProfiles } from './profile.js';
-import { renderProfileContextCards } from './context-cards.js';
+import { projectProfileContextCards } from './context-cards.js';
+import { disposeChatEmptyCatalog, hydrateChatEmptyCatalog } from './chat-empty-catalog-component.js';
 import { triggerContextCardDNAFilePickerRuntime } from './context-cards-runtime.js';
 import { openMenstrualCycleEditor } from './cycle.js';
 import { openSupplementsEditor } from './supplements.js';
-import { getCurrentSupplements } from './supplement-medication-domain.js';
-import { escapeHTML, escapeAttr, hasCardContent } from './utils.js';
+import { hasCardContent } from './utils.js';
 import { getActivePersonality } from './chat-personalities.js';
 import { getDnaModuleFunction } from './dna-runtime-bridge.js';
 import { getSettingsModuleFunction } from './settings-runtime-bridge.js';
 import { resumeChatAIRuntime } from './chat-runtime.js';
 import {
   chatOnboardingActionAttrs,
-  _countFilledCards, _renderOnboardCrumbs, _renderProviderQuiz,
-  _updateOnboardNextBtn, onboardHeightUnitChanged,
+  _countFilledCards,
+  onboardHeightUnitChanged,
   continueAfterContextCards, requestOnboardingLabImportProvider, saveChatLocation, saveChatProfile,
   setChatProfileSex, skipContextCards, skipOnboardingExtras, startOnboardingFileImport, startOnboardingLabImport,
   useChatPrompt,
@@ -37,12 +46,8 @@ type ChatEmptyStateOperations = {closeChatPanel():unknown;openChatProviderQuiz()
 type ChatEmptyStateDependencies = {[Key in keyof ChatEmptyStateOperations]:unknown};
 type EmptyChatContext = ReturnType<typeof getEmptyChatContext>;
 type PersonaContext = Pick<EmptyChatContext,'personality'|'name'>;
-type ContextGenetics = {snps?:unknown;mtdna?:{haplogroup?:unknown}|null};
 // Private operations at unchecked storage boundaries; these readers do not validate persisted data.
-type EmptyDataOperations = {entries?:{length:number};healthGoals?:{length:number}|null;genetics?:ContextGenetics|null;
-  menstrualCycle?:{periods?:{length:number}|null;cycleLength?:unknown;cycleStatus?:unknown}|null;
-  supplements?:Parameters<typeof getCurrentSupplements>[0]|null;
-  wearableConnections?:Record<string,{accessToken?:unknown;connectedSince?:unknown}|null>|null;[field:string]:unknown};
+type EmptyDataOperations = {entries?:{length:number};healthGoals?:{length:number}|null;[field:string]:unknown};
 const chatEmptyStateDeps: ChatEmptyStateDependencies = {
   closeChatPanel: () => {},
   openChatProviderQuiz: () => {},
@@ -77,16 +82,16 @@ function getChatProfileHeight(profileId: Parameters<typeof getProfileHeight>[0])
 
 function handleChatEmptyClick(event: Event) {
   const actionEl = closestChatEmptyAction(event);
-  if (!actionEl) return;
+  if (!actionEl || !isChatOptionalSetupActionCurrent(actionEl)) return;
   const action = actionEl.dataset.chatEmptyAction;
   if (!action) return;
 
   if (CHAT_EMPTY_STOP_PROPAGATION_ACTIONS.has(action)) event.stopPropagation();
 
   if (action === 'set-profile-sex') {
-    void setChatProfileSex(actionEl.dataset.sex || '');
+    void setChatProfileSex(actionEl.dataset.sex || '', actionEl);
   } else if (action === 'save-profile-advance') {
-    void saveChatProfile(true);
+    void saveChatProfile(true, actionEl);
   } else if (action === 'resume-ai') {
     resumeChatAIRuntime();
   } else if (action === 'skip-extras') {
@@ -131,14 +136,14 @@ function handleChatEmptyClick(event: Event) {
 
 function handleChatEmptyChange(event: Event) {
   const actionEl = closestChatEmptyAction(event);
-  if (!actionEl) return;
+  if (!actionEl || !isChatOptionalSetupActionCurrent(actionEl)) return;
   const action = actionEl.dataset.chatEmptyAction;
   if (!action) return;
 
   if (action === 'save-profile') {
-    void saveChatProfile();
+    void saveChatProfile(false, actionEl);
   } else if (action === 'height-unit-changed') {
-    onboardHeightUnitChanged();
+    onboardHeightUnitChanged(actionEl);
   } else if (action === 'import-mtdna-file' && actionEl instanceof HTMLInputElement) {
     const file = actionEl.files?.[0];
     if (file) {
@@ -150,8 +155,8 @@ function handleChatEmptyChange(event: Event) {
 
 function handleChatEmptyInput(event: Event) {
   const actionEl = closestChatEmptyAction(event);
-  if (!actionEl) return;
-  if (actionEl.dataset.chatEmptyAction === 'save-location') void saveChatLocation();
+  if (!actionEl || !isChatOptionalSetupActionCurrent(actionEl)) return;
+  if (actionEl.dataset.chatEmptyAction === 'save-location') void saveChatLocation(actionEl);
 }
 
 function installChatEmptyStateDelegates(container: HTMLElement|null) {
@@ -191,6 +196,15 @@ export function renderEmptyChatState(container: HTMLElement, panel?: HTMLElement
   installChatEmptyStateDelegates(container);
   const context = getEmptyChatContext();
   const forcedStep = sessionStorage.getItem(`chat-onboard-force-step-${state.currentProfile}`) || '';
+  const providerStep = context.hasProfile && forcedStep !== 'profile' && !isAIPaused()
+    && (forcedStep === 'provider' || (!(!context.hasData && forcedStep === 'extras') && shouldRenderProviderSetup()));
+  const forceContext = forcedStep === 'cards' || sessionStorage.getItem(`chat-onboard-force-context-cards-${state.currentProfile}`) === '1';
+  const optionalStep = context.hasProfile && !isAIPaused() && !context.hasData && forcedStep !== 'profile'
+    && forcedStep !== 'provider' && (forcedStep === 'extras' || (!providerStep
+      && !localStorage.getItem(`labcharts-onboard-extras-done-${state.currentProfile}`) && !forceContext));
+  if (!optionalStep) disposeChatOptionalSetup();
+  if (!providerStep) disposeChatProviderSetup();
+  if (forcedStep !== 'profile' && context.hasProfile) disposeChatProfileSetup();
 
   if (forcedStep === 'profile') return renderProfileOnboardingState(container, panel, context);
   if (!context.hasProfile) return renderProfileOnboardingState(container, panel, context);
@@ -230,12 +244,17 @@ function setOnboardingActive(panel: HTMLElement|null|undefined) {
   panel?.classList.add('chat-onboarding-active');
 }
 
-function renderChatContextCards() {
-  return `<div class="chat-context-cards">${renderProfileContextCards()}</div>`;
-}
-
-function renderOnboardingCompleteLabel(label: unknown) {
-  return `<div class="chat-onboard-complete-label">${escapeHTML(label)}</div>`;
+// Preserve the committed parent before catalog projection; genuine parent hydration
+// then owns the catalog and its existing delegated actions and child lifetimes.
+function renderEmptyPresentationState(container: HTMLElement, kind: ChatEmptyKind, context: PersonaContext, extras: { filled?: number; skipped?: boolean; prompts?: readonly string[] } = {}) {
+  const { personality, name } = context;
+  const view = projectChatEmpty({ kind, personalityLabel: `${personality.icon} ${personality.name}`, name,
+    icon: personality.icon, greeting: personality.greeting, connected: hasChatResponseBackend(), ...extras });
+  disposeChatEmptyCatalog(container);
+  container.innerHTML = renderEmptyPresentation({ view });
+  const slot = container.querySelector('[data-chat-empty-context-slot]');
+  if (slot) hydrateChatEmptyCatalog(container, view, projectProfileContextCards());
+  return true;
 }
 
 function shouldRenderProviderSetup() {
@@ -252,337 +271,66 @@ function renderProfileOnboardingState(container: HTMLElement, panel: HTMLElement
   const _pH = getChatProfileHeight(state.currentProfile);
   const pHeight = _pH.height ? (_pH.unit === 'in' ? (Number(_pH.height) / 2.54).toFixed(1) : _pH.height) : '';
   const pHeightUnit = _pH.unit || 'cm';
-  container.innerHTML = `<div class="chat-persona-label">${escapeHTML(personality.icon)} ${escapeHTML(personality.name)}</div>
-    <div class="chat-msg chat-ai">
-      ${_renderOnboardCrumbs(1)}
-      <p>Hey! 👋 I'll be your AI health analyst — I help you understand blood work, track trends, and spot what matters. First, tell me a bit about yourself:</p>
-      <div class="chat-onboard-form">
-        <div class="chat-onboard-row">
-          <label class="chat-onboard-label" for="chat-onboard-name">Name</label>
-          <input type="text" class="chat-onboard-input" id="chat-onboard-name" placeholder="your name" value="${escapeAttr(pName)}" data-chat-empty-action="save-profile">
-        </div>
-        <div class="chat-onboard-row">
-          <span class="chat-onboard-label" id="chat-onboard-sex-label">Sex</span>
-          <div class="chat-onboard-sex" role="group" aria-labelledby="chat-onboard-sex-label">
-            <button type="button" class="welcome-sex-btn${pSex === 'male' ? ' active' : ''}" data-chat-empty-action="set-profile-sex" data-sex="male">Male</button>
-            <button type="button" class="welcome-sex-btn${pSex === 'female' ? ' active' : ''}" data-chat-empty-action="set-profile-sex" data-sex="female">Female</button>
-          </div>
-        </div>
-        <div class="chat-onboard-row">
-          <label class="chat-onboard-label" for="chat-onboard-dob">Born</label>
-          <input type="date" class="chat-onboard-input" id="chat-onboard-dob" value="${escapeAttr(pDob)}" min="1900-01-01" max="${new Date().toISOString().slice(0, 10)}">
-        </div>
-        <details class="chat-onboard-more">
-          <summary>Optional body and location context</summary>
-          <div class="chat-onboard-more-body">
-            <div class="chat-onboard-row">
-              <label class="chat-onboard-label" for="chat-onboard-height">Height</label>
-              <div class="chat-onboard-input-with-unit">
-                <input type="number" class="chat-onboard-input" id="chat-onboard-height" placeholder="cm" step="0.1" value="${pHeight || ''}">
-                <select class="chat-onboard-input chat-onboard-unit-select" id="chat-onboard-height-unit" aria-label="Height unit" data-chat-empty-action="height-unit-changed">
-                  <option value="cm"${pHeightUnit !== 'in' ? ' selected' : ''}>cm</option>
-                  <option value="in"${pHeightUnit === 'in' ? ' selected' : ''}>in</option>
-                </select>
-              </div>
-            </div>
-            <div class="chat-onboard-row">
-              <label class="chat-onboard-label" for="chat-onboard-weight">Weight</label>
-              <div class="chat-onboard-input-with-unit">
-                <input type="number" class="chat-onboard-input" id="chat-onboard-weight" placeholder="kg" step="0.1">
-                <select class="chat-onboard-input chat-onboard-unit-select" id="chat-onboard-weight-unit" aria-label="Weight unit">
-                  <option value="kg">kg</option>
-                  <option value="lbs">lbs</option>
-                </select>
-              </div>
-            </div>
-            <div class="chat-onboard-row">
-              <label class="chat-onboard-label" for="chat-onboard-country">Location</label>
-              <input type="text" class="chat-onboard-input" id="chat-onboard-country" placeholder="e.g. Germany" value="${escapeAttr(pLoc.country || '')}" data-chat-empty-action="save-location">
-            </div>
-            <div id="chat-onboard-lat" class="chat-onboard-lat"></div>
-            <div class="chat-onboard-help">Latitude affects vitamin D, circadian rhythm, and seasonal health patterns.</div>
-          </div>
-        </details>
-        <button type="button" class="chat-onboard-next" id="chat-onboard-next" data-chat-empty-action="save-profile-advance" disabled>Continue →</button>
-      </div>
-    </div>`;
-  _updateOnboardNextBtn();
-  if (pLoc.country) void saveChatLocation(); // show latitude for pre-filled country
+  renderChatProfileSetup(container, {
+    personalityLabel: `${personality.icon} ${personality.name}`,
+    progress: projectOnboardingProgress(1, hasChatResponseBackend()),
+    name: pName, sex: pSex || null, dob: pDob,
+    height: String(pHeight || ''), heightUnit: pHeightUnit, weight: '', weightUnit: 'kg',
+    country: pLoc.country || '', latitude: projectChatProfileLatitude(pLoc.country || ''),
+    today: new Date().toISOString().slice(0, 10),
+  });
   return true;
 }
 
-function renderAIPausedState(container: HTMLElement, panel: HTMLElement|null|undefined, { personality, name }: PersonaContext) {
+function renderAIPausedState(container: HTMLElement, panel: HTMLElement|null|undefined, context: PersonaContext) {
   setOnboardingActive(panel);
-  container.innerHTML = `<div class="chat-persona-label">${escapeHTML(personality.icon)} ${escapeHTML(personality.name)}</div>
-    <div class="chat-msg chat-ai">
-      <p>${escapeHTML(name)}, AI features are currently paused. Turn them back on to chat, get insights, and import PDFs with AI.</p>
-      <div style="margin-top:12px">
-        <button type="button" class="import-btn import-btn-primary" data-chat-empty-action="resume-ai">Enable AI</button>
-      </div>
-    </div>`;
-  return true;
+  return renderEmptyPresentationState(container, 'paused', context);
 }
 
 function renderProviderSetupState(container: HTMLElement, panel: HTMLElement|null|undefined, { personality, name }: PersonaContext) {
   setOnboardingActive(panel);
-  if (hasChatResponseBackend()) return renderProviderConnectedState(container, { personality, name });
+  const connected = hasChatResponseBackend();
   const branch = sessionStorage.getItem(`chat-onboard-provider-branch-${state.currentProfile}`) || '';
-  container.innerHTML = `<div class="chat-persona-label">${escapeHTML(personality.icon)} ${escapeHTML(personality.name)}</div>
-    <div class="chat-msg chat-ai">
-      ${_renderOnboardCrumbs(2)}
-      ${_renderProviderQuiz(branch, name)}
-    </div>`;
+  renderChatProviderSetup(container, {
+    name,
+    personalityLabel: `${personality.icon} ${personality.name}`,
+    connected, branch,
+    progress: projectOnboardingProgress(2, connected),
+    extensionHTML: connected ? '' : renderAppExtensionOnboardingSlot('provider-quiz', { actionAttrs: chatOnboardingActionAttrs, branch, name }),
+  });
   return true;
-}
-
-function renderProviderConnectedState(container: HTMLElement, { personality, name }: PersonaContext) {
-  container.innerHTML = `<div class="chat-persona-label">${escapeHTML(personality.icon)} ${escapeHTML(personality.name)}</div>
-    <div class="chat-msg chat-ai">
-      ${renderOnboardingCompleteLabel('AI connected')}
-      <p>${escapeHTML(name)}, AI is connected. You can continue the setup or change providers from AI settings.</p>
-      <div class="chat-onboard-actions">
-        <button type="button" class="chat-onboard-cta" ${chatOnboardingActionAttrs('go-onboarding-step', { step: 3 })}>Continue</button>
-        <button type="button" class="chat-prompt-btn" ${chatOnboardingActionAttrs('open-ai-settings')}>Change AI provider</button>
-      </div>
-    </div>`;
-  return true;
-}
-
-function renderAffiliateDnaKitLink(hasSnps: unknown) {
-  if (hasSnps) return '';
-  return `<div class="chat-onboard-affiliate-foot">
-    No DNA file? We recommend a <a href="https://www.dpbolvw.net/q2101xdmjdl0212824AA4024989447" target="_blank" rel="noopener sponsored" class="chat-onboard-affiliate-link">LivingDNA kit</a>.
-  </div>`;
 }
 
 function renderOptionalContextState(container: HTMLElement, panel: HTMLElement|null|undefined, { personality }: Pick<EmptyChatContext,'personality'>) {
   setOnboardingActive(panel);
-  const cards = buildOptionalContextTaskCards();
-  const genetics = (state.importedData as EmptyDataOperations).genetics || {};
-  const hasSnps = Object.keys((genetics.snps || {}) as object).length > 0;
-  container.innerHTML = `<div class="chat-persona-label">${escapeHTML(personality.icon)} ${escapeHTML(personality.name)}</div>
-    <div class="chat-msg chat-ai">
-      ${_renderOnboardCrumbs(3)}
-      <p>${hasChatResponseBackend() ? 'Great, we are connected.' : 'Nice. We can collect useful context first and connect AI when optional tips or AI imports need it.'} These optional context pieces make later interpretation more useful. Add any that matter now, or continue to the context cards.</p>
-      <div class="chat-onboard-task-grid">${cards}</div>
-      ${renderAffiliateDnaKitLink(hasSnps)}
-      <div class="chat-onboard-note">You can change all of this later from the dashboard, settings, or client profile.</div>
-      <div class="chat-onboard-actions chat-onboard-actions-row">
-        <button type="button" class="chat-onboard-cta" data-chat-empty-action="skip-extras">Continue to context cards</button>
-      </div>
-    </div>`;
+  renderChatOptionalSetup(container, projectChatOptionalSetup(state.importedData, state.profileSex,
+    hasChatResponseBackend(), `${personality.icon} ${personality.name}`));
   return true;
 }
 
-function buildOptionalContextTaskCards() {
-  const isFemale = state.profileSex === 'female';
-  const mc = (state.importedData as EmptyDataOperations)?.menstrualCycle;
-  const hasCycle = (mc?.periods?.length as number) > 0 || mc?.cycleLength || mc?.cycleStatus;
-  const supps = (state.importedData as EmptyDataOperations).supplements || [];
-  const genetics = (state.importedData as EmptyDataOperations).genetics || {};
-  const hasSnps = Object.keys((genetics.snps || {}) as object).length > 0;
-  const hasMtdna = !!genetics.mtdna;
-  const wearableConns = (state.importedData as EmptyDataOperations)?.wearableConnections || {};
-  const hasWearable = Object.values(wearableConns).some(c => c?.accessToken || c?.connectedSince);
-  const suppSummary = summarizeSupplements(supps);
-  const dnaSummary = summarizeGenetics(genetics, hasSnps, hasMtdna);
-
-  return [
-    isFemale ? renderCycleTask(hasCycle) : '',
-    renderSupplementsTask(supps, suppSummary),
-    renderGeneticsTask(hasSnps, hasMtdna, dnaSummary),
-    hasWearable ? '' : renderWearableTask(),
-  ].filter(Boolean).join('');
-}
-
-function summarizeSupplements(supps: Parameters<typeof getCurrentSupplements>[0]) {
-  const current = getCurrentSupplements(supps);
-  if (current.length) {
-    return current.slice(0, 2).map(s => `${s!.name}${s!.dosage ? ` ${s!.dosage}` : ''}`).join(', ')
-      + (current.length > 2 ? ` +${current.length - 2}` : '')
-      + (supps.length > current.length ? ` · ${supps.length - current.length} in history` : '');
-  }
-  return supps.length
-    ? `No current items · ${supps.length} in history`
-    : 'Add medications or supplements that can shift labs.';
-}
-
-function summarizeGenetics(genetics: ContextGenetics, hasSnps: unknown, hasMtdna: unknown) {
-  return [
-    hasSnps ? `${Object.keys((genetics.snps || {}) as object).length} SNPs` : '',
-    hasMtdna ? `mtDNA ${genetics.mtdna?.haplogroup || ''}`.trim() : '',
-  ].filter(Boolean).join(' · ') || 'Import nuclear DNA (SNPs) or mitochondrial DNA (mtDNA) raw data.';
-}
-
-function renderCycleTask(hasCycle: unknown) {
-  return `<article class="chat-onboard-task${hasCycle ? ' is-complete' : ''}">
-    <span class="chat-onboard-task-icon" aria-hidden="true">◐</span>
-    <span class="chat-onboard-task-body">
-      <strong>Cycle context</strong>
-      <small>${hasCycle ? 'Cycle tracking is already set.' : 'Helps interpret hormones, iron, and inflammation.'}</small>
-    </span>
-    <span class="chat-onboard-mini-actions">
-      <button type="button" class="chat-onboard-mini-btn" data-chat-empty-action="open-cycle-editor">${hasCycle ? 'Edit' : 'Set up'}</button>
-      <button type="button" class="chat-onboard-mini-btn chat-onboard-mini-btn-secondary" data-chat-empty-action="start-file-import">Import</button>
-    </span>
-  </article>`;
-}
-
-function renderSupplementsTask(supps: {length:number}, suppSummary: unknown) {
-  return `<article class="chat-onboard-task${supps.length ? ' is-complete' : ''}">
-    <span class="chat-onboard-task-icon" aria-hidden="true">Rx</span>
-    <span class="chat-onboard-task-body">
-      <strong>Supplements &amp; meds</strong>
-      <small>${escapeHTML(suppSummary)}</small>
-    </span>
-    <button type="button" class="chat-onboard-mini-btn" data-chat-empty-action="open-supplements-editor">${supps.length ? 'Edit' : 'Add'}</button>
-  </article>`;
-}
-
-function renderGeneticsTask(hasSnps: unknown, hasMtdna: unknown, dnaSummary: unknown) {
-  return `<article class="chat-onboard-task chat-onboard-dna${hasSnps || hasMtdna ? ' is-complete' : ''}">
-    <span class="chat-onboard-task-icon" aria-hidden="true">DNA</span>
-    <span class="chat-onboard-task-body">
-      <strong>Genetics</strong>
-      <small>${escapeHTML(dnaSummary)}</small>
-    </span>
-    <span class="chat-onboard-mini-actions">
-      ${!hasSnps ? `<button type="button" class="chat-onboard-mini-btn" data-chat-empty-action="import-dna">Import DNA file</button>` : ''}
-      ${!hasMtdna ? `<button type="button" class="chat-onboard-mini-btn" data-chat-empty-action="import-mtdna">Import mtDNA</button>` : ''}
-      ${hasSnps ? `<button type="button" class="chat-onboard-mini-btn chat-onboard-mini-btn-secondary" data-chat-empty-action="import-dna">Re-import DNA</button>` : ''}
-      ${hasMtdna ? `<button type="button" class="chat-onboard-mini-btn chat-onboard-mini-btn-secondary" data-chat-empty-action="import-mtdna">Re-import mtDNA</button>` : ''}
-      <input type="file" id="mtdna-onboard-input" class="sr-only" accept=".txt,.csv" aria-label="Import mtDNA file" data-chat-empty-action="import-mtdna-file">
-    </span>
-  </article>`;
-}
-
-function renderWearableTask() {
-  return `<article class="chat-onboard-task">
-    <span class="chat-onboard-task-icon" aria-hidden="true">HRV</span>
-    <span class="chat-onboard-task-body">
-      <strong>Wearables</strong>
-      <small>Optional HRV, sleep, recovery, and body composition trends.</small>
-    </span>
-    <button type="button" class="chat-onboard-mini-btn" data-chat-empty-action="open-wearables-settings">Connect</button>
-  </article>`;
-}
-
-function renderFullContextNoDataState(container: HTMLElement, panel: HTMLElement|null|undefined, { personality, name }: PersonaContext) {
+function renderFullContextNoDataState(container: HTMLElement, panel: HTMLElement|null|undefined, context: PersonaContext) {
   panel?.classList.remove('chat-onboarding-active');
-  const providerConnected = hasChatResponseBackend();
-  container.innerHTML = `<div class="chat-persona-label">${escapeHTML(personality.icon)} ${escapeHTML(personality.name)}</div>
-    <div class="chat-msg chat-ai">
-      ${renderOnboardingCompleteLabel('Context complete')}
-      <p>${escapeHTML(name)}, your context cards are complete. ${providerConnected ? 'Next, import labs or ask what to test when you are ready.' : 'Next, connect AI when you are ready to import labs or explore optional tips.'}</p>
-      <div class="chat-onboard-actions">
-        ${providerConnected
-          ? `<button type="button" class="chat-onboard-cta" data-chat-empty-action="start-lab-import">Import a lab file</button>
-             <button type="button" class="chat-prompt-btn" data-chat-empty-action="use-prompt" data-prompt="Based on my full profile, what blood tests should I get and why?">Just tell me what to test</button>
-             <button type="button" class="chat-prompt-btn" data-chat-empty-action="use-prompt" data-prompt="What can you tell about my health from my lifestyle info?">Analyze my lifestyle</button>`
-          : `<button type="button" class="chat-onboard-cta" data-chat-empty-action="request-lab-import-provider">Connect AI to import labs</button>`}
-        <button type="button" class="chat-prompt-btn" ${chatOnboardingActionAttrs('go-onboarding-step', { step: 4 })}>Review context cards</button>
-      </div>
-    </div>`;
-  return true;
+  return renderEmptyPresentationState(container, 'complete', context);
 }
-
-function renderPartialContextNoDataState(container: HTMLElement, panel: HTMLElement|null|undefined, { personality, name }: PersonaContext, filled: number) {
+function renderPartialContextNoDataState(container: HTMLElement, panel: HTMLElement|null|undefined, context: PersonaContext, filled: number) {
   setOnboardingActive(panel);
-  const progressPct = Math.round((filled / 9) * 100);
-  const providerConnected = hasChatResponseBackend();
-  container.innerHTML = `<div class="chat-persona-label">${escapeHTML(personality.icon)} ${escapeHTML(personality.name)}</div>
-    <div class="chat-msg chat-ai">
-      ${_renderOnboardCrumbs(4)}
-      <p>${filled >= 6 ? `Almost there, ${escapeHTML(name)}!` : filled >= 3 ? `Nice progress, ${escapeHTML(name)}!` : `Good start, ${escapeHTML(name)}!`} You've filled ${filled} of 9 context areas.</p>
-      <div class="chat-onboard-progress"><div class="chat-onboard-progress-bar" style="width:${progressPct}%"></div></div>
-      <p style="font-size:12px;color:var(--text-muted);margin:4px 0 0">The more context I have, the better I can interpret results and recommend what to test. Everything is optional.</p>
-      ${renderChatContextCards()}
-      <div class="chat-onboard-actions chat-onboard-step4-actions">
-        <div class="chat-onboard-primary-actions chat-onboard-primary-actions-single">
-          <button type="button" class="chat-onboard-cta" data-chat-empty-action="continue-after-context-cards">${providerConnected ? 'Continue to import' : 'Continue'}</button>
-        </div>
-        <div class="chat-onboard-tertiary-actions">
-          <button type="button" class="chat-onboard-text-action" data-chat-empty-action="skip-context-cards">Skip context cards</button>
-        </div>
-      </div>
-    </div>`;
-  return true;
+  return renderEmptyPresentationState(container, 'partial', context, { filled });
 }
-
-function renderContextImportHandoffState(container: HTMLElement, panel: HTMLElement|null|undefined, { personality, name }: PersonaContext, skipped: boolean) {
+function renderContextImportHandoffState(container: HTMLElement, panel: HTMLElement|null|undefined, context: PersonaContext, skipped: boolean) {
   panel?.classList.remove('chat-onboarding-active');
-  const providerConnected = hasChatResponseBackend();
-  const filled = _countFilledCards();
-  const contextCopy = skipped
-    ? `Context cards are skipped for now, ${escapeHTML(name)}. You can add them later from Profile Context when they are useful.`
-    : filled > 0
-      ? `Context is saved for now, ${escapeHTML(name)}.`
-      : `Context cards are saved for later, ${escapeHTML(name)}.`;
-  const nextCopy = providerConnected
-    ? 'Next, import labs or ask what to test when you are ready.'
-    : 'Next, connect AI when you are ready to import labs or explore optional tips.';
-  container.innerHTML = `<div class="chat-persona-label">${escapeHTML(personality.icon)} ${escapeHTML(personality.name)}</div>
-    <div class="chat-msg chat-ai">
-      ${renderOnboardingCompleteLabel('Setup ready')}
-      <p>${contextCopy} ${nextCopy}</p>
-      <div class="chat-onboard-actions">
-        ${providerConnected
-          ? `<button type="button" class="chat-onboard-cta" data-chat-empty-action="start-lab-import">Import a lab file</button>
-             <button type="button" class="chat-prompt-btn" data-chat-empty-action="use-prompt" data-prompt="I don't have any labs yet. Based on my profile, what blood tests should I get and why?">Just tell me what to test</button>`
-          : `<button type="button" class="chat-onboard-cta" data-chat-empty-action="request-lab-import-provider">Connect AI to import labs</button>`}
-        <button type="button" class="chat-prompt-btn" ${chatOnboardingActionAttrs('go-onboarding-step', { step: 4 })}>Add context cards</button>
-      </div>
-    </div>`;
-  return true;
+  return renderEmptyPresentationState(container, 'handoff', context, { skipped, filled: _countFilledCards() });
 }
-
-function renderInitialNoDataState(container: HTMLElement, panel: HTMLElement|null|undefined, { personality }: Pick<EmptyChatContext,'personality'>) {
+function renderInitialNoDataState(container: HTMLElement, panel: HTMLElement|null|undefined, context: PersonaContext) {
   setOnboardingActive(panel);
-  const providerConnected = hasChatResponseBackend();
-  container.innerHTML = `<div class="chat-persona-label">${escapeHTML(personality.icon)} ${escapeHTML(personality.name)}</div>
-    <div class="chat-msg chat-ai">
-      ${_renderOnboardCrumbs(4)}
-      <p><strong>Add optional context.</strong> These cards improve lab interpretation. Fill any that matter now; everything is optional.</p>
-      ${renderChatContextCards()}
-      <div class="chat-onboard-actions chat-onboard-step4-actions">
-        <div class="chat-onboard-primary-actions chat-onboard-primary-actions-single">
-          <button type="button" class="chat-onboard-cta" data-chat-empty-action="continue-after-context-cards">${providerConnected ? 'Continue to import' : 'Continue'}</button>
-        </div>
-        <div class="chat-onboard-tertiary-actions">
-          <button type="button" class="chat-onboard-text-action" data-chat-empty-action="skip-context-cards">Skip context cards</button>
-        </div>
-      </div>
-    </div>`;
-  return true;
+  return renderEmptyPresentationState(container, 'initial', context);
 }
-
-function renderDataContextNudgeState(container: HTMLElement, { personality }: Pick<EmptyChatContext,'personality'>) {
-  container.innerHTML = `<div class="chat-persona-label">${escapeHTML(personality.icon)} ${escapeHTML(personality.name)}</div>
-    <div class="chat-msg chat-ai">
-      <p>I can see your lab results — nice! 👋 I can already analyze these, but if you fill in a few lifestyle cards I'll give you much more personalized insights.</p>
-      <div class="chat-onboard-actions">
-        <button type="button" class="chat-prompt-btn" data-chat-empty-action="set-onboarding-focus" data-focus="cards">📋 Fill in lifestyle cards</button>
-        <button type="button" class="chat-prompt-btn" data-chat-empty-action="use-prompt" data-prompt="What are my most concerning results?">Analyze my results now</button>
-      </div>
-    </div>`;
-  return true;
+function renderDataContextNudgeState(container: HTMLElement, context: PersonaContext) {
+  return renderEmptyPresentationState(container, 'nudge', context);
 }
-
-function renderGeneralPromptState(container: HTMLElement, { personality }: Pick<EmptyChatContext,'personality'>) {
-  const noDataPrompts = _getNoDataPrompts();
-  const prompts = noDataPrompts || [
-    'What are my most concerning results?',
-    'How has my bloodwork changed over time?',
-    'Are there any patterns in my flagged markers?',
-    'Explain my thyroid panel',
-    'What should I test next?'
+function renderGeneralPromptState(container: HTMLElement, context: PersonaContext) {
+  const prompts = _getNoDataPrompts() || [
+    'What are my most concerning results?', 'How has my bloodwork changed over time?',
+    'Are there any patterns in my flagged markers?', 'Explain my thyroid panel', 'What should I test next?',
   ];
-  container.innerHTML = `<div class="chat-empty">
-    <div class="chat-empty-icon">${escapeHTML(personality.icon)}</div>
-    <div>${escapeHTML(personality.greeting)}</div>
-    <div class="chat-prompts">
-      ${prompts.map(p => `<button type="button" class="chat-prompt-btn" data-chat-empty-action="use-prompt" data-prompt="${escapeAttr(p)}">${escapeHTML(p)}</button>`).join('\n      ')}
-    </div>
-  </div>`;
-  return true;
+  return renderEmptyPresentationState(container, 'general', context, { prompts });
 }

@@ -1,18 +1,22 @@
+import{captureLightAIView}from'./light-ai-view-values.js';
+import type{WeeklyFallbackView}from'./light-review-ai-presentation.js';
+import type { ProfileData } from '../types/app-state.js';
 // light-channels-ai-analysis.js — seven-day Light review. It compares the
 // most recent seven days with the seven before them, while keeping sunlight
 // and targeted devices separate and never grading biological completion.
 //
-// Storage: singleton at state.importedData.channelMixAI. Trigger is
-// manual — channel totals shift across days as sessions roll into
-// the 7d window, but the verdict is meaningfully stable for hours, so
-// auto-fire would be wasteful.
+// Storage: singleton at state.importedData.channelMixAI. Rendering queues one
+// owner-scoped attempt for idle or stale data; manual refresh remains available.
 
 import { state } from './state.js';
-import { escapeHTML, showNotification } from './utils.js';
+import { captureAIVerdictOwner } from './ai-verdict-owner.js';
+import { projectReviewAI, type ReviewAIVariant } from './light-review-ai-presentation.js';
+import { renderHTML } from './components/LightReviewAI.svelte.html.js';
+import { showNotification } from './utils.js';
 import { hasAssistantFeatureProvider } from './ai-feature-routing.js';
 import { createAIVerdict, hashString } from './ai-verdict-engine.js';
 import { formatHealthGoalsText } from './health-goals-utils.js';
-import { aiActionAttrs, registerAIActionHandler } from './ai-action-delegates.js';
+import { aiActionOwner, registerAIActionHandler } from './ai-action-delegates.js';
 import { getDeviceSessions, rollingDeviceTotals } from './light-devices-store.js';
 import { rollingChannelTotals } from './sun.js';
 import { getSessions } from './sun-sessions-store.js';
@@ -43,14 +47,13 @@ export function configureLightChannelsAIAnalysisDeps(deps: unknown = {}) {
   return previous;
 }
 
-function _getMix() {
-  return (state.importedData?.channelMixAI || null) as MixRead | null;
+function _getMix(data: ProfileData = state.importedData) {
+  return (data?.channelMixAI || null) as MixRead | null;
 }
 
-function _setMix(v: AIVerdictAnalysis | null) {
-  if (!state.importedData) return;
-  if (v == null) delete state.importedData.channelMixAI;
-  else state.importedData.channelMixAI = v;
+function _setMix(v: AIVerdictAnalysis | null, data: ProfileData) {
+  if (v == null) delete data.channelMixAI;
+  else data.channelMixAI = v;
 }
 
 const _CHANNEL_DEF: Record<string, { label: string; biology: string }> = {
@@ -239,10 +242,10 @@ const SYSTEM_PROMPT = [
 const SINGLETON = { key: 'default', isChannelMixTarget: true };
 
 const engine = createAIVerdict({
-  getTarget: () => (state.importedData ? SINGLETON : null),
+  getTarget: (_id, data) => (data ? SINGLETON : null),
   getId: () => 'default',
-  getAIAnalysis: () => _getMix() as AIVerdictAnalysis | null,
-  setAIAnalysis: (_t, v) => _setMix(v),
+  getAIAnalysis: (_target, data) => _getMix(data) as AIVerdictAnalysis | null,
+  setAIAnalysis: (_t, v, data) => _setMix(v, data),
   getFingerprint: () => getChannelMixFingerprint(),
   buildContext: () => buildChannelMixContext(),
   systemPrompt: SYSTEM_PROMPT,
@@ -255,7 +258,7 @@ const engine = createAIVerdict({
     return sun.some(s => _sessionTime(s) >= cutoff && _sessionTime(s) < now)
       || dev.some(s => _sessionTime(s) >= cutoff && _sessionTime(s) < now);
   },
-  getAllTargets: () => (state.importedData ? [SINGLETON] : []),
+  getAllTargets: data => (data ? [SINGLETON] : []),
 });
 
 export const analyzeChannelMixAI = (opts?: AnalyzeOptions) => engine.analyze(SINGLETON, opts) as Promise<unknown>;
@@ -276,98 +279,42 @@ registerAIActionHandler('refresh-channel-mix', refreshChannelMixAI);
 // other auto-fire surfaces; prevents tight-loop refire.
 const _autoFiredChannelKeys = new Set();
 
-function _renderWeeklyAIReview(analysis: MixRead | null, action = '') {
-  return `<div class="light-channel-mix-ai">
-    <section class="light-weekly-ai-review">
-      <div class="light-weekly-ai-head">
-        <div>
-          <div class="light-weekly-period">AI summary · What changed</div>
-          <div class="light-weekly-ai-tip">${escapeHTML(analysis?.tip || '')}</div>
-        </div>
-        ${action}
-      </div>
-      ${analysis?.detail ? `<div class="light-weekly-ai-detail">${escapeHTML(analysis.detail)}</div>` : ''}
-    </section>
-  </div>`;
-}
-
-// Drop-in replacement for renderSuggestion. The AI output is deliberately
-// neutral: safety colors belong to deterministic Today checks, while this
-// block only explains patterns in the two rolling seven-day windows.
-export function renderChannelMixVerdict(staticFallback: unknown): unknown {
+type MixSelection<F>={readonly kind:'fallback';readonly value:F|''}|{readonly kind:'ai';readonly variant:ReviewAIVariant;readonly status:import('./ai-verdict-engine.js').AIVerdictStatus;readonly analysis:MixRead|null;readonly fallback:F|undefined};
+function selectChannelMixVerdict<F>(staticFallback:F):MixSelection<F>{
+  const analysis = _getMix();
+  const fingerprint = getChannelMixFingerprint();
   if (!hasAssistantFeatureProvider()) {
-    // Pre-populated demo or cross-device synced cached verdict still
-    // renders even without a provider when it matches the new source-aware
-    // fingerprint. Older target/deficit verdicts must not leak back in.
-    const cached = _getMix();
-    const currentFp = getChannelMixFingerprint();
-    if (cached?.status === 'ok' && cached?.dot && cached?.tip && cached?.fingerprint === currentFp) {
-      return _renderWeeklyAIReview(cached);
-    }
-    return staticFallback || '';
+    return analysis?.status === 'ok' && analysis.dot && analysis.tip && analysis.fingerprint === fingerprint
+      ? {kind:'ai',variant:'cached',status:'ok',analysis,fallback:undefined} : {kind:'fallback',value:staticFallback||''};
   }
   const status = engine.getStatus(SINGLETON);
-  const a = _getMix();
-  const currentFp = getChannelMixFingerprint();
-  const stale = !!(a?.fingerprint && a.fingerprint !== currentFp);
-  const hasReviewData = _hasWeeklyReviewData();
+  const stale = !!(analysis?.fingerprint && analysis.fingerprint !== fingerprint);
+  if (!_hasWeeklyReviewData()) return {kind:'ai',variant:'unavailable',status,analysis,fallback:staticFallback};
 
-  // A stale cached verdict can survive after its source sessions roll out of
-  // both comparison periods. Do not leave a refresh button that the engine
-  // must reject silently; explain the requirement beside the existing log
-  // action instead. refreshChannelMixAI repeats this guard for old DOM/races.
-  if (!hasReviewData) {
-    return `<div class="light-channel-mix-ai">
-      ${staticFallback || ''}
-      <div class="light-weekly-ai-unavailable" role="status">
-        <strong>AI review needs a little history.</strong>
-        <span>Complete at least one sun or device session; the review will become available here.</span>
-      </div>
-    </div>`;
+  const owner = captureAIVerdictOwner();
+  const key = owner.key(fingerprint);
+  if ((status === 'idle' || stale) && !_autoFiredChannelKeys.has(key)) {
+    _autoFiredChannelKeys.add(key);
+    setTimeout(() => { if (owner.current()) void engine.analyze(SINGLETON).catch(() => {}); }, 0);
   }
-
-  // Auto-fire only when either comparison window contains a completed
-  // session. This still analyzes a current no-log week when the prior week
-  // has records, but does not spend a request on a completely blank profile.
-  const _autoKey = currentFp;
-  if ((status === 'idle' || stale) && !_autoFiredChannelKeys.has(_autoKey)) {
-    _autoFiredChannelKeys.add(_autoKey);
-    setTimeout(() => engine.analyze(SINGLETON).catch(() => {}), 0);
-  }
-
-  // Shimmer ONLY while a request is genuinely in flight. Stale results fall
-  // through to a refresh CTA so an older time window is never presented as
-  // the current comparison.
-  if (status === 'analyzing') {
-    return `<div class="light-channel-mix-ai">
-      <div class="light-weekly-ai-loading">
-        <span class="sun-session-ai-dot sun-session-ai-dot-shimmer" aria-hidden="true"></span>
-        <span>Comparing the past two weeks…</span>
-      </div>
-    </div>`;
-  }
-  if (status === 'ok' && !stale) {
-    const action = `<button class="sun-session-ai-refresh" ${aiActionAttrs('refresh-channel-mix')} title="Refresh weekly review" aria-label="Refresh weekly light review">↻</button>`;
-    return _renderWeeklyAIReview(a, action);
-  }
-  if (status === 'error') {
-    const msg = a?.errorMessage ? `Analysis failed — ${a.errorMessage}` : 'Analysis failed.';
-    return `<div class="light-channel-mix-ai">
-      ${staticFallback || ''}
-      <div class="light-weekly-ai-action-row" role="status">
-        <span class="light-weekly-ai-action-status">${escapeHTML(msg)}</span>
-        <button class="dashboard-action-btn light-channel-mix-ai-cta" ${aiActionAttrs('refresh-channel-mix')}>Try again</button>
-      </div>
-    </div>`;
-  }
-  // Idle, OR cached but stale (the rolling windows shifted since last run).
-  const ctaLabel = stale ? 'Refresh review' : 'Generate weekly review';
-  const helper = stale ? 'Your logs changed since this review was generated.' : 'Compares the past 7 days with the 7 before them.';
-  return `<div class="light-channel-mix-ai">
-    ${staticFallback || ''}
-    <div class="light-weekly-ai-action-row">
-      <button class="dashboard-action-btn light-channel-mix-ai-cta" ${aiActionAttrs('refresh-channel-mix')}><span aria-hidden="true">↻</span> ${escapeHTML(ctaLabel)}</button>
-      <span class="light-weekly-ai-action-status">${escapeHTML(helper)}</span>
-    </div>
-  </div>`;
+  const variant = status === 'analyzing' || status === 'error' ? status
+    : status === 'ok' && !stale ? 'ok' : stale ? 'stale' : 'idle';
+  return {kind:'ai',variant,status,analysis,fallback:staticFallback};
+}
+function projectSelectedMixAI(selection:Extract<MixSelection<unknown>,{kind:'ai'}>,fallback:Parameters<typeof projectReviewAI>[0]['fallback']){
+ return captureLightAIView(projectReviewAI({kind:'weekly',variant:selection.variant,status:selection.status,analysis:selection.analysis,fallback:fallback??null,actionOwner:aiActionOwner()}));
+}
+/** Feature composition uses the already captured native deterministic summary. */
+export function getChannelMixVerdictView(staticFallback:Readonly<WeeklyFallbackView>|null){
+ const selection=selectChannelMixVerdict(staticFallback);
+ return selection.kind==='fallback'?selection.value||null:projectSelectedMixAI(selection,selection.fallback||null);
+}
+/**
+ * The native providerless value/identity contract remains. Legacy fallback data
+ * in an AI wrapper becomes literal text; it is never a serialized HTML child.
+ */
+export function renderChannelMixVerdict(staticFallback:unknown):unknown{
+ const selection=selectChannelMixVerdict(staticFallback);
+ if(selection.kind==='fallback')return selection.value;
+ return renderHTML({view:projectSelectedMixAI(selection,{kind:'public-html',value:selection.fallback})});
 }

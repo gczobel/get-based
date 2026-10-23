@@ -263,7 +263,7 @@ test('Routstr wallet DOM flows recover deposits, refunds, and seed onboarding', 
 
       await providerPanels.doRoutstrNodeDeposit(nodeUrl, 500);
       await wait(150);
-      const fundAreaText = document.getElementById('routstr-wallet-fund-area')?.textContent || '';
+      const fundAreaText = document.getElementById('routstr-node-picker')?.textContent || '';
       const depositUsesSessionKey = (depositArgs as {url?:unknown}|null|undefined)?.url === nodeUrl
         && (depositArgs as {amount?:unknown}).amount === 500
         && (depositArgs as {existingKey?:unknown}).existingKey === 'sk-routstr-dom';
@@ -271,7 +271,7 @@ test('Routstr wallet DOM flows recover deposits, refunds, and seed onboarding', 
       const depositFailureShowsRecovery = fundAreaText.includes('Deposit outcome unconfirmed')
         && fundAreaText.includes('Recover to Wallet')
         && fundAreaText.includes('Copy Token');
-      const recoveryButtonCarriesToken = document.querySelector<HTMLElement>('#routstr-wallet-fund-area [data-token="cashuArecoverytoken"]') !== null;
+      const recoveryTokenIsPrivate = (await import('/js/wallet-node-component.js')).getWalletNodeView()?.readRecovery(0)?.token === 'cashuArecoverytoken' && document.querySelector('#routstr-node-picker [data-token],#routstr-node-picker [data-clipboard-text]') === null;
 
       localStorage.setItem('labcharts-routstr-key', 'sk-routstr-dom');
       cryptoStore.updateKeyCache('labcharts-routstr-key', 'sk-routstr-dom');
@@ -308,7 +308,7 @@ test('Routstr wallet DOM flows recover deposits, refunds, and seed onboarding', 
       }
       await providerPanels.doRoutstrWalletRestore();
       await wait(50);
-      const restoreUsesNormalizedMnemonic = restoredMnemonic === restoreInput?.value;
+      const restoreUsesNormalizedMnemonic = restoredMnemonic === 'abandon ability able about above absent absorb abstract absurd abuse access accident' && restoreInput?.value === '';
       const restoreReportsBalance = (document.getElementById('routstr-restore-status')?.textContent || '').includes('4,321');
 
       await providerPanels.showRoutstrWalletFund();
@@ -332,6 +332,9 @@ test('Routstr wallet DOM flows recover deposits, refunds, and seed onboarding', 
       await wait(50);
       const lightningFundingCreatesInvoice = fundingInvoiceAmount === 1000
         && (document.getElementById('routstr-wfund-status')?.textContent || '').includes('Waiting for payment');
+      const fundingQr = document.querySelector<HTMLImageElement>('[data-wallet-funding-view] img');
+      const lightningFundingQRUsesLocalVendor = !!fundingQr?.complete && fundingQr.naturalWidth > 0 && !!fundingQr.src.startsWith('data:image/svg+xml');
+      const fundingIdentityRemainsPrivate = !document.querySelector('[data-wallet-funding-view] [data-quote],[data-wallet-funding-view] [data-mint],[data-wallet-funding-view] [data-clipboard-text]');
       document.querySelector<HTMLElement>('[data-routstr-wallet-action="recover-wallet-funding"]')!.click();
       await wait(50);
       const pendingFundingRecoveryReportsRecovered = pendingFundingChecked
@@ -420,7 +423,7 @@ test('Routstr wallet DOM flows recover deposits, refunds, and seed onboarding', 
         depositUsesSessionKey,
         depositFailureChecksRecovery,
         depositFailureShowsRecovery,
-        recoveryButtonCarriesToken,
+        recoveryTokenIsPrivate,
         refundBlockedUntilSeedAck,
         refundUsesSessionKey,
         refundPersistsTokenBeforeReceive,
@@ -437,6 +440,8 @@ test('Routstr wallet DOM flows recover deposits, refunds, and seed onboarding', 
         seedAckEnablesContinue,
         seedAckProceedsToFunding,
         lightningFundingCreatesInvoice,
+        lightningFundingQRUsesLocalVendor,
+        fundingIdentityRemainsPrivate,
         pendingFundingRecoveryReportsRecovered,
         fundingPollUsesQuote,
         terminalFundingInvoicesAreReplaced,

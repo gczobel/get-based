@@ -215,7 +215,10 @@ export async function buildClientExportObject(profileId: string, includeChat = f
   if (!data || typeof data !== 'object') data = {};
   (migrateCustomMarkerIdentities as (value:unknown)=>ReturnType<typeof migrateCustomMarkerIdentities>)(data?.customMarkers);
   if (data) (migrateMarkerPlacements as (data: unknown)=>ReturnType<typeof migrateMarkerPlacements>)(data);
-  if ((!data || !data.entries || data.entries.length === 0) && !nutrition?.meals?.length) throw new Error('No data to export for this client');
+  const hasManualReadings = data.manualBodyReadings && typeof data.manualBodyReadings === 'object'
+    && !Array.isArray(data.manualBodyReadings) && Object.keys(data.manualBodyReadings).length > 0
+    && (await import('./wearables-manual.js')).hasManualBodyReadings(data.manualBodyReadings);
+  if ((!data || !data.entries || data.entries.length === 0) && !nutrition?.meals?.length && !hasManualReadings) throw new Error('No data to export for this client');
 
   const exportObj: ClientExportObject = {
     version: 2, exportedAt: new Date().toISOString(),
@@ -239,9 +242,10 @@ export async function buildClientExportObject(profileId: string, includeChat = f
     markerValueNotes: data.markerValueNotes || {},
     manualValues: data.manualValues || {},
     manualMetricTombstones: data.manualMetricTombstones || {},
+    manualBodyReadings: data.manualBodyReadings || {},
     changeHistory: data.changeHistory || [],
     chatSummaries: data.chatSummaries || [],
-    // Wearable layer (added v1.27.1). Only the synced surfaces — L2 summary
+    // Wearable layer (added v1.27.1). Only the synced surfaces — explicit manual readings, L2 summary
     // + user preferences. Raw L1 IDB rows are deliberately excluded; they
     // stay per-device. OAuth tokens are stripped via the same path the
     // Evolu sync uses (wearableConnections wholesale exclude).

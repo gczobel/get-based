@@ -1,6 +1,6 @@
 // data.js — Data pipeline, unit conversion, date range, trend detection
 
-import { queueProfileDataWrite, profileDataBaseline, rememberProfileData, mergeProfileMutation, adoptProfileData, rebaseLiveProfileData, ProfileWriteConflict } from './profile-data-writes.js';
+import { profileDataValuesEqual, queueProfileDataWrite, profileDataBaseline, rememberProfileData, mergeProfileMutation, adoptProfileData, rebaseLiveProfileData, ProfileWriteConflict } from './profile-data-writes.js';
 import { mergeBiologyScoreAIRecords } from './biology-score-persistence.js';
 import { isProfileReadBlocked } from './profile-load-safety.js';
 import { state } from './state.js';
@@ -62,7 +62,9 @@ export {
   installDataActionDelegates,
   navigateDataViewRuntime,
   renderChartLayersDropdown,
+  projectChartLayersDropdown,
   renderDateRangeFilter,
+  projectDateRangeFilter,
   setDateRange,
   setNoteOverlay,
   setPhaseOverlay,
@@ -87,6 +89,7 @@ export const {
   invalidateActiveDataCache,
   saveImportedData,
   saveImportedDataForProfile,
+  notifyProfileDataContextChanged,
   getFocusCardFingerprint,
   getActiveData,
   convertDisplayToSI,
@@ -95,6 +98,7 @@ export const {
   recalculateHOMAIR,
   getAllFlaggedMarkers
 } = createDataCore({
+  get profileDataValuesEqual() { return profileDataValuesEqual; },
   get queueProfileDataWrite() { return queueProfileDataWrite; },
   get profileDataBaseline() { return profileDataBaseline; },
   get rememberProfileData() { return rememberProfileData; },

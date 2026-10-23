@@ -5,6 +5,7 @@ import { createLegacyAssertions } from './helpers/legacy-assertions.js';
 // Static provider panel delegated-action source guards.
 
 const renderSrc = readRepositorySource('js/provider-panel-renderers.js', 'utf8');
+const walletSrc = readRepositorySource('js/provider-wallet-panels.js', 'utf8');
 const renderRuntimeSrc = readRepositorySource('js/provider-panel-renderers-runtime.js', 'utf8');
 const modelControlsSrc = readRepositorySource('js/provider-model-controls.js', 'utf8');
 const delegatesSrc = readAuthoredRepositorySource('js/provider-panel-delegates.js', 'utf8');
@@ -14,6 +15,7 @@ const swSrc = readServiceWorkerSource(relative => readRepositorySource(relative,
 
 const { assert, results: legacyAssertions } = createLegacyAssertions(" -- ");
 
+const customViewSrc = readRepositorySource('js/components/CustomSettings.svelte', 'utf8');
 console.log('=== Provider Panel Delegated Actions ===');
 
 const inlineHandlerRe = /\bon(?:click|change|input|search|keydown|keyup|submit|blur)=/;
@@ -26,21 +28,25 @@ assert('provider-panels.js renders no inline event attributes',
 assert('provider-ppq-panels.js renders no inline event attributes',
   !inlineHandlerRe.test(ppqSrc));
 assert('provider panel renderers emit delegated action attributes',
-  renderSrc.includes('data-provider-panel-action') &&
-    renderSrc.includes('data-provider-panel-change') &&
-    renderSrc.includes('data-provider-panel-key'));
+  (renderSrc + customViewSrc).includes('data-provider-panel-action') &&
+    (renderSrc + customViewSrc).includes('data-provider-panel-change') &&
+    customViewSrc.includes('data-provider-panel-key'));
 assert('provider panel renderers route Nostr module dependencies through runtime adapter',
-  renderSrc.includes("from './provider-panel-renderers-runtime.js'") &&
-    renderSrc.includes('getSelectedRoutstrNodeFromRuntime()') &&
-    renderSrc.includes('discoverRoutstrNodesFromRuntime()') &&
-    renderSrc.includes('setSelectedRoutstrNodeFromRuntime(bestUrl)') &&
+  walletSrc.includes("from './provider-panel-renderers-runtime.js'") &&
+    walletSrc.includes('getSelectedRoutstrNodeFromRuntime()') &&
+    walletSrc.includes('discover: discoverRoutstrNodesFromRuntime') &&
+    walletSrc.includes('select: setSelectedRoutstrNodeFromRuntime') &&
+    !renderSrc.includes('discoverRoutstrNodesFromRuntime') &&
     !/\bwindow(?:\.|\s*\[)/.test(renderSrc) &&
     renderRuntimeSrc.includes("from './nostr-discovery.js'") &&
     renderRuntimeSrc.includes('configureProviderPanelRendererRuntime') &&
     !/\bwindow(?:\.|\s*\[)/.test(renderRuntimeSrc));
 assert('provider model controls emit delegated model attributes',
-  modelControlsSrc.includes('data-provider-panel-change') &&
-    modelControlsSrc.includes('data-provider-panel-key'));
+  customViewSrc.includes('data-provider-panel-change') &&
+    customViewSrc.includes('data-provider-panel-key') &&
+    modelControlsSrc.includes('getCustomSettingsView()') &&
+    modelControlsSrc.includes('view.readManualModel()') &&
+    modelControlsSrc.includes('view.setModels('));
 assert('provider-panels installs provider panel delegates',
   panelsSrc.includes("import { installProviderPanelDelegates } from './provider-panel-delegates.js'") &&
     panelsSrc.includes('installProviderPanelDelegates({') &&

@@ -7,6 +7,8 @@ import { createLegacyAssertions } from './helpers/legacy-assertions.js';
 import './_node-shim.js';
 
 import fs from 'node:fs';
+import { JSDOM } from 'jsdom';
+import { sourceFunctionHasStatement } from './helpers/native-source-contracts.js';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -146,7 +148,10 @@ console.log('=== Integration Tests — Batch 2 Fixes ===\n');
   assert('Slider no hardcoded #fff', !sliderBlock.includes('#fff'));
 
   // Refresh button CSS exists
-  assert('.ctx-refresh-all-btn in CSS', css.includes('.ctx-refresh-all-btn'));
+  const catalogSource = read('/js/components/ContextCardCatalog.svelte');
+  assert('Context refresh button has generated scoped Tailwind styling',
+    catalogSource.includes('ctx-refresh-all-btn {CONTEXT_ACTION} {CONTEXT_FOCUS}')
+    && css.includes('.gb\\:context-catalog\\:bg-secondary-surface'));
 
   // PII edit button CSS exists
   assert('.pii-edit-btn in CSS', css.includes('.pii-edit-btn'));
@@ -214,7 +219,11 @@ console.log('=== Integration Tests — Batch 2 Fixes ===\n');
   assert('refreshAllHealthDots function exists', ctxSrc.includes('function refreshAllHealthDots'));
   assert('refreshAllHealthDots is a module API', typeof contextCards.refreshAllHealthDots === 'function');
   assert('context-card APIs stay off window', !('refreshAllHealthDots' in window));
-  assert('Refresh button in renderProfileContextCards', ctxSrc.includes('ctx-refresh-all-btn'));
+  const { renderHTML: renderCatalog } = await import('../js/components/ContextCardCatalog.svelte.html.js');
+  const catalogView = { renderId: 'integration-catalog', embedded: false, subtitle: '', addedCount: 0, cards: [], demo: null, notes: '', refresh: true };
+  assert('Authored context catalog exposes refresh only when enabled',
+    renderCatalog({ view: catalogView }).includes('data-context-card-action="refresh-all-health-dots"')
+    && !renderCatalog({ view: { ...catalogView, refresh: false } }).includes('data-context-card-action="refresh-all-health-dots"'));
 
   // saveAndRefresh must trigger a re-render of the current view — BroadcastChannel
   // does not deliver postMessage back to the sender, so single-tab users see no
@@ -224,7 +233,10 @@ console.log('=== Integration Tests — Batch 2 Fixes ===\n');
   if (saveRefreshMatch) {
     const body = saveRefreshMatch[1]!;
     assert('saveAndRefresh calls navigate for in-tab re-render (#123)',
-      /navigateContextCardView\s*\(/.test(body),
+      body.includes('refreshAfterContextCommit(msg);')
+        && sourceFunctionHasStatement(ctxSrc, 'saveAndRefresh', 'refreshAfterContextCommit(msg);')
+        && sourceFunctionHasStatement(ctxSrc, 'refreshAfterContextCommit',
+          "navigateContextCardView(activeNav?.dataset.category || 'dashboard');"),
       'without this, saved context card values stay hidden until reload');
   }
 
@@ -272,9 +284,16 @@ console.log('=== Integration Tests — Batch 2 Fixes ===\n');
   const importSrc = read('/js/pdf-import-commit.js');
   assert('confirmImport stores sourceFile', importSrc.includes('entry.sourceFile = result.fileName'));
 
-  const settingsDataSrc = read('/js/settings-data.js');
-  assert('Settings Data shows sourceFile', settingsDataSrc.includes('entry.sourceFile'));
-  assert('Settings Data imports escapeAttr', settingsDataSrc.includes('escapeAttr'));
+  const originalEntries = state.importedData.entries;
+  try {
+    state.importedData.entries = [{ date: '2026-01-01', markers: { 'biochemistry.glucose': 5 }, sourceFile: 'legacy <file>.pdf' }];
+    const { getDataEntriesSnapshot } = await import('../js/settings-records-view.js');
+    assert('Settings Data includes literal sourceFile metadata',
+      getDataEntriesSnapshot().manual[0]?.source === 'legacy markers not tied to an import file · legacy <file>.pdf');
+  } finally { state.importedData.entries = originalEntries; }
+  const recordsSource = read('/js/components/DataEntriesSettings.svelte');
+  assert('Settings Data uses escaped Svelte text for source metadata',
+    recordsSource.includes('{entry.source}') && !recordsSource.includes('{@html'));
 
   // ═══════════════════════════════════════
   // 13. Both-range mode on cards
@@ -286,7 +305,18 @@ console.log('=== Integration Tests — Batch 2 Fixes ===\n');
   assert('Chart card handles both mode',
     categoryViewRenderersSrc.includes("state.rangeMode === 'both'") && categoryViewRenderersSrc.includes('marker.optimalMin') && categoryViewRenderersSrc.includes('marker.refMin'));
   // FA card should show both ranges
-  assert('FA card handles both mode', categoryViewRenderersSrc.includes('faRangeText'));
+  const { renderFattyAcidsView } = await import('../js/category-view-renderers.js');
+  const previousRangeMode = state.rangeMode;
+  let bothRangeText: string | null | undefined;
+  try {
+    state.rangeMode = 'both';
+    const rangeDOM = new JSDOM(renderFattyAcidsView({ markers: {
+      synthetic: { name: 'Synthetic FA', values: [4], unit: '%', refMin: 1, refMax: 8, optimalMin: 2, optimalMax: 6 },
+    } }, 'fattyAcids'));
+    bothRangeText = rangeDOM.window.document.querySelector('.fa-card-ref')?.textContent;
+    rangeDOM.window.close();
+  } finally { state.rangeMode = previousRangeMode; }
+  assert('FA card handles both mode', bothRangeText === 'Ref: 1 – 8 · Opt: 2 – 6');
 
   // ═══════════════════════════════════════
   // 14. Onboarding trim fix

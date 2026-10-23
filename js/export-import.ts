@@ -8,7 +8,7 @@ import { onProfileSaved } from './sync-save-hooks.js';
 import { adoptProfileData } from './profile-data-writes.js';
 import { showNotification, showConfirmDialog, isDebugMode } from './utils.js';
 import { saveImportedData, saveImportedDataForProfile, invalidateActiveDataCache } from './data.js';
-import { getProfiles, profileStorageKey, createProfile, updateProfileMeta, loadProfile, migrateProfileData } from './profile.js';
+import { getProfiles, profileStorageKey, createProfile, updateProfileMeta, loadProfile, waitForProfileWearables, migrateProfileData } from './profile.js';
 import { encryptedGetItem, encryptedSetItem, getEncryptionEnabled } from './crypto.js';
 import {
   appendImportedArrayItem,
@@ -147,7 +147,11 @@ export function importDataJSON(file: File) {
           return;
         }
         const hasNutrition = json.nutrition?.version === 1 && Array.isArray(json.nutrition?.meals);
-        if ((!json.entries || !Array.isArray(json.entries)) && !hasNutrition) {
+        const manual = json.manualBodyReadings && typeof json.manualBodyReadings === 'object'
+          && !Array.isArray(json.manualBodyReadings) && Object.keys(json.manualBodyReadings).length
+          ? await import('./wearables-manual.js') : null;
+        const hasManualReadings = manual?.hasManualBodyReadings(json.manualBodyReadings) ?? false;
+        if ((!json.entries || !Array.isArray(json.entries)) && !hasNutrition && !hasManualReadings) {
           showNotification('Invalid JSON format: missing entries array', 'error');
           return;
         }
@@ -160,6 +164,16 @@ export function importDataJSON(file: File) {
             height: p.height || null, heightUnit: p.heightUnit || 'cm',
           });
           await loadProfile(profileId);
+        }
+        if (hasManualReadings) {
+          const pendingProfile = state.currentProfile, pendingData = state.importedData;
+          if (!pendingProfile || !pendingData) throw new Error('No active profile for manual readings.');
+          // The older load task must finish against its original snapshot,
+          // before this import copies records and installs preserved projections.
+          await waitForProfileWearables(pendingProfile);
+          if (state.currentProfile !== pendingProfile || state.importedData !== pendingData) {
+            showNotification('Profile changed. Retry import.', 'info'); return;
+          }
         }
         rollback = JSON.stringify((state.importedData as ImportedDataOperations));
         rollbackProfile = state.currentProfile;
@@ -184,7 +198,7 @@ export function importDataJSON(file: File) {
           (replaceImportedArrayItem as RawReplace)((state.importedData as ImportedDataOperations), 'entries', (state.importedData as ImportedDataOperations).entries!.indexOf(existing as ImportRowOperations), restored);
           count++;
         }
-        if (count === 0 && (!json.notes || json.notes.length === 0) && !json.chat && !hasNutrition) {
+        if (count === 0 && (!json.notes || json.notes.length === 0) && !json.chat && !hasNutrition && !hasManualReadings) {
           showNotification('No valid entries found in JSON', 'error');
           return;
         }
@@ -375,6 +389,13 @@ export function importDataJSON(file: File) {
         // Manual wearable deletions are privacy state. Merge by the newest
         // deletion clock so importing an older backup cannot resurrect a
         // reading that was deleted later on this or another device.
+        if (json.manualBodyReadings && typeof json.manualBodyReadings === 'object' && !Array.isArray(json.manualBodyReadings)) {
+          const target = state.importedData.manualBodyReadings || (state.importedData.manualBodyReadings = {});
+          for (const [key, value] of Object.entries(json.manualBodyReadings)) {
+            if (['__proto__', 'constructor', 'prototype'].includes(key)) continue;
+            if (!Object.hasOwn(target, key)) target[key] = value as import('../types/app-state.js').ManualBodyReading;
+          }
+        }
         if (json.manualMetricTombstones && typeof json.manualMetricTombstones === 'object'
             && !Array.isArray(json.manualMetricTombstones)) {
           if (!(state.importedData as ImportedDataOperations).manualMetricTombstones) (state.importedData as ImportedDataOperations).manualMetricTombstones = {};
@@ -562,6 +583,14 @@ export function importDataJSON(file: File) {
         }
         const mealCount = await _importNutritionData(rollbackProfile, json.nutrition);
         if (state.currentProfile !== rollbackProfile || (state.importedData as ImportedDataOperations) !== rollbackData) return;
+        if (hasManualReadings && manual) {
+          const sync = await import('./wearables-manual-sync.js');
+          if (state.currentProfile !== rollbackProfile || state.importedData !== rollbackData) return;
+          const caughtUp = await sync.catchUpManualBodyReadings(rollbackProfile);
+          if ('skipped' in caughtUp || state.currentProfile !== rollbackProfile || state.importedData !== rollbackData) return;
+          await sync.refreshRestoredManualSummary(rollbackProfile);
+          if (state.currentProfile !== rollbackProfile || state.importedData !== rollbackData) return;
+        }
         // Demo-load completion: clear the loading sentinel (dashboard
         // empty-state renderer keys off this flag while data is en route).
         clearDemoLoadingProfile(state.currentProfile);
@@ -687,7 +716,7 @@ async function _importDatabaseBundle(json: ImportBodyOperations) {
           sortImportedArray(current, 'importSnapshots', (a, b) => ((b.importedAt || 0) as number) - ((a.importedAt || 0) as number));
         }
         // Marker definitions and display overrides: preserve existing values.
-        for (const field of ['customMarkers', 'refOverrides', 'categoryLabels', 'categoryIcons', 'markerLabels', 'markerPlacements', 'manualValues']) {
+        for (const field of ['customMarkers', 'refOverrides', 'categoryLabels', 'categoryIcons', 'markerLabels', 'markerPlacements', 'manualValues', 'manualBodyReadings']) {
           if (importData[field] && typeof importData[field] === 'object') {
             if (!current[field]) current[field] = {};
             for (const [k, v] of Object.entries(importData[field] as Record<string, unknown>)) {

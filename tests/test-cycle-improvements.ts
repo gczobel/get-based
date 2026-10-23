@@ -9,6 +9,9 @@ import { readServiceWorkerSource } from '../scripts/service-worker-source.js';
 import './_node-shim.js';
 
 import fs from 'node:fs';
+import postcss from 'postcss';
+import {cycleOverviewClasses} from '../js/cycle-overview-classes.js';
+import {cycleSharedUtilities} from '../js/cycle-shared-classes.js';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -137,8 +140,8 @@ const { phaseBandPlugin } = await import('../js/charts.js');
     const src = read('js/data-view-controls.js');
     assert('Layers dropdown checks for cycle data', src.includes('hasCycle'));
     assert('Layers dropdown delegates setPhaseOverlay changes',
-      src.includes("dataChangeAttrs('set-phase-overlay')") && src.includes('setPhaseOverlay(mode)'));
-    assert('Layers dropdown explains phases are tied to blood draws', src.includes('Cycle phase at blood draw'));
+      read('js/components/ChartLayersDropdown.svelte').includes('data-lab-data-change="set-phase-overlay"') && src.includes('setPhaseOverlay(mode)'));
+    assert('Layers dropdown explains phases are tied to blood draws', read('js/components/ChartLayersDropdown.svelte').includes('Cycle phase at blood draw'));
   }
 
   // ── Section 10: loadProfile loads phaseOverlay ──
@@ -245,32 +248,42 @@ const { phaseBandPlugin } = await import('../js/charts.js');
   // ── Section 15: Period entry form has symptom tags ──
   console.log('Section 15: Period entry form symptoms');
   {
-    const src = read('js/cycle.ts');
-    assert('Editor has mc-period-symptoms container', src.includes('mc-period-symptoms'));
-    assert('Editor uses PERIOD_SYMPTOMS', src.includes('PERIOD_SYMPTOMS'));
-    assert('Editor has ctx-tag for symptoms', src.includes('ctx-tag') && src.includes('data-value'));
+    const form = read('js/components/CycleEditorPeriodForm.svelte');
+    const controller = read('js/cycle.ts');
+    assert('Authored editor has mc-period-symptoms container', form.includes('id="mc-period-symptoms"'));
+    assert('Editor uses the canonical PERIOD_SYMPTOMS catalog', controller.includes('symptoms: PERIOD_SYMPTOMS') && form.includes('view.symptoms as symptom'));
+    assert('Authored editor has ctx-tag and exact symptom reader value', form.includes('ctx-tag cycle-symptom-chip') && form.includes('data-value={symptom}'));
   }
 
   // ── Section 16: Symptom tags display in period log ──
   console.log('Section 16: Symptom tags in period log');
   {
-    const src = read('js/cycle.ts');
-    assert('Period log shows period-symptom-tag', src.includes('period-symptom-tag'));
-    assert('Checks p.symptoms?.length', src.includes('p.symptoms') && src.includes('symptoms.length'));
+    const history = read('js/components/CycleEditorHistory.svelte');
+    const presentation = read('js/cycle-editor-presentation.ts');
+    assert('Authored period log shows period-symptom-tag', history.includes("class={c('period-symptom-tag')}") && history.includes('period.symptoms as symptom'));
+    assert('Prepared period symptoms retain the original nonempty guard', presentation.includes('period.symptoms?.length ? period.symptoms.map(literal) : []'));
   }
 
   // ── Section 17: CSS classes exist ──
   console.log('Section 17: CSS classes');
   {
     const css = readCycleCss();
-    assert('.period-symptom-tag CSS exists', css.includes('.period-symptom-tag'));
-    assert('.cycle-alert CSS exists', css.includes('.cycle-alert'));
-    assert('.cycle-alert-perimenopause CSS exists', css.includes('.cycle-alert-perimenopause'));
-    assert('.cycle-alert-critical CSS exists', css.includes('.cycle-alert-critical'));
-    assert('.cycle-alert-warning CSS exists', css.includes('.cycle-alert-warning'));
-    assert('.cycle-alert-info CSS exists', css.includes('.cycle-alert-info'));
-    assert('.cycle-alert-icon CSS exists', css.includes('.cycle-alert-icon'));
-    assert('.cycle-alert-detail CSS exists', css.includes('.cycle-alert-detail'));
+    const alerts = read('js/components/CycleOverviewAlerts.svelte');
+    const selectors: string[] = [];
+    postcss.parse(css).walkRules(rule => { selectors.push(rule.selector.replace(/\\([0-9a-f]{1,6}) ?|\\(.)/gi, (_match, hex: string | undefined, character: string | undefined) => hex ? String.fromCodePoint(parseInt(hex, 16)) : character!)); });
+    const symptomTokens = cycleSharedUtilities('period-symptom-tag').split(/\s+/);
+    assert('Authored symptom pills have every shared scoped utility', symptomTokens.length > 0 && symptomTokens.every(token => selectors.some(selector => selector.includes('.' + token) && ['editor','import','overview'].every(area => selector.includes(`[data-cycle-${area}-view]`)))));
+    const authoredStyle = (name: string) => {
+      const tokens = cycleOverviewClasses(name).split(/\s+/).filter(token => token.startsWith('gb:cycle-overview-ui:'));
+      return tokens.length > 0 && tokens.every(token => selectors.some(selector => selector.includes('.' + token) && selector.includes('[data-cycle-overview-view]')));
+    };
+    assert('Authored Cycle alert layout has all generated scoped styles', alerts.includes('c(`cycle-alert cycle-alert-${alert.tone}`)') && authoredStyle('cycle-alert'));
+    assert('Perimenopause alert uses generated scoped styles', authoredStyle('cycle-alert-perimenopause'));
+    assert('Critical alert uses generated scoped styles', authoredStyle('cycle-alert-critical'));
+    assert('Warning alert uses generated scoped styles', authoredStyle('cycle-alert-warning'));
+    assert('Info alert uses generated scoped styles', authoredStyle('cycle-alert-info'));
+    assert('Authored alert icon uses generated scoped styles', alerts.includes("c('cycle-alert-icon')") && authoredStyle('cycle-alert-icon'));
+    assert('Authored alert detail uses generated scoped styles', alerts.includes("c('cycle-alert-detail')") && authoredStyle('cycle-alert-detail'));
   }
 
   // ── Section 18: Source inspection ──
@@ -316,7 +329,7 @@ const { phaseBandPlugin } = await import('../js/charts.js');
     assert('category-page-view.js + marker-detail-modal.js pass phaseLabels to createLineChart', phasePassCount >= 4, `found ${phasePassCount} references`);
 
     // lab-context.js includes symptom + alert context (extracted from chat.js)
-    const labCtxSrc = read('js/lab-context.js');
+    const labCtxSrc = read('js/lab-context-assembly.js');
     assert('lab-context.js includes symptoms in periods', labCtxSrc.includes('p.symptoms'));
     assert('lab-context.js imports detectPerimenopausePattern', labCtxSrc.includes('detectPerimenopausePattern'));
     assert('lab-context.js imports detectCycleIronAlerts', labCtxSrc.includes('detectCycleIronAlerts'));

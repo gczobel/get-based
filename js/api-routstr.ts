@@ -20,7 +20,7 @@ import {
 import { callOpenAICompatibleAPI } from './api-openai-compatible.js';
 import { notifyRoutstrRequestSettled } from './routstr-balance-settlement.js';
 
-const ROUTSTR_CURATED = ['claude-', 'anthropic/claude-', 'gpt-6-astra', 'openai/gpt-6-astra', 'gpt-6-sol', 'openai/gpt-6-sol', 'openai/gpt-5', 'gpt-5', 'gpt-4', 'gemini-3', 'gemini-2', 'glm-5', 'z-ai/glm-5', 'kimi-', 'moonshotai/kimi-', 'grok-4', 'x-ai/grok-4', 'grok-3', 'llama-', 'qwen', 'deepseek-', 'mistral-', 'mimo-'];
+const ROUTSTR_CURATED = ['deepseek/deepseek', '~deepseek/deepseek', 'gemini-4', 'google/gemini-4', 'muse-', 'meta/muse-', 'claude-', 'anthropic/claude-', 'gpt-6-astra', 'openai/gpt-6-astra', 'gpt-6-sol', 'openai/gpt-6-sol', 'openai/gpt-5', 'gpt-5', 'gpt-4', 'gemini-3', 'gemini-2', 'glm-5', 'z-ai/glm-5', 'kimi-', 'moonshotai/kimi-', 'grok-4', 'x-ai/grok-4', 'grok-3', 'llama-', 'qwen', 'deepseek-', 'mistral-', 'mimo-'];
 const ROUTSTR_DEFAULT_CANDIDATES = ['gpt-6-astra', 'openai/gpt-6-astra', 'gpt-6-sol', 'openai/gpt-6-sol', 'gpt-5.5', 'openai/gpt-5.5', 'claude-sonnet-5', 'claude-sonnet-4.6'];
 const ROUTSTR_EXCLUDE = ['codex', 'audio', 'image', 'oss', 'safeguard', 'coder', 'embed', 'tts', 'whisper', 'beta', 'preview', 'free', 'gratis'];
 const ROUTSTR_PRIVATE_REQUEST_TIMEOUT_MS = 180000;
@@ -47,7 +47,11 @@ function privateRequestError(error: unknown, elapsedMs: number, modelId: string)
   return new Error(`${message} ${reservationHint}`);
 }
 
-export async function fetchRoutstrModels() {
+let catalogRequest = 0;
+export async function fetchRoutstrModels({ isCurrent = () => true }: { isCurrent?: () => boolean } = {}) {
+  const request = ++catalogRequest;
+  const selectedNode = getRoutstrNodeUrl(), key = getRoutstrKey();
+  const ownsCatalog = () => request === catalogRequest && getRoutstrNodeUrl() === selectedNode && getRoutstrKey() === key && isCurrent();
   try {
     const nodeUrl = _requireNodeUrl();
     const res = await fetch(nodeUrl + '/v1/models');
@@ -80,6 +84,8 @@ export async function fetchRoutstrModels() {
         };
       }
     }
+    // Reject replaced node/account/view replies before any cache or selection writes.
+    if (!ownsCatalog()) return [];
     localStorage.setItem('labcharts-routstr-pricing', JSON.stringify(pricingCache));
     const visionIds = enabled.filter(function(m) {
       if (!m.id || !m.architecture) return false;
@@ -177,9 +183,10 @@ export async function callRoutstrAPI(opts: ProviderRequestOptions) {
   );
 }
 
-export async function createRoutstrAccount(cashuToken: string) {
+export async function createRoutstrAccount(cashuToken: string, nodeUrl = _requireNodeUrl(), expectedKey = getRoutstrKey(nodeUrl)) {
+  // Capture destination and credential before lazy loading or waiting for the wallet lock.
   const { depositTokenToNode } = await import('./cashu-wallet.js');
-  return depositTokenToNode(_requireNodeUrl(), cashuToken);
+  return depositTokenToNode(nodeUrl, cashuToken, expectedKey);
 }
 
 export async function getRoutstrBalance() {

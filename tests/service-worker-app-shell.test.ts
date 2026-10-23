@@ -2,9 +2,10 @@ import { readFileSync, existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as ts from 'typescript/unstable/ast';
-import { withParsedSource } from '../scripts/native-typescript-ast.js';
+import { withParsedSource, withParsedSources } from '../scripts/native-typescript-ast.js';
 import { describe, expect, it } from 'vitest';
 import { BRAND_ASSETS } from '../js/brand-assets.js';
+import { parseAppShellEntries } from '../scripts/app-shell-budget.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const VIRTUAL_APP_SHELL_URLS = new Set(['/app']);
@@ -17,8 +18,7 @@ function appShellEntries() {
   const bootstrap = readRepoFile('/service-worker.js');
   expect(bootstrap).toContain("importScripts('/service-worker-assets.js');");
   const source = readRepoFile('/service-worker-assets.js');
-  const body = source.match(/const APP_SHELL = \[([\s\S]*?)\n\];/)?.[1] || '';
-  return [...body.matchAll(/'([^']+)'\s*,/g)].map((match) => match[1]!);
+  return parseAppShellEntries(source);
 }
 
 function resolveLocalAsset(importerUrl: string, specifier: string) {
@@ -29,8 +29,7 @@ function resolveLocalAsset(importerUrl: string, specifier: string) {
   return path.posix.normalize(path.posix.join(path.posix.dirname(importerUrl), clean));
 }
 
-function moduleSpecifiers(source: string, fileName = 'module.js') {
-  return withParsedSource(source, fileName, (sourceFile) => {
+function collectModuleSpecifiers(sourceFile: ts.SourceFile) {
     const specifiers = new Set<string>();
 
     function addStringLiteral(node: ts.Node | undefined) {
@@ -63,13 +62,10 @@ function moduleSpecifiers(source: string, fileName = 'module.js') {
     }
     visit(sourceFile);
     return [...specifiers];
-  });
 }
 
-function moduleDependencies(moduleUrl: string) {
-  return moduleSpecifiers(readRepoFile(moduleUrl), moduleUrl)
-    .map((specifier) => resolveLocalAsset(moduleUrl, specifier))
-    .filter(Boolean) as string[];
+function moduleSpecifiers(source: string, fileName = 'module.js') {
+  return withParsedSource(source, fileName, collectModuleSpecifiers);
 }
 
 function reachableAppModules() {
@@ -79,20 +75,26 @@ function reachableAppModules() {
   const reachable = new Set<string>();
   const missingFiles: string[] = [];
 
-  function visit(moduleUrl: string) {
-    if (reachable.has(moduleUrl)) return;
-    reachable.add(moduleUrl);
-    const filePath = path.join(REPO_ROOT, moduleUrl.replace(/^\//, ''));
-    if (!existsSync(filePath)) {
-      missingFiles.push(moduleUrl);
-      return;
+  let pending = entries;
+  while (pending.length) {
+    const sources = new Map<string, string>();
+    for (const moduleUrl of pending) {
+      if (reachable.has(moduleUrl)) continue;
+      reachable.add(moduleUrl);
+      const filePath = path.join(REPO_ROOT, moduleUrl.replace(/^\//, ''));
+      if (!existsSync(filePath)) {missingFiles.push(moduleUrl); continue;}
+      sources.set(moduleUrl, readRepoFile(moduleUrl));
     }
-    for (const dependency of moduleDependencies(moduleUrl)) {
-      if (/\.(?:js|mjs)$/.test(dependency)) visit(dependency);
-    }
+    pending = [];
+    if (!sources.size) continue;
+    // One genuine syntax project per frontier, rather than one process/project
+    // per module. Only strings leave the synchronous native AST callback.
+    const dependencies = withParsedSources(sources, files => [...files].flatMap(([moduleUrl, file]) =>
+      collectModuleSpecifiers(file).map(specifier => resolveLocalAsset(moduleUrl, specifier))
+        .filter((dependency): dependency is string => dependency !== null && /\.(?:js|mjs)$/.test(dependency))));
+    pending = [...new Set(dependencies)].filter(dependency => !reachable.has(dependency));
   }
 
-  entries.forEach(visit);
   return { entries, missingFiles, reachable: [...reachable].sort() };
 }
 
@@ -110,6 +112,15 @@ function cssDependencies(cssUrl: string) {
 }
 
 describe('service worker app-shell completeness', () => {
+  it('reads mixed-quote URLs with the production parser and rejects duplicate spellings', () => {
+    expect(parseAppShellEntries(`const APP_SHELL = ['/app', "/js/quoted.js", '/styles.css'];`))
+      .toEqual(['/app', '/js/quoted.js', '/styles.css']);
+    expect(() => parseAppShellEntries(`const APP_SHELL = ['/app', "/app"];`))
+      .toThrow('APP_SHELL contains duplicate entries: /app');
+    expect(() => parseAppShellEntries(`const APP_SHELL = ['/app', dynamicURL];`))
+      .toThrow('APP_SHELL entries must be static string literals.');
+  });
+
   it('tracks runtime imports without treating JSDoc import types as modules', () => {
     const source = `
       /** @type {import('./types.js').RuntimeContract} */
@@ -139,6 +150,14 @@ describe('service worker app-shell completeness', () => {
     expect(entries.length).toBeGreaterThan(0);
     expect(duplicates).toEqual([]);
     expect(missing).toEqual([]);
+  });
+
+  it('pre-caches the production body-picker illustration and alpha mask', () => {
+    const stock = readRepoFile('/js/sun-body-silhouette.js').match(/const STOCK_IMG = \{([\s\S]*?)cells:/)?.[1] || '';
+    const assets = [...stock.matchAll(/\b(?:src|mask):\s*'([^']+)'/g)].map(match => match[1]!);
+    expect(assets).toEqual(['/er.svg', '/er-mask.png']);
+    const cached = new Set(appShellEntries());
+    expect(assets.filter(asset => !cached.has(asset))).toEqual([]);
   });
 
   it('pre-caches the complete local ES-module and worker dependency graph', () => {

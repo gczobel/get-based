@@ -1,3 +1,6 @@
+import {initRecommendationDetailDelegates} from './recommendation-action-delegates.js';
+import { renderHTML as renderTipsDetailHTML } from './components/TipsDetail.svelte.html.js';
+import { tipsText } from './tips-presentation.js';
 export interface RecommendationActionCandidate {
   id: string;
   source: unknown;
@@ -15,36 +18,11 @@ interface RecommendationActionsDeps<Data, Context, Catalog> {
 
 // recommendation-actions.js - recommendation modal and action handlers
 
-import { escapeAttr, escapeHTML } from './utils.js';
 import { openModalOverlay } from './modal-lifecycle.js';
 import {
-  closeRecommendationsModal,
   openRecommendationsChatPanel,
-  renderRecommendationsDetailSection,
+  getRecommendationsDetailSectionView,
 } from './recommendations-runtime.js';
-
-let recommendationDetailDelegatesInstalled = false;
-
-function recommendationDetailActionAttrs(action: string) {
-  return `data-recommendation-detail-action="${escapeAttr(action)}"`;
-}
-
-function handleRecommendationDetailClick(event: MouseEvent) {
-  const target = event.target instanceof Element ? event.target : null;
-  if (!target) return;
-  const actionEl = target.closest('[data-recommendation-detail-action]') as HTMLElement | null;
-  if (!actionEl || !actionEl.closest('#detail-modal')) return;
-  if (actionEl.dataset.recommendationDetailAction === 'close') {
-    event.preventDefault();
-    closeRecommendationsModal();
-  }
-}
-
-function initRecommendationDetailDelegates() {
-  if (recommendationDetailDelegatesInstalled) return;
-  document.addEventListener('click', handleRecommendationDetailClick);
-  recommendationDetailDelegatesInstalled = true;
-}
 
 function setDetailModalShell(...classes: string[]) {
   const modal = document.getElementById('detail-modal');
@@ -64,20 +42,14 @@ export function createRecommendationActions<Data, Context, Catalog>({
     const modal = setDetailModalShell('recommendation-detail-modal');
     const overlay = document.getElementById("modal-overlay");
     if (!modal || !overlay) return;
-    modal.innerHTML = `<button type="button" class="modal-close" aria-label="Close" ${recommendationDetailActionAttrs('close')}>&times;</button>
-      <h3>${escapeHTML(label || 'Tip')}</h3>
-      <div class="dashboard-widget-empty">Loading options...</div>`;
+    modal.innerHTML = renderTipsDetailHTML({label: tipsText(label || 'Tip'), state: 'loading', section: null});
     openModalOverlay(overlay);
-    Promise.resolve(renderRecommendationsDetailSection(slotKey, { label: 'Options', maxProducts: 4, markerStatus }))
-      .then(html => {
-        modal.innerHTML = `<button type="button" class="modal-close" aria-label="Close" ${recommendationDetailActionAttrs('close')}>&times;</button>
-          <h3>${escapeHTML(label || 'Tip')}</h3>
-          ${html || '<div class="dashboard-widget-empty">No tip details are available for this topic.</div>'}`;
+    Promise.resolve(getRecommendationsDetailSectionView(slotKey, { label: 'Options', maxProducts: 4, markerStatus }))
+      .then(section => {
+        modal.innerHTML = renderTipsDetailHTML({label: tipsText(label || 'Tip'), state: 'loaded', section});
       })
       .catch(() => {
-        modal.innerHTML = `<button type="button" class="modal-close" aria-label="Close" ${recommendationDetailActionAttrs('close')}>&times;</button>
-          <h3>${escapeHTML(label || 'Tip')}</h3>
-          <div class="dashboard-widget-empty">Could not load tip details.</div>`;
+        modal.innerHTML = renderTipsDetailHTML({label: tipsText(label || 'Tip'), state: 'error', section: null});
       });
   }
 

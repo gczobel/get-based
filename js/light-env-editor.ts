@@ -153,7 +153,8 @@ function toggleLightEnvRoomExpanded(id: unknown, event: unknown) {
   if ((event as DisclosureEventOperations | null | undefined)?.target) {
     const target = (event as DisclosureEventOperations).target!;
     if (target.closest('button, input, select, textarea, a, label')) {
-      if (!target.classList.contains('light-env-room-disclosure-head')
+      if (!target.classList.contains('light-env-room-disclosure-toggle')
+          && !target.classList.contains('light-env-room-disclosure-head')
           && !target.classList.contains('light-env-room-disclosure-name')
           && !target.classList.contains('light-env-room-disclosure-signals')
           && !target.classList.contains('light-env-room-signal')
@@ -306,6 +307,7 @@ function toggleLightEnvScreenExpanded(id: unknown, event: unknown) {
   if ((event as DisclosureEventOperations | null | undefined)?.target) {
     const target = (event as DisclosureEventOperations).target!;
     if (target.closest('button, input, select, textarea, a, label')
+        && !target.classList.contains('light-env-screen-disclosure')
         && !target.classList.contains('light-env-screen-card-head')
         && !target.classList.contains('light-env-screen-card-name')
         && !target.classList.contains('light-env-screen-card-icon')

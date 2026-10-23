@@ -2,6 +2,7 @@ import { expect, test } from '@playwright/test';
 
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => {
+    for(const key of ['emptyTour','tour'])localStorage.setItem(`labcharts-default-${key}`,'completed');
     localStorage.setItem('labcharts-ai-provider', 'ollama');
     localStorage.setItem('labcharts-ai-paused', 'false');
     localStorage.setItem('labcharts-legal-acceptance', JSON.stringify({
@@ -18,21 +19,30 @@ test.beforeEach(async ({ page }) => {
 
 test('the composer opens AI context before dashboard context hooks are registered', async ({ page }) => {
   await page.goto('/app', { waitUntil: 'load' });
+  await page.locator('html[data-app-ready]').waitFor({state:'attached'});
   await page.evaluate(async () => {
-    (window as Window & {endTour?: typeof import('../../js/tour.js').endTour}).endTour?.();
-    for (const id of ['tour-overlay', 'tour-spotlight', 'tour-tooltip']) document.getElementById(id)?.remove();
     await (await import('/js/chat-panel.js')).openChatPanel();
+    (await import('/js/state.js')).state.chatHistory = [{ role: 'user', content: 'Context menu fixture' }];
+    (await import('/js/chat-render.js')).renderChatMessages();
     const runtime = await import('/js/context-cards-runtime.js');
     runtime.configureContextCardsRuntimeCallbacks({ openContextModal: null });
   });
   await page.locator('#chat-attach-btn').click();
-  await page.locator('[data-chat-action="open-chat-context"]').click();
+  await page.locator('[data-chat-composer-view] [data-chat-action="open-chat-context"]').click();
   await expect(page.locator('#context-hub-overlay')).toBeVisible();
 });
 
 test('chat shows profile, CLI, and persona identities with rotating pre-token copy', async ({ page }) => {
   await page.goto('/app', { waitUntil: 'load' });
   await page.waitForSelector('#chat-messages', { state: 'attached' });
+  // Complete the real startup profile and neutral conversation before seeding identities.
+  await expect(page.locator('html[data-app-ready]')).toBeAttached();
+  await expect(page.locator('body')).not.toHaveClass(/\bchat-autostart-reserved\b/);
+  await expect(page.locator('#chat-thread-list .chat-thread-item.active .chat-thread-item-name')).toHaveText('New Conversation');
+  const closeChat = page.getByRole('button', { name: 'Close chat', exact: true });
+  if (await closeChat.isVisible()) await closeChat.click();
+  await expect(page.locator('body')).not.toHaveClass(/\bchat-open\b/);
+  await expect(page.locator('#chat-backdrop')).toBeHidden();
 
   const results = await page.evaluate(async () => {
     const [{ state }, render, thinking, panel] = await Promise.all([
@@ -41,7 +51,7 @@ test('chat shows profile, CLI, and persona identities with rotating pre-token co
       import('/js/chat-thinking-status.js'),
       import('/js/chat-panel.js'),
     ]);
-    await panel.openChatPanel();
+    if (await panel.openChatPanel() !== true) throw new Error('The settled Chat owner could not open');
     const tinyPng = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
     state.currentProfile = 'avatar-profile';
     state.profiles = [{ id: 'avatar-profile', name: 'Ada', avatar: tinyPng }];

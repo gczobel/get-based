@@ -88,6 +88,8 @@ function hydrateUserLightDevicesFromPresets() {
 }
 
 function migrateLegacyBiometrics() {
+  const profileId = state.currentProfile, data = state.importedData;
+  const current = () => state.currentProfile === profileId && state.importedData === data;
   // Health Metrics unification (Commit 1/5): walk legacy importedData.biometrics
   // into the wearables IndexedDB with source: 'manual'. Idempotent - tagged in
   // the wearables meta store so it only runs once per profile. Old biometrics
@@ -95,19 +97,22 @@ function migrateLegacyBiometrics() {
   // dual-write transition (cleanup lands in Commit 4).
   (migrateBiometricsToManual as (profileId:Parameters<typeof migrateBiometricsToManual>[0],biometrics:unknown)=>ReturnType<typeof migrateBiometricsToManual>)(state.currentProfile, (state.importedData as {biometrics?:unknown}|null|undefined)?.biometrics)
     .then(async () => {
-      // A page load does not go through profile switch, so catch up manual
-      // body readings here too. Lazy: only devices with manual data load it.
-      const profileId = state.currentProfile;
-      const data = state.importedData;
-      if (data && (data.manualBodyReadings || await hasManualData(profileId))) {
-        try { await (await import('./wearables-manual-sync.js')).catchUpManualBodyReadings(profileId, data); } catch {}
+      if (!current()) return;
+      if (Object.keys(data.manualBodyReadings || {}).length || await hasManualData(profileId)) {
+        if (!current()) return;
+        try {
+          const manual = await import('./wearables-manual-sync.js');
+          if (!current()) return;
+          await manual.catchUpManualBodyReadings(profileId);
+        } catch { /* Optional mirror catch-up must not prevent the existing L2 refresh. */ }
+        if (!current()) return;
       }
       // Rebuild the L2 summary on every load that has manual data - covers
       // both the first-run migration AND catching up a stale cached summary
       // after a DEFAULT_METRIC_ORDER change or bug fix. The L2 change-gate
       // (shouldWriteL2) prevents redundant writes when nothing has shifted.
-      if (await hasManualData(state.currentProfile)) {
-        await syncWearableSummary(state.currentProfile, listStoredConnectedSources());
+      if (await hasManualData(profileId) && current()) {
+        await syncWearableSummary(profileId, listStoredConnectedSources());
       }
     })
     .catch(() => { /* non-fatal; Safari can refuse IDB in some contexts */ });

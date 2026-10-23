@@ -2,6 +2,9 @@ import type { SunSetupDefaults, SunSetupValues } from './sun-defaults-model.js';
 import type { SunSetupRendererDeps } from './sun-defaults-setup-renderer.js';
 // sun-defaults-setup-ui.js — Light setup modal lifecycle and delegated behavior.
 
+import { createSunSetupSession, captureSunSetupIdentity, isCurrentSunSetupIdentity } from './sun-defaults-session.js';
+import type { SunSetupSession } from './sun-defaults-session.js';
+import { setupClasses } from './light-setup-classes.js';
 import { SKIN_TYPE } from './constants.js';
 import { openAppendedModalOverlay, removeModalOverlay } from './modal-lifecycle.js';
 import {
@@ -12,9 +15,9 @@ import {
 } from './sun-defaults-model.js';
 import {
   configureSunDefaultsSetupRenderer,
-  renderSetupActions,
+  renderSetupModal,
+  renderSetupSkinLabel,
   renderSetupCard,
-  renderSetupEditor,
   renderSetupLocationStatus,
 } from './sun-defaults-setup-renderer.js';
 import {
@@ -24,13 +27,13 @@ import {
   openSunSetupProfileLocationRuntime,
   requestSunSetupPreciseLocationRuntime,
 } from './sun-defaults-runtime.js';
-import { escapeHTML, showNotification } from './utils.js';
+import { showNotification } from './utils.js';
 
 const LIGHT_SETUP_OVERLAY_ID = 'light-setup-focus-overlay';
 
 export interface SunSetupDependencies extends SunSetupRendererDeps {
-  saveSunDefaults: (patch: Partial<SunSetupDefaults>) => unknown;
-  persistSunSetupValues: (values: SunSetupValues) => unknown;
+  saveSunDefaults: (patch: Partial<SunSetupDefaults>, session?: SunSetupSession) => unknown;
+  persistSunSetupValues: (values: SunSetupValues, now?: number, session?: SunSetupSession) => unknown;
   maybeAnalyzeOnboardingAfterSave: () => unknown;
 }
 
@@ -44,14 +47,14 @@ const setupDeps: SunSetupDependencies = {
   saveSunDefaults: async () => false,
   persistSunSetupValues: async () => null,
   maybeAnalyzeOnboardingAfterSave: () => {},
-  renderOnboardingAIBlock: () => '',
+  getOnboardingAIView: () => null,
 };
 
 function syncRendererDeps() {
   configureSunDefaultsSetupRenderer({
     getSunDefaults: setupDeps.getSunDefaults,
     isOnboardingComplete: setupDeps.isOnboardingComplete,
-    renderOnboardingAIBlock: setupDeps.renderOnboardingAIBlock,
+    getOnboardingAIView: setupDeps.getOnboardingAIView,
   });
 }
 
@@ -74,6 +77,56 @@ function isOnboardingComplete() {
   return !!setupDeps.isOnboardingComplete();
 }
 
+interface SetupOwner { root: HTMLElement; session: SunSetupSession; pending: boolean }
+let activeSetup: SetupOwner | null = null;
+const pendingPrompts = new WeakSet<HTMLElement>();
+function currentOwner(owner: SetupOwner) {
+  return owner.root.isConnected && owner.session.current()
+    && (owner.root.id !== LIGHT_SETUP_OVERLAY_ID || activeSetup === owner);
+}
+function ownsAction(element: Element) {
+  if (!element.isConnected) return false;
+  const ticket = element.closest<HTMLElement>('[data-light-setup-owner]')?.dataset.lightSetupOwner;
+  if (ticket && !isCurrentSunSetupIdentity(ticket)) return false;
+  const overlay = element.closest<HTMLElement>(`#${LIGHT_SETUP_OVERLAY_ID}`);
+  return !overlay || !!activeSetup && activeSetup.root === overlay && currentOwner(activeSetup);
+}
+function saveFailure(owner: SetupOwner) {
+  if (!currentOwner(owner)) return;
+  const result = owner.session.result();
+  const message = result === 'conflict'
+    ? 'Light settings changed elsewhere. Your draft is still here. Reopen setup to review the latest settings.'
+    : result === 'blocked' ? 'Reload this profile successfully before saving. Your draft is still here.'
+    : 'Could not save Light setup. Your draft is still here; try again.';
+  const status = owner.root.querySelector<HTMLElement>('[data-light-setup-status]');
+  if (status) { status.textContent = message; status.hidden = false; }
+  else showNotification(message, 'error');
+}
+async function writeSetup(owner: SetupOwner, write: () => unknown) {
+  if (!currentOwner(owner) || owner.pending) return false;
+  owner.pending = true;
+  const busyRoot = owner.root.querySelector('.light-setup-focus-modal') || owner.root;
+  busyRoot.setAttribute('aria-busy', 'true');
+  const controls = [...owner.root.querySelectorAll<HTMLInputElement | HTMLButtonElement | HTMLSelectElement>('input, button, select')]
+    .filter(control => !control.matches('[data-light-setup-close], [data-light-setup-action="cancel-reopen"]'));
+  const disabled = controls.map(control => control.disabled);
+  controls.forEach(control => { control.disabled = true; });
+  const status = owner.root.querySelector<HTMLElement>('[data-light-setup-status]');
+  if (status) status.hidden = true;
+  try {
+    const saved = !!await write();
+    if (!saved) saveFailure(owner);
+    return saved && currentOwner(owner);
+  } catch { saveFailure(owner); return false; }
+  finally {
+    owner.pending = false;
+    if (currentOwner(owner)) {
+      busyRoot.removeAttribute('aria-busy');
+      controls.forEach((control, index) => { control.disabled = disabled[index]!; });
+    }
+  }
+}
+
 const lightSetupDelegateRoots = new WeakSet<Document | Element>();
 
 function parseSetupIndex(value: unknown) {
@@ -93,8 +146,9 @@ function handleLightSetupClick(event: Event) {
   const target = event.target as Element | null;
   if (!target || typeof target.closest !== 'function') return;
   const actionElement = (target.closest('[data-light-setup-action]') as HTMLElement | null);
-  if (!actionElement?.dataset) return;
+  if (!actionElement?.dataset || !ownsAction(actionElement)) return;
 
+  if (activeSetup?.pending && actionElement.closest(`#${LIGHT_SETUP_OVERLAY_ID}`) && actionElement.dataset.lightSetupAction !== 'cancel-reopen') return;
   switch (actionElement.dataset.lightSetupAction || '') {
     case 'reopen':
       event.preventDefault();
@@ -102,7 +156,7 @@ function handleLightSetupClick(event: Event) {
       break;
     case 'dismiss':
       event.preventDefault();
-      void dismissSunSetup();
+      void dismissSunSetup(actionElement);
       break;
     case 'cancel-reopen':
       event.preventDefault();
@@ -141,7 +195,7 @@ function handleLightSetupClick(event: Event) {
 
 function handleLightSetupInput(event: Event) {
   const input = (event.target as HTMLInputElement);
-  if (!input?.dataset?.lightSetupInput) return;
+  if (!input?.dataset?.lightSetupInput || !ownsAction(input) || activeSetup?.pending) return;
   switch (input.dataset.lightSetupInput) {
     case 'ott-score':
       updateOttRunningScore();
@@ -155,8 +209,19 @@ function handleLightSetupInput(event: Event) {
 function handleLightSetupKeydown(event: Event) {
   const target = event.target as Element | null;
   if (!target || typeof target.closest !== 'function') return;
+  if (!ownsAction(target) || activeSetup?.pending) return;
+  const tab = target.closest<HTMLElement>('[data-setup-tab]');
+  const key = (event as KeyboardEvent).key;
+  if (tab?.closest('.light-setup-focus-modal') && ['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(key)) {
+    event.preventDefault();
+    const step = key === 'Home' ? 'core' : key === 'End' ? 'score'
+      : tab.dataset.setupTab === 'core' ? 'score' : 'core';
+    setLightSetupStep(step, { focus: false });
+    tab.closest('.light-setup-focus-modal')?.querySelector<HTMLElement>(`[data-setup-tab="${step}"]`)?.focus();
+    return;
+  }
   const actionElement = (target.closest('[data-light-setup-action="select-skin"]') as HTMLElement | null);
-  if (!actionElement?.dataset) return;
+  if (!actionElement?.dataset || !ownsAction(actionElement)) return;
   const index = parseSetupIndex(actionElement.dataset.lightSetupSkinIdx);
   if (index != null) skinFaceKeydown(event as KeyboardEvent, index);
 }
@@ -181,53 +246,35 @@ function cancelReopenSunSetup() {
 
 function openSunSetupOverlay() {
   if (typeof document === 'undefined') return;
+  closeSunSetupOverlay();
   const existing = document.getElementById(LIGHT_SETUP_OVERLAY_ID);
   if (existing) removeModalOverlay(existing);
 
   const overlay = document.createElement('div');
   overlay.id = LIGHT_SETUP_OVERLAY_ID;
-  overlay.className = 'modal-overlay light-setup-focus-overlay';
-  overlay.innerHTML = `<div class="modal light-setup-focus-modal" data-setup-step="core" role="dialog" aria-modal="true" aria-labelledby="light-setup-focus-title">
-    <header class="light-setup-focus-head">
-      <div>
-        <div class="gb-modal-kicker">Light baseline</div>
-        <h3 id="light-setup-focus-title">Personalize Light</h3>
-        <p>Connect skin, location, indoor lighting, eyewear, and daily spectrum patterns to your Light context.</p>
-      </div>
-      <button type="button" class="modal-close" aria-label="Close light setup" data-light-setup-close>&times;</button>
-    </header>
-    <div class="light-setup-focus-body" tabindex="-1">
-      ${renderSetupEditor({ includeActions: false })}
-    </div>
-    ${renderSetupActions()}
-  </div>`;
+  overlay.className = setupClasses('modal-overlay light-setup-focus-overlay');
+  overlay.setAttribute('data-light-setup-presentation', '');
+  overlay.innerHTML = renderSetupModal();
 
-  overlay.querySelector('[data-light-setup-close]')
-    ?.addEventListener('click', closeSunSetupOverlay);
-  openAppendedModalOverlay(overlay, closeSunSetupOverlay);
-
-  const observer = new MutationObserver(() => {
-    if (!document.body.contains(overlay)) observer.disconnect();
+  const owner: SetupOwner = { root: overlay, session: createSunSetupSession(), pending: false };
+  activeSetup = owner;
+  const close = () => closeSunSetupOverlay(owner);
+  overlay.querySelector('[data-light-setup-close]')?.addEventListener('click', close);
+  openAppendedModalOverlay(overlay, close, {
+    initialFocus: '.light-setup-focus-body', focusDelay: 40,
   });
-  observer.observe(document.body, { childList: true, subtree: true });
-
   setLightSetupStep('core', { focus: false });
-  const focusBody = () => {
-    const body = (overlay.querySelector('.light-setup-focus-body') as HTMLElement | null);
-    body?.focus({ preventScroll: true });
-  };
-  setTimeout(() => {
-    refreshSetupProgress();
-    focusBody();
-  }, 40);
-  setTimeout(focusBody, 120);
+  refreshSetupProgress();
 }
 
-function closeSunSetupOverlay() {
-  const overlay = typeof document !== 'undefined'
-    ? document.getElementById(LIGHT_SETUP_OVERLAY_ID)
-    : null;
-  if (overlay) removeModalOverlay(overlay);
+function closeSunSetupOverlay(owner: SetupOwner | null = activeSetup) {
+  if (!owner) return;
+  owner.session.retire();
+  if (activeSetup === owner) activeSetup = null;
+  removeModalOverlay(owner.root);
+}
+if (typeof globalThis.addEventListener === 'function') {
+  globalThis.addEventListener('labcharts-profile-switched', () => closeSunSetupOverlay());
 }
 
 function setLightSetupStep(step: string, opts: { focus?: boolean } = {}) {
@@ -241,6 +288,7 @@ function setLightSetupStep(step: string, opts: { focus?: boolean } = {}) {
     const active = setupTab.dataset.setupTab === nextStep;
     setupTab.classList.toggle('active', active);
     setupTab.setAttribute('aria-selected', active ? 'true' : 'false');
+    setupTab.tabIndex = active ? 0 : -1;
   });
   modal.querySelectorAll('[data-setup-pane]').forEach(pane => {
     const setupPane = (pane as HTMLElement);
@@ -254,29 +302,40 @@ function setLightSetupStep(step: string, opts: { focus?: boolean } = {}) {
         `[data-setup-pane="${nextStep}"] .light-setup-title, `
         + `[data-setup-pane="${nextStep}"] h4`,
       ) as HTMLElement | null);
-    setTimeout(() => target?.focus({ preventScroll: true }), 0);
+    const focusOwner = document.activeElement;
+    setTimeout(() => {
+      if (target?.isConnected && modal.dataset.setupStep === nextStep && document.activeElement === focusOwner) target.focus({ preventScroll: true });
+    }, 0);
   }
 }
 
-function refreshSetupLocationStatus() {
+function refreshSetupLocationStatus(root: ParentNode = document) {
   if (typeof document === 'undefined') return;
-  const row = document.querySelector('.light-setup-location-status');
+  const row = root.querySelector('.light-setup-location-status');
   if (row) row.outerHTML = renderSetupLocationStatus();
 }
 
 function openLightSetupProfileLocation() {
+  const ticket = captureSunSetupIdentity();
   cancelReopenSunSetup();
-  setTimeout(openSunSetupProfileLocationRuntime, 0);
+  setTimeout(() => { if (isCurrentSunSetupIdentity(ticket)) openSunSetupProfileLocationRuntime(); }, 0);
 }
 
 async function requestLightSetupPreciseLocation() {
+  const owner = activeSetup;
+  if (!owner || !currentOwner(owner)) return null;
   if (!hasSunSetupPreciseLocationRequester()) {
     showNotification('Precise location is unavailable here.');
     return null;
   }
-  const coords = await requestSunSetupPreciseLocationRuntime();
-  refreshSetupLocationStatus();
-  return coords;
+  try {
+    const coords = await requestSunSetupPreciseLocationRuntime();
+    if (currentOwner(owner)) refreshSetupLocationStatus(owner.root);
+    return coords;
+  } catch {
+    if (currentOwner(owner)) showNotification('Current location could not be read. Try again.');
+    return null;
+  }
 }
 
 function clearLightSetupCurrentLocation() {
@@ -339,7 +398,9 @@ export function collectSunSetupValues(root: Element | null): CollectedSunSetup {
 }
 
 async function saveSunSetup() {
-  const root = document.querySelector('.light-setup-card');
+  const owner = activeSetup;
+  if (!owner || !currentOwner(owner) || owner.pending) return false;
+  const root = owner.root.querySelector('.light-setup-card');
   const collected = collectSunSetupValues(root);
   if (!collected.ok) {
     if (collected.reason === 'skin-type-required') {
@@ -350,8 +411,8 @@ async function saveSunSetup() {
   }
   const values = collected.values;
   if (!values) return false;
-  await setupDeps.persistSunSetupValues(values);
-  closeSunSetupOverlay();
+  if (!await writeSetup(owner, () => setupDeps.persistSunSetupValues(values, Date.now(), owner.session))) return false;
+  closeSunSetupOverlay(owner);
   showNotification(`Light setup saved · ${values.ottScore}/10 context patterns selected`);
   maybeAnalyzeOnboardingAfterSave();
   navigateSunDefaultsRoute('light');
@@ -384,7 +445,10 @@ function updateOttRunningScore() {
     const previousTier = label.dataset.tier;
     const nextTier = String(meta.tier);
     label.textContent = meta.label;
-    label.className = `light-ott-badge light-ott-tier-${meta.tier}`;
+    for (const token of [...label.classList]) {
+      if (/^light-ott-tier-\d+$/.test(token)) label.classList.remove(token);
+    }
+    label.classList.add(`light-ott-tier-${meta.tier}`);
     label.dataset.tier = nextTier;
     if (previousTier !== undefined && previousTier !== nextTier) {
       label.classList.add('tier-changed');
@@ -401,6 +465,7 @@ function updateSetupSkinSlider(value: string | number) {
       const active = elementIndex === index;
       element.classList.toggle('active', active);
       element.setAttribute('aria-checked', active ? 'true' : 'false');
+      element.setAttribute('tabindex', active ? '0' : '-1');
     });
   const label = document.getElementById('setup-skin-label');
   const valid = index >= 0 && index < SKIN_TYPE.length;
@@ -410,7 +475,7 @@ function updateSetupSkinSlider(value: string | number) {
   const descriptor = valid ? FITZPATRICK_DESCRIPTOR[index] : '';
   if (label) {
     if (valid) {
-      label.innerHTML = `${escapeHTML(skinLabel)}<span class="ctx-skin-label-detail" id="setup-skin-label-detail">${escapeHTML(descriptor)}</span>`;
+      label.innerHTML = renderSetupSkinLabel(index);
     } else {
       label.textContent = skinLabel;
     }
@@ -465,13 +530,19 @@ function refreshSetupProgress() {
   }
 }
 
-async function dismissSunSetup() {
-  await setupDeps.saveSunDefaults({
-    skipped: true,
-    setupPromptDismissedAt: Date.now(),
-  });
-  closeSunSetupOverlay();
-  navigateSunDefaultsRoute('light');
+async function dismissSunSetup(action: HTMLElement) {
+  const prompt = action.closest<HTMLElement>('[data-light-widget-prompt]');
+  if (prompt && (pendingPrompts.has(prompt) || isOnboardingComplete())) return;
+  const owner = prompt ? { root: prompt, session: createSunSetupSession(), pending: false } : activeSetup;
+  if (!owner) return;
+  if (prompt) pendingPrompts.add(prompt);
+  try {
+    if (!await writeSetup(owner, () => setupDeps.saveSunDefaults({ skipped: true, setupPromptDismissedAt: Date.now() }, owner.session))) return;
+    if (!prompt) closeSunSetupOverlay(owner);
+    navigateSunDefaultsRoute('light');
+  } finally {
+    if (prompt) { pendingPrompts.delete(prompt); owner.session.retire(); }
+  }
 }
 
 function skinFaceKeydown(event: KeyboardEvent, index: number) {
