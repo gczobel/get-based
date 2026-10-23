@@ -9,6 +9,8 @@ import {saveImportedData} from '../js/data.js';
 import {logManualMetric, parseManualMirrorEntry, upgradeLegacyManualMirror} from '../js/wearables-manual.js';
 import {applyPulledManualBodyReadings, catchUpManualBodyReadings} from '../js/wearables-manual-sync.js';
 import {getDaily, deleteWearablesDB} from '../js/wearables-store.js';
+import {buildClientExportObject} from '../js/export.js';
+import {encryptedGetItem} from '../js/crypto.js';
 const profile = 'manual-legacy-test', date = '2026-09-28', key = (metric: string) => `${metric}.${date}`;
 beforeEach(async () => {
   globalThis.indexedDB = new IDBFactory(); localStorage.clear();
@@ -48,4 +50,21 @@ it('upgrades bare rows already saved in the profile on catch-up, without overrid
   expect(state.importedData.manualBodyReadings![key('weight')]).toEqual({value: 82.5, updatedAt: 0});
   expect(state.importedData.manualBodyReadings![key('rhr')]).toEqual(newer);
   expect(await getDaily(profile, 'manual', date)).toMatchObject({weight: 82.5, rhr: 58});
+});
+it('reads a fork-format client export through the importer, then upgrades it on catch-up', async () => {
+  await logManualMetric(profile, 'weight', {date: '2026-09-01', value: 70});
+  const exported = await buildClientExportObject(profile, false, false);
+  const payload = {...exported, notes: [{date, text: 'Synthetic legacy receipt'}],
+    manualBodyReadings: {[key('weight')]: 82.5, [key('rhr')]: 60, [key('tags')]: ['resting']}};
+  const {importDataJSON} = await import('../js/export-import.js');
+  await importDataJSON(new File([JSON.stringify(payload)], 'legacy-export.json'));
+  const restored = state.currentProfile;
+  try {
+    expect(restored).not.toBe(profile);
+    await catchUpManualBodyReadings(restored);
+    expect(state.importedData.manualBodyReadings![key('weight')]).toEqual({value: 82.5, updatedAt: 0});
+    expect(await getDaily(restored, 'manual', date)).toMatchObject({weight: 82.5, rhr: 60, tags: ['resting']});
+    const saved = JSON.parse((await encryptedGetItem(`labcharts-${restored}-imported`))!);
+    expect(saved.manualBodyReadings[key('rhr')]).toEqual({value: 60, updatedAt: 0});
+  } finally { if (restored !== profile) await deleteWearablesDB(restored); }
 });
