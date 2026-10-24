@@ -103,25 +103,6 @@ export function parseManualMirrorEntry(key: string, raw: unknown) {
     : !Array.isArray(value) || value.length > MANUAL_TAGS.length || value.some(tag => !MANUAL_TAGS.includes(tag)))) return null;
   return {field, date, value, updatedAt: entry.updatedAt};
 }
-/**
- * Rows written by the fork before the upstream `{value, updatedAt}` format were
- * bare values (`weight.2026-09-28: 82.5`) with no edit clock. Wrap each valid
- * one at clock 0 so any real edit or deletion wins and the reading survives
- * instead of being ignored as unparseable. Returns how many rows were upgraded.
- */
-export function upgradeLegacyManualMirror(imported: ManualProfile): number {
-  const mirror = imported.manualBodyReadings;
-  if (!mirror || typeof mirror !== 'object' || Array.isArray(mirror)) return 0;
-  let upgraded = 0;
-  for (const [key, raw] of Object.entries(mirror as Record<string, unknown>)) {
-    if (raw === null || raw === undefined || (typeof raw === 'object' && !Array.isArray(raw))) continue;
-    const entry = {value: raw, updatedAt: 0};
-    if (!parseManualMirrorEntry(key, entry)) continue;
-    mirror[key] = entry as ManualBodyReading;
-    upgraded++;
-  }
-  return upgraded;
-}
 /** A portable manual surface must contain a valid explicit measurement or deletion. */
 export function hasManualBodyReadings(value: unknown): boolean {
   return !!value && typeof value === 'object' && !Array.isArray(value)
