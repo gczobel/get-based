@@ -13,7 +13,7 @@ import {getDaily, getDailyRange, getMeta, setMeta, upsertDaily, deleteDaily} fro
 import {
   MANUAL_METRICS, MANUAL_MIRROR_FIELDS, MANUAL_HISTORY_START, MANUAL_HISTORY_END,
   persistManualMutation, updateManualConnection,
-  isManualMetricTombstoned, manualMetricDeletionClock, manualMirror, manualMirrorKey, mirrorManualPatch, parseManualMirrorEntry, upgradeLegacyManualMirror,
+  isManualMetricTombstoned, manualMetricDeletionClock, manualMirror, manualMirrorKey, mirrorManualPatch, parseManualMirrorEntry,
 } from './wearables-manual.js';
 type ManualData = WearableProfileMutation & Partial<Pick<ProfileData, 'manualBodyReadings' | 'manualMetricTombstones'>>;
 type Entry = NonNullable<ReturnType<typeof parseManualMirrorEntry>>;
@@ -27,7 +27,6 @@ function ownership(profileId: string) {
 /** The caller owns the merged draft; never expose it as live state across an await. */
 export async function applyPulledManualBodyReadings(profileId: string, data: ManualData, current = ownership(profileId)) {
   if (!current()) return {written: 0, connected: false};
-  upgradeLegacyManualMirror(data);
   const byDate = new Map<string, Entry[]>();
   for (const [key, raw] of Object.entries(data.manualBodyReadings || {})) {
     const entry = parseManualMirrorEntry(key, raw);
@@ -143,7 +142,6 @@ export async function catchUpManualBodyReadings(profileId: string, attempt = 0):
   const parsed: unknown = JSON.parse(raw);
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {skipped: 'profile-unavailable' as const};
   const baseData = migrateProfileData(parsed as ProfileData), imported = structuredClone(baseData);
-  const upgraded = upgradeLegacyManualMirror(imported);
   const applied = await applyPulledManualBodyReadings(profileId, imported);
   if (!current()) return {skipped: 'obsolete' as const};
   const backfilled = await getMeta(profileId, BACKFILL_FLAG);
@@ -168,7 +166,7 @@ export async function catchUpManualBodyReadings(profileId: string, attempt = 0):
     // A locked read may be empty. Retry later rather than recording a false successful upgrade.
     markBackfilled = rows.length > 0;
   }
-  if (added || upgraded || applied.connected) {
+  if (added || applied.connected) {
     if (!imported.wearableConnections?.manual && added) updateManualConnection(imported);
     try {
       // The canonical read/merge/write checks this exact snapshot while holding
